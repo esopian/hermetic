@@ -80,8 +80,8 @@ export default {
       icons: "assets/icon.iconset",
       ...macRenderer(process.env),
     },
-    // The same keys for Linux, where a dev build stays on WebKitGTK unless
-    // `HERMETIC_RENDERER=cef` asks for CEF and its DevTools port.
+    // The same keys for Linux: CEF and its DevTools port in a dev build, and
+    // WebKitGTK when `HERMETIC_RENDERER=native` opts out.
     linux: linuxRenderer(process.env),
   },
   // Build hooks are top-level, not `build.hooks`: a `build.hooks` key is

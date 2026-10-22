@@ -22,11 +22,10 @@
  * renderer and no CEF, and asking for CEF there is a build failure rather than
  * a release that quietly ships Chromium.
  *
- * Linux follows the same contract with one difference: a dev build stays on
- * WebKitGTK unless `HERMETIC_RENDERER=cef` asks for Chromium. CEF is opt-in
- * there because it is a large per-build download, and the reason to want it —
- * DevTools on a headless dev box — is narrower than on a Mac. A Linux release,
- * like a Mac one, never bundles CEF.
+ * Linux follows the same contract: a dev build defaults to CEF, for the same
+ * DevTools reason, and `HERMETIC_RENDERER=native` opts out to WebKitGTK. A
+ * Linux release, like a Mac one, never bundles CEF, and a non-dev build that
+ * asks for it fails.
  *
  * Nothing here imports the devkit, so a test drives it with a plain env.
  */
@@ -36,7 +35,7 @@ export const BUILD_ENV = "ELECTROBUN_BUILD_ENV";
 
 /**
  * `cef` or `native`. Honoured only in a dev build, where the default is `cef`
- * on a Mac and `native` on Linux.
+ * on a Mac and on Linux.
  */
 export const RENDERER_ENV = "HERMETIC_RENDERER";
 
@@ -79,9 +78,9 @@ export function macRenderer(env: Record<string, string | undefined>): RendererKe
   return rendererKeys(env, "cef");
 }
 
-/** The renderer keys for `build.linux`: CEF in a dev build only when asked. */
+/** The renderer keys for `build.linux`: CEF by default in a dev build. */
 export function linuxRenderer(env: Record<string, string | undefined>): RendererKeys {
-  return rendererKeys(env, "native");
+  return rendererKeys(env, "cef");
 }
 
 function rendererKeys(env: Record<string, string | undefined>, devDefault: Renderer): RendererKeys {

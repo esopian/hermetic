@@ -5,7 +5,7 @@
  * CEF and open a DevTools port, and anything else — canary, stable, or an
  * environment Hutch did not name — ships WKWebView, with a request for CEF
  * refused loudly rather than honoured or ignored. Linux keeps the same
- * asymmetry, but a dev build there needs `HERMETIC_RENDERER=cef` to get CEF.
+ * asymmetry and the same CEF default in a dev build.
  */
 import { describe, expect, test } from "bun:test";
 import config from "../electrobun.config.ts";
@@ -74,8 +74,15 @@ describe("linuxRenderer", () => {
     });
   }
 
-  test("dev: WebKitGTK by default, CEF not bundled", () => {
-    expect(linuxRenderer({ [BUILD_ENV]: "dev" })).toEqual(NATIVE);
+  test("dev: CEF by default, DevTools on the default port", () => {
+    expect(linuxRenderer({ [BUILD_ENV]: "dev" })).toEqual({
+      bundleCEF: true,
+      defaultRenderer: "cef",
+      chromiumFlags: { "remote-debugging-port": String(DEFAULT_CDP_PORT) },
+    });
+  });
+
+  test("dev: HERMETIC_RENDERER=native opts out, CEF not bundled", () => {
     expect(linuxRenderer({ [BUILD_ENV]: "dev", [RENDERER_ENV]: "native" })).toEqual(NATIVE);
   });
 
