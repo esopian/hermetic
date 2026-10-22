@@ -113,9 +113,9 @@ export function Composer({
   const convo = chat?.selection
     ? JSON.stringify([chat.selection.instance, chat.selection.bot, chat.selection.session])
     : "";
+  const abortFailed = chat?.turnError?.code === "ABORT_FAILED";
   /** A Stop pressed here: `stopping` until the turn ends, `stopped` until the next one starts. */
   const [stop, setStop] = useState<{ convo: string; phase: "stopping" | "stopped" } | null>(null);
-  const abortFailed = chat?.turnError?.code === "ABORT_FAILED";
   const stopped = stop?.convo === convo ? stop.phase : null;
   useEffect(() => {
     setStop((s) => {
@@ -126,6 +126,10 @@ export function Composer({
       return s;
     });
   }, [working, convo, abortFailed]);
+  const stopTurn = () => {
+    setStop({ convo, phase: "stopping" });
+    onAbort();
+  };
   const fleetId = useFleetIfAvailable()?.meta?.config?.fleet_id ?? "";
   const text = chat ? chat.draft : localText;
   const setText = chat ? chat.setDraft : setLocalText;
@@ -523,7 +527,7 @@ export function Composer({
                 // chat view.
                 if (e.key === "Escape" && sending) {
                   e.preventDefault();
-                  onAbort();
+                  stopTurn();
                 }
               }}
             />
@@ -641,10 +645,7 @@ export function Composer({
             aria-label="Stop turn"
             title={sending ? "Stop the turn (Esc)" : "Stop the agent's turn, started elsewhere"}
             disabled={stopped === "stopping"}
-            onClick={() => {
-              setStop({ convo, phase: "stopping" });
-              onAbort();
-            }}
+            onClick={stopTurn}
           >
             <i aria-hidden="true" />
             Stop

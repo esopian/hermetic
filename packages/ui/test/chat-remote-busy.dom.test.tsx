@@ -277,6 +277,16 @@ describe("a turn the box reports, started elsewhere", () => {
     expect(v.held.store?.remoteBusy).toBeNull();
   });
 
+  test("Esc on this tab's own turn stops it and says Stopped", async () => {
+    const r = recording();
+    const v = await open(r.h);
+    v.say("mine");
+    await waitFor(() => expect(v.held.store?.sending).toBe(true));
+    fireEvent.keyDown(v.input, { key: "Escape" });
+    await waitFor(() => expect(screen.getByText("Stopped").getAttribute("role")).toBe("status"));
+    expect(r.aborts).toBe(1);
+  });
+
   test("this tab's own turn ending reads as idle until the box says otherwise", async () => {
     const r = recording();
     const h = r.h;
