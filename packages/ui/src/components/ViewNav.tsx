@@ -1,5 +1,5 @@
 /**
- * `CHAT | FLEET | SETTINGS`, drawn inside the header (`Header.tsx`'s `nav`)
+ * `CHAT | WORK | FLEET | SETTINGS`, drawn inside the header (`Header.tsx`'s `nav`)
  * rather than on a row of its own. Chat leads because it is the page the app
  * opens on (`nav-state.tsx`). Volumes used to be a fourth tab; it is now the
  * fleet's second lens (`Toolbar.tsx`, `#fleet/volumes`), so the alert its badge
@@ -19,7 +19,7 @@
  */
 import type { VolumeSummary } from "../api/index.ts";
 
-export type View = "fleet" | "chat" | "settings";
+export type View = "fleet" | "chat" | "work" | "settings";
 
 export function ViewNav({
   view,
@@ -27,6 +27,7 @@ export function ViewNav({
   agentCount,
   agentCountKnown = true,
   summary,
+  work = null,
 }: {
   view: View;
   onView: (v: View) => void;
@@ -35,6 +36,8 @@ export function ViewNav({
   agentCountKnown?: boolean;
   /** The volume inventory's summary; `null` until read, which shows no suffix. */
   summary: VolumeSummary | null;
+  /** The kanban board's counts (`work-state.tsx`); `null` until read, which shows no badge. */
+  work?: { needYou: number; open: number } | null;
 }) {
   const loose = summary?.no_agent ?? 0;
 
@@ -42,6 +45,19 @@ export function ViewNav({
     <nav className="viewnav" aria-label="Views">
       <button type="button" aria-pressed={view === "chat"} onClick={() => onView("chat")}>
         Chat
+      </button>
+      <button type="button" aria-pressed={view === "work"} onClick={() => onView("work")}>
+        Work
+        {work ? (
+          <>
+            {" "}
+            {work.needYou > 0 ? (
+              <span className="badge mono viewnav-loose">{work.needYou} need you</span>
+            ) : (
+              <span className="badge mono">{work.open}</span>
+            )}
+          </>
+        ) : null}
       </button>
       <button type="button" aria-pressed={view === "fleet"} onClick={() => onView("fleet")}>
         Fleet{" "}

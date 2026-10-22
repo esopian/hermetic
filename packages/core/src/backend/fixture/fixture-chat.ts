@@ -38,6 +38,7 @@
  */
 import { HermeticError } from "../../errors.ts";
 import { CHAT_ERROR_CODES } from "../../chat/hermes/hermes-chat.ts";
+import type { FixtureKanbanStore } from "./fixture-kanban.ts";
 // The adapter's own key and attempt budget, not a second copy of either: a head
 // replaces a status block by key, so a fixture with a key of its own would draw
 // a card the portal never coalesces with the real one.
@@ -88,6 +89,7 @@ import {
 import { fixtureFileShareScript, type FixtureShareFiles } from "./fixture-chat-file-share.ts";
 import { fixtureErrorScript } from "./fixture-chat-error.ts";
 import { fixtureDemoTurn } from "./fixture-chat-demo.ts";
+import { fixtureKanbanTurn } from "./fixture-chat-kanban.ts";
 import { fixtureCommand, fixtureCommandCatalog } from "./fixture-chat-command.ts";
 import { createFixtureTurnRow } from "./fixture-chat-fold.ts";
 import { createFixtureSubagents, settleFixtureSubagents } from "./fixture-chat-subagent.ts";
@@ -112,6 +114,8 @@ export type { FixtureChatActivity, FixtureChatWhere } from "./fixture-chat-activ
 /* ── behaviour ────────────────────────────────────────────────────────────── */
 
 export interface FixtureChatOptions {
+  /** The boxes' kanban boards, for a turn that stages a card (`fixture-kanban.ts`). */
+  kanban?: FixtureKanbanStore | undefined;
   /**
    * Milliseconds between streamed frames.
    *
@@ -334,6 +338,7 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
   const requests = opts.requests ?? createFixtureChatRequests();
   /** The fixture boxes' files service, for the request turns. */
   const files = opts.files;
+  const kanban = opts.kanban;
   const fileWaits = opts.fileRequestWaitMs ?? {};
   /** Delegated children: the `E2E_SUBAGENT*` triggers and child control. */
   const subagents = createFixtureSubagents({
@@ -621,7 +626,15 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
         const failing = fixtureErrorScript(text, () => Date.now() / 1000);
         const asking = files ? fixtureFileRequestScript(text) : null;
         const sharing = files?.share ? fixtureFileShareScript(text) : null;
-        const demo = fixtureDemoTurn(text);
+        const demo =
+          fixtureDemoTurn(text) ??
+          (kanban
+            ? fixtureKanbanTurn(text, {
+                kanban,
+                activity,
+                where: { instance, bot, session: session ?? undefined },
+              })
+            : null);
         const log =
           clarify || approval || failing || asking || sharing
             ? []

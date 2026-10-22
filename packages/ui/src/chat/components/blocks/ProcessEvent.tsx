@@ -25,7 +25,8 @@
  */
 import { createContext, useContext, useState } from "react";
 import type { ReactNode } from "react";
-import { shortCommand } from "@hermetic/core/shared";
+import { kanbanNoticeWhat, shortCommand } from "@hermetic/core/shared";
+import { useOpenKanbanTask } from "../../../work/open-task.ts";
 import { fmtClock } from "../../../logic/format.ts";
 import { chatHash } from "../../chat-routing.ts";
 import { botLabel } from "../../chat-presentation.ts";
@@ -419,6 +420,48 @@ function InjectedNotice({
   );
 }
 
+/**
+ * A kanban card this chat subscribed to moved: the glyph, the card and its
+ * assignee, what happened in upstream's words, the summary or error line, and
+ * a link that opens the card.
+ */
+function KanbanNotice({ event, at }: { event: ProcessEventView; at: string | null }) {
+  const { instance } = useProcessEvents();
+  const { open } = useOpenKanbanTask();
+  const n = event.notice;
+  const taskId = n?.task_id ?? null;
+  const tone = eventTone(event);
+  return (
+    <>
+      <div className="ch-ev-line">
+        <span>{`${Array.from(event.raw)[0] ?? ""} Kanban ${taskId ?? ""}`.trim()}</span>
+        {n?.assignee ? <span className="dim">{`@${n.assignee}`}</span> : null}
+        {n?.board ? <span className="dim">{`[${n.board}]`}</span> : null}
+        <Stamp at={at} />
+      </div>
+      <div className="ch-ev-line">
+        <span className={tone === "bad" ? "st bad" : undefined}>
+          <RedactedText text={n ? kanbanNoticeWhat(n) : firstLine(event.raw)} />
+        </span>
+      </div>
+      {n?.body ? (
+        <div className="ch-ev-line">
+          <span>
+            <RedactedText text={n.body} />
+          </span>
+        </div>
+      ) : null}
+      {taskId && instance ? (
+        <div className="ch-ev-actions">
+          <button type="button" className="ch-ev-jump" onClick={() => open(instance, taskId)}>
+            Open task
+          </button>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 /** MCP reload and watch disabled: one muted line. */
 function Notice({ event, at }: { event: ProcessEventView; at: string | null }) {
   const text = firstLine(event.message) || firstLine(event.raw);
@@ -511,6 +554,7 @@ export function ProcessEventBlock({
 }) {
   if (block.dm) return <DmReply event={block} at={at} />;
   if (isMarkerEvent(block)) return <MarkerLine event={block} at={at} />;
+  if (block.event === "kanban") return <KanbanNotice event={block} at={at} />;
   const line = noticeLine(block);
   if (line) return <InjectedNotice event={block} line={line} at={at} />;
   switch (block.event) {

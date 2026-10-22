@@ -35,6 +35,7 @@ import type { MessageRow } from "../chat-logic.ts";
 import { Block } from "./blocks/index.tsx";
 import { isRequestTool, untrustedBefore } from "../file-request-logic.ts";
 import { isShareTool, shareIdOf } from "./blocks/ShareCard.tsx";
+import { isKanbanTaskTool } from "./blocks/KanbanTask.tsx";
 import { dmBotName, dmSender, messageAgentCall } from "../bot-dm.ts";
 import { DmSentMarker, useBotDm } from "./BotDm.tsx";
 import { Face, OperatorFace } from "./Face.tsx";
@@ -289,8 +290,8 @@ export const Message = memo(function Message({
     }
     // A file or secret request is a card the operator answers, never a step
     // folded into "Tools complete": it stands alone and closes the run.
-    // So is a file the agent shared, or the box's refusal to share it.
-    if (isRequestTool(block) || isShareTool(block)) {
+    // So is a file the agent shared, or the box's refusal to share it, and a kanban card it filed.
+    if (isRequestTool(block) || isShareTool(block) || isKanbanTaskTool(block)) {
       sections.push({ activity: false, blocks: [block] });
       run = null;
       continue;

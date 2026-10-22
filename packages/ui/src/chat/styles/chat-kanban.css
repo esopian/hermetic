@@ -1,0 +1,182 @@
+/* A kanban card the agent filed (`KanbanTask.tsx`): a square frame whose top
+   rule carries the card's tone, the lane track, and the live line. */
+
+.ch-kt {
+  display: flex;
+  flex-direction: column;
+  max-width: 640px;
+  width: 100%;
+  border: 2px solid var(--line2);
+  border-top: 4px solid var(--fg3);
+  border-radius: 0;
+  background: var(--bg2);
+  /* The thread's gap between blocks, so the text after the card does not sit on it. */
+  margin-bottom: 12px;
+}
+.ch-kt.acc {
+  border-top-color: var(--acc);
+}
+.ch-kt.warn {
+  border-top-color: var(--warn);
+}
+.ch-kt.ok {
+  border-top-color: var(--ok);
+}
+.ch-kt.bad {
+  border-top-color: var(--bad);
+}
+.ch-kt.stale {
+  opacity: 0.6;
+}
+
+.ch-kt .sq.acc {
+  background: var(--acc);
+}
+.ch-kt .sq:not(.ok):not(.warn):not(.bad):not(.acc) {
+  border: 1px solid var(--fg3);
+}
+.ch-kt .sq.pulse {
+  animation: hpulse 1.2s infinite;
+}
+
+.ch-kt-h {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 14px 0;
+}
+.ch-kt-id {
+  font: 11px var(--mono);
+  color: var(--fg3);
+}
+.ch-kt-st {
+  font-weight: 800;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  color: var(--fg3);
+}
+.ch-kt-st .sq {
+  margin-right: 5px;
+}
+.ch-kt-st.acc,
+.ch-kt-acc {
+  color: var(--acc);
+}
+.ch-kt-st.warn,
+.ch-kt-warn {
+  color: var(--warn);
+}
+.ch-kt-st.ok {
+  color: var(--ok);
+}
+.ch-kt-st.bad,
+.ch-kt-bad {
+  color: var(--bad);
+}
+.ch-kt-btn {
+  border: 2px solid var(--fg);
+  padding: 3px 8px;
+  font-weight: 900;
+  font-size: 11px;
+}
+.ch-kt-btn:hover {
+  background: var(--bg3);
+}
+.ch-kt-open {
+  margin-left: auto;
+}
+
+.ch-kt-t {
+  padding: 6px 14px 2px;
+  font-weight: 800;
+  font-size: 15.5px;
+  line-height: 1.3;
+}
+.ch-kt-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 0 14px 8px;
+  font: 11px var(--mono);
+  color: var(--fg3);
+}
+
+.ch-kt-track {
+  padding: 4px 14px 10px;
+}
+.ch-kt-cells,
+.ch-kt-labels {
+  display: flex;
+  gap: 2px;
+}
+.ch-kt-cells span {
+  flex: 1;
+  height: 8px;
+  background: var(--line2);
+}
+.ch-kt-cells span.done {
+  background: var(--fg3);
+}
+.ch-kt-cells span.cur {
+  background: var(--fg2);
+}
+.ch-kt-cells span.cur.acc {
+  background: var(--acc);
+  animation: hpulse 1.2s infinite;
+}
+.ch-kt-cells span.cur.warn {
+  background: var(--warn);
+}
+.ch-kt-cells span.cur.ok {
+  background: var(--ok);
+}
+.ch-kt-cells span.cur.bad {
+  background: var(--bad);
+}
+.ch-kt-labels {
+  margin-top: 2px;
+  font: 9.5px var(--mono);
+  color: var(--fg3);
+  text-transform: uppercase;
+}
+.ch-kt-labels span {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.ch-kt-labels span.cur {
+  color: var(--fg);
+  font-weight: 700;
+}
+
+.ch-kt-live {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.ch-kt-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.ch-kt-row .sq {
+  margin-right: 0;
+  transform: translateY(1px);
+}
+.ch-kt-dim {
+  color: var(--fg2);
+}
+.ch-kt-f {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 14px;
+  border-top: 1px solid var(--line);
+  font: 10.5px var(--mono);
+  color: var(--fg3);
+}

@@ -520,6 +520,53 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
   ],
 
   "sx-atlas-desktop": [
+    // A card filed from chat (`kanban_create`): the task widget, read back from
+    // history. The card is the board's seeded `t_3fa91c02` (`fixture-kanban.ts`).
+    {
+      id: "mx-atlas-desktop-k1",
+      session: "sx-atlas-desktop",
+      role: "user",
+      author: null,
+      at: at("08:21:02"),
+      blocks: [
+        {
+          kind: "text",
+          markdown: "Write the Q3 churn summary from the billing exports. Background is fine.",
+        },
+      ],
+      usage: null,
+      error: null,
+      incomplete: null,
+    },
+    {
+      id: "mx-atlas-desktop-k2",
+      session: "sx-atlas-desktop",
+      role: "bot",
+      author: { instance: "atlas", bot: "default" },
+      at: at("08:21:20"),
+      blocks: [
+        {
+          kind: "tool",
+          tool_id: "tl-fixture-kanban-churn",
+          name: "kanban_create",
+          server: null,
+          args: {
+            title: "Write the Q3 churn summary from the billing exports",
+            assignee: "researcher",
+            workspace_kind: "dir",
+          },
+          result: { task_id: "t_3fa91c02", status: "ready", subscribed: true },
+          status: "ok",
+          exit_code: null,
+          duration_ms: 88,
+          render: "kanban_task",
+        },
+        { kind: "text", markdown: "On the board for researcher — I'll report back here." },
+      ],
+      usage: usage(3020, 41, 0.0021, "claude-sonnet-5"),
+      error: null,
+      incomplete: null,
+    },
     {
       id: "mx-atlas-desktop-1",
       session: "sx-atlas-desktop",

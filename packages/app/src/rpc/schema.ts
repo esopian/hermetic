@@ -50,6 +50,7 @@ import type * as devtools from "../handlers/devtools.ts";
 import type * as files from "../handlers/files.ts";
 import type * as fixture from "../handlers/fixture.ts";
 import type * as fleet from "../handlers/fleet.ts";
+import type * as kanban from "../handlers/kanban.ts";
 import type * as init from "../handlers/init.ts";
 import type * as lifecycle from "../handlers/lifecycle.ts";
 import type * as meta from "../handlers/meta.ts";
@@ -119,6 +120,7 @@ type HandlerTables = typeof agents.agentHandlers &
   typeof files.filesHandlers &
   typeof fixture.fixtureHandlers &
   typeof fleet.fleetHandlers &
+  typeof kanban.kanbanHandlers &
   typeof init.initHandlers &
   typeof lifecycle.lifecycleHandlers &
   typeof meta.metaHandlers &

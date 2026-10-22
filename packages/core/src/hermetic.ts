@@ -51,6 +51,7 @@ import { MemoryChatFenceStore } from "./chat/chat-fence.ts";
 import { MemoryChatSettingsStore } from "./chat/chat-settings.ts";
 import { createDevtools } from "./chat/devtools.ts";
 import { createBotMode } from "./chat/bot-mode.ts";
+import { createKanban } from "./chat/kanban.ts";
 import {
   MemoryNotificationStore,
   createNotifications,
@@ -505,6 +506,14 @@ export function createHermetic(deps: HermeticDeps) {
     hermes: hermesChat,
     chatSettings,
   });
+  const kanban = createKanban({
+    guardFleet,
+    getAgent,
+    listAgents: () => backend.store.agents.scan(),
+    instanceListening,
+    hermes: hermesChat,
+    chatSettings,
+  });
   const chat = createChat({
     instanceListening,
     chatSettings,
@@ -580,6 +589,7 @@ export function createHermetic(deps: HermeticDeps) {
 
   const hermetic = {
     ...botMode,
+    ...kanban,
     init: initWithHelpers,
     config: { show: configShow },
     /**
