@@ -251,7 +251,8 @@ export interface HermesChatClient {
     method: string,
     path: string,
     body?: unknown,
-    opts?: HermesChatOptions,
+    /** `detail`: append a refused 400/409's `detail` to the error message. */
+    opts?: HermesChatOptions & { detail?: boolean },
   ): Promise<unknown>;
   /**
    * The box's current dashboard session token (§7.4).

@@ -229,7 +229,8 @@ install_app() {
 
   run mkdir -p "$APP_DIR"
   run ditto "$src" "$dest"
-  # The build is unsigned (ad-hoc signature only), so a quarantined copy will not open.
+  # Releases from v0.3.1 on are notarised, so this changes nothing for them; v0.3.0 and
+  # earlier are ad-hoc signed only, and a quarantined copy of those will not open.
   run xattr -dr com.apple.quarantine "$dest" 2>/dev/null || true
 
   hdiutil detach -quiet "$MOUNT" >/dev/null 2>&1 || true

@@ -1,8 +1,9 @@
 /**
- * Which webview renderer a build gets: CEF in development, WKWebView in a
- * release.
+ * Which webview renderer a build gets: CEF in development, the system WebKit
+ * (WKWebView on macOS, WebKitGTK on Linux) in a release.
  *
- * A release ships the system WKWebView — it is what the app is designed and
+ * A release ships the system WebKit (WKWebView on macOS, WebKitGTK on Linux) —
+ * it is what the app is designed and
  * signed against, and bundling Chromium would add a few hundred megabytes to a
  * download that has no use for it. Development defaults to CEF for one reason:
  * Chromium speaks the DevTools protocol, so a coding agent (or Playwright, or
@@ -22,13 +23,21 @@
  * renderer and no CEF, and asking for CEF there is a build failure rather than
  * a release that quietly ships Chromium.
  *
+ * Linux follows the same contract: a dev build defaults to CEF, for the same
+ * DevTools reason, and `HERMETIC_RENDERER=native` opts out to WebKitGTK. A
+ * Linux release, like a Mac one, never bundles CEF, and a non-dev build that
+ * asks for it fails.
+ *
  * Nothing here imports the devkit, so a test drives it with a plain env.
  */
 
 /** Set by Hutch while it evaluates the config. */
 export const BUILD_ENV = "ELECTROBUN_BUILD_ENV";
 
-/** `cef` (the dev default) or `native`. Honoured only in a dev build. */
+/**
+ * `cef` or `native`. Honoured only in a dev build, where the default is `cef`
+ * on a Mac and on Linux.
+ */
 export const RENDERER_ENV = "HERMETIC_RENDERER";
 
 /** The DevTools port a dev CEF build listens on, on 127.0.0.1. */
@@ -38,14 +47,14 @@ export const DEFAULT_CDP_PORT = 9333;
 
 export type Renderer = "native" | "cef";
 
-/** The renderer keys of `ElectrobunConfig["build"]["mac"]`. */
-export interface MacRenderer {
+/** The renderer keys of `ElectrobunConfig["build"]["mac"]` and `["linux"]`. */
+export interface RendererKeys {
   bundleCEF: boolean;
   defaultRenderer: Renderer;
   chromiumFlags?: Record<string, string | boolean>;
 }
 
-const NATIVE: MacRenderer = { bundleCEF: false, defaultRenderer: "native" };
+const NATIVE: RendererKeys = { bundleCEF: false, defaultRenderer: "native" };
 
 function requested(env: Record<string, string | undefined>): Renderer | undefined {
   const raw = env[RENDERER_ENV]?.trim() ?? "";
@@ -65,7 +74,19 @@ export function cdpPort(env: Record<string, string | undefined>): number {
   return port;
 }
 
-export function macRenderer(env: Record<string, string | undefined>): MacRenderer {
+// The two wrappers exist to name the two config keys; they do not differ.
+
+/** The renderer keys for `build.mac`: CEF by default in a dev build. */
+export function macRenderer(env: Record<string, string | undefined>): RendererKeys {
+  return rendererKeys(env);
+}
+
+/** The renderer keys for `build.linux`: CEF by default in a dev build. */
+export function linuxRenderer(env: Record<string, string | undefined>): RendererKeys {
+  return rendererKeys(env);
+}
+
+function rendererKeys(env: Record<string, string | undefined>): RendererKeys {
   const buildEnv = env[BUILD_ENV] ?? "";
   const asked = requested(env);
   if (buildEnv !== "dev") {

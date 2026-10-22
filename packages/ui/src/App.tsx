@@ -45,6 +45,9 @@ import { LastTeardownReceipt } from "./components/TeardownReceipt.tsx";
 import { SkewBand } from "./components/SkewBand.tsx";
 import { Toolbar } from "./components/Toolbar.tsx";
 import { ViewNav } from "./components/ViewNav.tsx";
+import { WorkOverlays } from "./work/TaskDrawer.tsx";
+import { WorkView } from "./work/WorkView.tsx";
+import { WorkProvider, useWork, workCounts } from "./work/work-state.tsx";
 import { VolumeDeleteDrawer } from "./components/VolumeDeleteDrawer.tsx";
 import { VolumesView } from "./components/VolumesView.tsx";
 import { DestroyedView, useDestroyedAudit } from "./components/DestroyedView.tsx";
@@ -108,11 +111,14 @@ export function App() {
   return (
     <ChatProvider key={identity} eager={false}>
       <DevtoolsProvider>
-        <ChatShell enabled={initialized}>
-          <NavProvider onOpenCreate={profiles.refresh}>
-            <AppBody profiles={profiles} />
-          </NavProvider>
-        </ChatShell>
+        {/* Above ChatShell: its dock and drawer open task drawers too (`open-task.ts`). */}
+        <WorkProvider enabled={initialized} overlays={<WorkOverlays />}>
+          <ChatShell enabled={initialized}>
+            <NavProvider onOpenCreate={profiles.refresh}>
+              <AppBody profiles={profiles} />
+            </NavProvider>
+          </ChatShell>
+        </WorkProvider>
       </DevtoolsProvider>
     </ChatProvider>
   );
@@ -122,6 +128,7 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
   const chatEntry = useChatEntry();
   const fleet = useFleet();
   const nav = useNav();
+  const work = useWork();
   const listening = useListeningIfAvailable();
   const initialized = fleet.meta !== null && isInitialized(fleet.meta);
   const volumes = useVolumes(initialized);
@@ -443,6 +450,7 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
       agentCount={counts.total}
       agentCountKnown={!scanning}
       summary={volumes.summary}
+      work={workCounts(work.board)}
     />
   );
   const footer = (
@@ -661,6 +669,18 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
           </AgentSectionContext.Provider>
         )}
         {nav.agentOverChat ? agentDrawer : null}
+        {footer}
+        {help}
+        {inbox}
+      </div>
+    );
+  }
+
+  if (nav.view === "work") {
+    return (
+      <div className="app">
+        {chrome}
+        <WorkView />
         {footer}
         {help}
         {inbox}

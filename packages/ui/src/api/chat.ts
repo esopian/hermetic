@@ -387,9 +387,25 @@ export const routinesUpdate = botModeCall("routines.update");
 export const routinesDelete = botModeCall("routines.delete");
 export const routinesRun = botModeCall("routines.run");
 export const routinesHistory = botModeCall("routines.history");
+// The kanban board (§9.2): the same door, no chat listen opt-in behind it.
+export const kanbanBoard = botModeCall("kanban.board");
+export const kanbanTask = botModeCall("kanban.task");
+export const kanbanLog = botModeCall("kanban.log");
+export const kanbanCreate = botModeCall("kanban.create");
+export const kanbanComment = botModeCall("kanban.comment");
+export const kanbanUnblock = botModeCall("kanban.unblock");
+export const kanbanAssign = botModeCall("kanban.assign");
+export const kanbanMove = botModeCall("kanban.move");
+export const kanbanArchive = botModeCall("kanban.archive");
+export const kanbanDelete = botModeCall("kanban.delete");
 
 export type BotProfileView = Awaited<ReturnType<typeof botsGet>>;
 export type BotModeCapabilitiesView = Awaited<ReturnType<typeof botsCapabilities>>;
 export type BotRoutineView = Awaited<ReturnType<typeof routinesList>>["jobs"][number];
+export type KanbanBoardView = Awaited<ReturnType<typeof kanbanBoard>>;
+export type KanbanInstanceBoardView = KanbanBoardView["instances"][number];
+export type KanbanTaskView = KanbanInstanceBoardView["tasks"][number];
+export type KanbanTaskDetailView = Awaited<ReturnType<typeof kanbanTask>>;
+export type KanbanLogView = Awaited<ReturnType<typeof kanbanLog>>;
 export type HostedRoomView = Awaited<ReturnType<typeof roomsGet>>;
 export type RoomEventView = Awaited<ReturnType<typeof roomsHistory>>["events"][number];

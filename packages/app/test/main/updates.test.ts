@@ -1,24 +1,28 @@
 /**
- * The update check, and what it is no longer allowed to do.
+ * The update flow: check, download, verify, install — and the manual path
+ * whenever any step short of a verified download fails.
  *
- * Every side of it is injected — updater, ops, dialog, browser, broadcast,
- * timer — so the suite never waits, never spawns and never reaches a release
- * server. The calls all land in one ordered array. The assertion that matters
- * most is an absence: nothing here, and nothing in the package, downloads or
- * applies a release, because the devkit verifies one by TLS alone.
+ * Every side of it is injected — updater, verifier, ops, dialogs, browser,
+ * broadcast, timer — so the suite never waits, never spawns and never reaches a
+ * release server. The calls all land in one ordered array. The assertions that
+ * matter most are about `apply`: it appears only right after a `verify` that
+ * passed, and never after one that failed.
  */
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { memoryLog } from "../../src/log.ts";
 import type { OpSummary } from "../../src/ops.ts";
+import type { VerifyResult } from "../../src/main/update-verify.ts";
 import {
+  RELEASE_ASSETS_URL,
   RELEASES_URL,
   UPDATE_INTERVAL_MS,
   UPDATE_STATUSES,
   type UpdaterLike,
   createUpdater,
   isNewerVersion,
+  restartPrompt,
   updatePrompt,
 } from "../../src/main/updates.ts";
 
@@ -51,6 +55,12 @@ interface Scenario {
   installed?: string;
   available?: boolean;
   version?: string;
+  /** How the download goes: prepared (default), the devkit's error field, or a throw. */
+  download?: "ok" | "field" | "throw";
+  /** What each `verify` answers, in order; the last one repeats. Default: ok. */
+  verify?: boolean[];
+  /** The operator's answer to the "restart now?" box. */
+  restart?: boolean;
   /** The operator's answer to the "open the release page?" box. */
   open?: boolean;
   /** How the check fails: a throw, or the devkit's own `error` field. */
@@ -62,15 +72,10 @@ function harness(initial: Scenario = {}) {
   const calls: string[] = [];
   const broadcasts: Array<{ status: string; version?: string }> = [];
   let running: OpSummary[] = [];
+  let verifies = 0;
   const log = memoryLog();
 
-  /**
-   * The devkit's real updater has `downloadUpdate` and `applyUpdate` too. The
-   * fake carries both, recording into `calls`, so a regression that reached
-   * for either — through a cast, a spread, a wider interface — shows up as a
-   * call rather than as a type error someone silenced.
-   */
-  const devkit = {
+  const updater: UpdaterLike = {
     localInfo: {
       channel: () => scenario.channel ?? "stable",
       version: () => scenario.installed ?? "0.3.0",
@@ -82,10 +87,16 @@ function harness(initial: Scenario = {}) {
         return { updateAvailable: false, version: "", error: scenario.fail.message };
       return { updateAvailable: scenario.available ?? false, version: scenario.version, error: "" };
     },
-    downloadUpdate: async () => void calls.push("download"),
+    downloadUpdate: async () => {
+      calls.push("download");
+      if (scenario.download === "throw") throw new Error("disk full");
+    },
+    updateInfo: () =>
+      scenario.download === "field"
+        ? { updateReady: false, error: "Failed to download update: HTTP 503" }
+        : { updateReady: true, error: "" },
     applyUpdate: async () => void calls.push("apply"),
   };
-  const updater: UpdaterLike = devkit;
 
   /** The fake clock: `tick()` is what six hours of wall time looks like here. */
   const timers: Array<{ fn: () => void; ms: number }> = [];
@@ -93,9 +104,22 @@ function harness(initial: Scenario = {}) {
   const checker = createUpdater({
     updater,
     ops: { list: () => ({ ops: running }) },
+    verify: async (): Promise<VerifyResult> => {
+      calls.push("verify");
+      const answers = scenario.verify ?? [true];
+      const ok = answers[Math.min(verifies, answers.length - 1)] ?? true;
+      verifies += 1;
+      return ok
+        ? { ok: true, version: scenario.version ?? "" }
+        : { ok: false, reason: "bad signature" };
+    },
     prompt: async (message: string) => {
       calls.push(`prompt:${message}`);
       return scenario.open ?? false;
+    },
+    confirmRestart: async (message: string) => {
+      calls.push(`restart:${message}`);
+      return scenario.restart ?? false;
     },
     openExternal: (url) => void calls.push(`open:${url}`),
     broadcast: (_name, payload) => {
@@ -119,6 +143,7 @@ function harness(initial: Scenario = {}) {
     broadcasts,
     log,
     timers,
+    scenario,
     setRunning: (ops: OpSummary[]) => void (running = ops),
     setFailMessage: (message: string) => {
       scenario.fail = { how: "throw", message };
@@ -135,6 +160,19 @@ function harness(initial: Scenario = {}) {
   };
 }
 
+/** A verified download, up to the restart box. */
+const READY = (version: string) => [
+  "check",
+  "broadcast:downloading",
+  "download",
+  "verify",
+  "broadcast:ready",
+  `restart:${restartPrompt(version)}`,
+];
+
+/** A download that could not be installed, falling back to the release page. */
+const FALLBACK = (version: string) => ["broadcast:available", `prompt:${updatePrompt(version)}`];
+
 describe("createUpdater", () => {
   test("no update tells the footer so", async () => {
     const h = harness({ available: false });
@@ -142,32 +180,128 @@ describe("createUpdater", () => {
     expect(h.calls).toEqual(["check", "broadcast:none"]);
   });
 
-  test("available → prompt → the release page, and nothing is downloaded or applied", async () => {
-    const h = harness({ available: true, version: "0.4.0", open: true });
+  test("available → download → verify → restart → verify again → apply", async () => {
+    const h = harness({ available: true, version: "0.4.0", restart: true });
+    await h.checker.check();
+    expect(h.calls).toEqual([...READY("0.4.0"), "verify", "apply"]);
+    expect(h.broadcasts).toEqual([
+      { status: "downloading", version: "0.4.0" },
+      { status: "ready", version: "0.4.0" },
+    ]);
+  });
+
+  test("'Later' leaves the update ready, and install() takes it after verifying again", async () => {
+    const h = harness({ available: true, version: "0.4.0", restart: false });
+    await h.checker.check();
+    expect(h.calls).toEqual(READY("0.4.0"));
+    expect(h.log.lines.join("")).toContain("install deferred");
+
+    h.calls.length = 0;
+    expect(await h.checker.install()).toBe(true);
+    expect(h.calls).toEqual(["verify", "apply"]);
+  });
+
+  test("a signature that fails never installs, and offers the release page", async () => {
+    const h = harness({ available: true, version: "0.4.0", verify: [false], open: true });
     await h.checker.check();
     expect(h.calls).toEqual([
       "check",
-      "broadcast:available",
-      `prompt:${updatePrompt("0.4.0")}`,
+      "broadcast:downloading",
+      "download",
+      "verify",
+      ...FALLBACK("0.4.0"),
       `open:${RELEASES_URL}`,
     ]);
-    expect(h.broadcasts).toEqual([{ status: "available", version: "0.4.0" }]);
+    expect(h.log.lines.join("")).toContain("bad signature");
+    expect(await h.checker.install()).toBe(false);
+    expect(h.calls).not.toContain("apply");
   });
 
-  test("declining opens nothing and still installs nothing", async () => {
-    const h = harness({ available: true, version: "0.4.0", open: false });
+  test("a failed download is never verified or installed", async () => {
+    for (const download of ["field", "throw"] as const) {
+      const h = harness({ available: true, version: "0.4.0", download });
+      await h.checker.check();
+      expect(h.calls).toEqual(["check", "broadcast:downloading", "download", ...FALLBACK("0.4.0")]);
+      expect(h.log.lines.join("")).toContain("download failed");
+    }
+  });
+
+  test("a tar that stops verifying before the restart is not installed", async () => {
+    // Verified after the download, tampered with before the restart.
+    const h = harness({ available: true, version: "0.4.0", verify: [true, false], restart: true });
     await h.checker.check();
-    expect(h.calls.at(-1)).toBe(`prompt:${updatePrompt("0.4.0")}`);
-    expect(h.calls.some((c) => c.startsWith("open:"))).toBe(false);
-    expect(h.calls).not.toContain("download");
+    expect(h.calls).toEqual([...READY("0.4.0"), "verify", "broadcast:available"]);
     expect(h.calls).not.toContain("apply");
-    expect(h.log.lines.join("")).toContain("update deferred");
+    // Discarded: nothing is left to install.
+    h.calls.length = 0;
+    expect(await h.checker.install()).toBe(false);
+    expect(h.calls).toEqual([]);
+  });
+
+  test("install() with nothing verified does nothing", async () => {
+    const h = harness();
+    expect(await h.checker.install()).toBe(false);
+    expect(h.calls).toEqual([]);
+  });
+
+  test("install() does not run under a check", async () => {
+    const h = harness({ available: true, version: "0.4.0", restart: false });
+    await h.checker.check();
+    h.calls.length = 0;
+    const checking = h.checker.check({ interactive: true });
+    expect(await h.checker.install()).toBe(false);
+    await checking;
+    expect(h.calls).not.toContain("apply");
+  });
+
+  test("a ready update is not downloaded again on the timer, nor asked about", async () => {
+    const h = harness({ available: true, version: "0.4.0", restart: false });
+    await h.checker.check();
+    h.calls.length = 0;
+    await h.checker.check();
+    expect(h.calls).toEqual(["check", "broadcast:ready"]);
+  });
+
+  test("an interactive check asks about a ready update again", async () => {
+    const h = harness({ available: true, version: "0.4.0", restart: false });
+    await h.checker.check();
+    h.calls.length = 0;
+    await h.checker.check({ interactive: true });
+    expect(h.calls).toEqual(["check", "broadcast:ready", `restart:${restartPrompt("0.4.0")}`]);
+  });
+
+  test("a refused version is not downloaded again on the timer; the operator can retry", async () => {
+    const h = harness({ available: true, version: "0.4.0", verify: [false] });
+    await h.checker.check();
+    h.calls.length = 0;
+    await h.checker.check();
+    // The footer still says it exists; no second download, no second modal.
+    expect(h.calls).toEqual(["check", "broadcast:available"]);
+
+    h.calls.length = 0;
+    await h.checker.check({ interactive: true });
+    expect(h.calls).toEqual([
+      "check",
+      "broadcast:downloading",
+      "download",
+      "verify",
+      ...FALLBACK("0.4.0"),
+    ]);
+  });
+
+  test("a newer version after a decline is fetched and offered", async () => {
+    const h = harness({ available: true, version: "0.4.0", restart: false });
+    await h.checker.check();
+    h.calls.length = 0;
+    h.setVersion("0.5.0");
+    await h.checker.check();
+    expect(h.calls).toEqual(READY("0.5.0"));
   });
 
   test("the release page is the constant, not a URL built from the manifest", async () => {
     // The manifest is the untrusted half: whatever its version says, the only
     // URL this process hands the browser is the fixed one.
-    const h = harness({ available: true, version: "9.0.0+evil.example", open: true });
+    const h = harness({ available: true, version: "9.0.0+evil.example", verify: [false], open: true });
     await h.checker.check();
     expect(h.calls.filter((c) => c.startsWith("open:"))).toEqual([`open:${RELEASES_URL}`]);
   });
@@ -175,14 +309,14 @@ describe("createUpdater", () => {
   test("a different but older or equal build is not an update", async () => {
     // The devkit's `updateAvailable` is only "the hash differs".
     for (const version of ["0.2.9", "0.3.0", "0.3.0-rc.1", "not-a-version", undefined]) {
-      const h = harness({ available: true, version, open: true });
+      const h = harness({ available: true, version, restart: true });
       await h.checker.check();
       expect({ version, calls: h.calls }).toEqual({ version, calls: ["check", "broadcast:none"] });
     }
   });
 
   test("an installed version that cannot be read offers nothing", async () => {
-    const h = harness({ installed: "", available: true, version: "0.4.0", open: true });
+    const h = harness({ installed: "", available: true, version: "0.4.0", restart: true });
     await h.checker.check();
     expect(h.calls).toEqual(["check", "broadcast:none"]);
   });
@@ -195,12 +329,12 @@ describe("createUpdater", () => {
     expect(isNewerVersion("v1.0.0", "0.1.0")).toBe(false);
   });
 
-  test("the footer is never told a build is downloaded", () => {
-    expect(UPDATE_STATUSES).toEqual(["none", "available", "error"]);
+  test("the footer's statuses are the closed set the page switches on", () => {
+    expect(UPDATE_STATUSES).toEqual(["none", "downloading", "ready", "available", "error"]);
   });
 
   test("a running op skips a scheduled check, and the next tick takes it", async () => {
-    const h = harness({ available: true, version: "0.4.0", open: false });
+    const h = harness({ available: true, version: "0.4.0" });
     h.setRunning([runningOp()]);
     await h.checker.check();
     // Not even `checkForUpdate`: a modal over an op in flight is an
@@ -266,35 +400,6 @@ describe("createUpdater", () => {
     expect(h.log.lines.filter((l) => l.includes("release server unreachable")).length).toBe(2);
   });
 
-  test("a version already asked about is not asked about again on the timer", async () => {
-    const h = harness({ available: true, version: "0.4.0", open: false });
-    await h.checker.check();
-    expect(h.calls.filter((c) => c.startsWith("prompt:")).length).toBe(1);
-
-    h.calls.length = 0;
-    await h.checker.check();
-    // The footer still says it is there; only the modal is withheld.
-    expect(h.calls).toEqual(["check", "broadcast:available"]);
-  });
-
-  test("an interactive check asks again", async () => {
-    const h = harness({ available: true, version: "0.4.0", open: false });
-    await h.checker.check();
-    h.calls.length = 0;
-    await h.checker.check({ interactive: true });
-    expect(h.calls).toEqual(["check", "broadcast:available", `prompt:${updatePrompt("0.4.0")}`]);
-  });
-
-  test("a newer version after a decline is still offered", async () => {
-    const h = harness({ available: true, version: "0.4.0", open: false });
-    await h.checker.check();
-
-    h.calls.length = 0;
-    h.setVersion("0.5.0");
-    await h.checker.check();
-    expect(h.calls).toEqual(["check", "broadcast:available", `prompt:${updatePrompt("0.5.0")}`]);
-  });
-
   test("the 6 h timer fires a check", async () => {
     const h = harness({ available: false });
     h.checker.start();
@@ -314,7 +419,7 @@ describe("createUpdater", () => {
   });
 
   test("a check while one is in flight returns immediately", async () => {
-    const h = harness({ available: true, version: "0.4.0", open: false });
+    const h = harness({ available: true, version: "0.4.0" });
     const first = h.checker.check();
     await h.checker.check();
     expect(h.calls.filter((c) => c === "check").length).toBe(1);
@@ -337,28 +442,46 @@ describe("no path applies an unverified update", () => {
     path,
     text: readFileSync(path, "utf8"),
   }));
+  const rel = (path: string) => path.slice(APP_ROOT.length + 1);
 
-  test("nothing in the app package calls downloadUpdate or applyUpdate", () => {
-    // Re-enabling either is a decision that needs signed releases first (see
-    // `main/updates.ts`); this is where that decision has to be made on purpose.
-    const offenders = files.filter(({ text }) => /\b(downloadUpdate|applyUpdate)\s*\(/.test(text));
-    expect(offenders.map((f) => f.path)).toEqual([]);
+  test("applyUpdate is called only by the verified path and its one devkit wrapper", () => {
+    // Comments name it freely; only code counts.
+    const code = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    const calls = files.flatMap(({ path, text }) =>
+      [...code(text).matchAll(/\.applyUpdate\s*\(/g)].map(() => rel(path)),
+    );
+    // `updates.ts` calls it once, in `installVerified`, after `verified()`;
+    // `index.ts` is the wrapper that hands the devkit's method over.
+    expect(calls.sort()).toEqual(["src/main/index.ts", "src/main/updates.ts"]);
+    const updates = files.find((f) => rel(f.path) === "src/main/updates.ts")?.text ?? "";
+    const installer = /const installVerified = async[\s\S]*?\n {2}};/.exec(updates)?.[0] ?? "";
+    expect(installer).toContain("applyUpdate()");
+    expect(installer.indexOf("verified()")).toBeGreaterThan(-1);
+    expect(installer.indexOf("verified()")).toBeLessThan(installer.indexOf("applyUpdate()"));
   });
 
-  test("the devkit's Updater is reached only for the check and the channel", () => {
+  test("the devkit's Updater is reached member by member, never spread", () => {
     const main = files.find((f) => f.path.endsWith(join("main", "index.ts")));
     expect(main).toBeDefined();
     const text = main?.text ?? "";
     // A spread would hand `createUpdater` every method the devkit has.
     expect(/\.\.\.\s*Updater\b/.test(text)).toBe(false);
     const members = new Set([...text.matchAll(/\bUpdater\.(\w+)/g)].map((m) => m[1]));
-    expect([...members].sort()).toEqual(["checkForUpdate", "localInfo"]);
+    expect([...members].sort()).toEqual([
+      "appDataFolder",
+      "applyUpdate",
+      "checkForUpdate",
+      "downloadUpdate",
+      "getLocalInfo",
+      "localInfo",
+      "updateInfo",
+    ]);
   });
 
-  test("the release page is the repository the app checks against", () => {
+  test("the release page and the signature's home are the repository the app checks against", () => {
     const config = readFileSync(join(APP_ROOT, "electrobun.config.ts"), "utf8");
     const baseUrl = /baseUrl:\s*"([^"]+)"/.exec(config)?.[1];
-    expect(baseUrl).toBeDefined();
-    expect(baseUrl?.startsWith(`${RELEASES_URL}/`)).toBe(true);
+    expect(baseUrl).toBe(RELEASE_ASSETS_URL);
+    expect(RELEASE_ASSETS_URL.startsWith(`${RELEASES_URL}/`)).toBe(true);
   });
 });

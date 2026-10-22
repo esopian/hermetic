@@ -26,6 +26,7 @@ import type { ProfilesState } from "../../state/state.tsx";
 import { ChatSection } from "./ChatSection.tsx";
 import { AccountSection } from "./AccountSection.tsx";
 import { DangerSection } from "./DangerSection.tsx";
+import { AboutSection } from "./AboutSection.tsx";
 import { DeveloperSection } from "./DeveloperSection.tsx";
 import { useDevtools } from "../../state/devtools-store.ts";
 import { DefaultsSection, defaultsDraftDirty } from "./DefaultsSection.tsx";
@@ -303,6 +304,7 @@ export function SettingsShell({
             {section === "notifications" ? <NotificationsSection /> : null}
             {section === "runs" ? <RunsSection config={config} /> : null}
             {section === "developer" ? <DeveloperSection /> : null}
+            {section === "about" ? <AboutSection /> : null}
             {section === "danger" ? (
               <DangerSection config={config} onOpenTeardown={onOpenTeardown} />
             ) : null}

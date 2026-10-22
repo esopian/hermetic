@@ -128,6 +128,7 @@ export function createChatObserve(deps: ChatObserveAdapterDeps) {
         // session, after the batch's subagent blocks, wakes the same read.
         const plain = new Set<string | null>();
         for (const { event, held } of [first, ...merged.take()]) {
+          if (opts.signal?.aborted) return;
           // Always the runtime id: it is what the subagent ledgers are keyed by.
           const session = str(event.session_id);
           const type = str(event.type);
@@ -151,6 +152,7 @@ export function createChatObserve(deps: ChatObserveAdapterDeps) {
           if (session !== null && !concerns(session, opts)) continue;
           plain.add(session);
         }
+        if (opts.signal?.aborted) return;
         for (const session of plain) yield { session };
       }
     } finally {

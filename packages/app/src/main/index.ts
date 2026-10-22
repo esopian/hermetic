@@ -58,7 +58,8 @@ import { installMenu, type MenuItemModel } from "./menu.ts";
 import { createNotifier } from "./notify.ts";
 import { markQuarantined } from "./quarantine.ts";
 import { bundlePaths } from "./paths.ts";
-import { createUpdater } from "./updates.ts";
+import { createUpdater, RELEASE_ASSETS_URL, RELEASES_URL } from "./updates.ts";
+import { verifyPreparedUpdate } from "./update-verify.ts";
 import { applyNavigationRules, installNavigationGuard, mainNavigationRules } from "./navigation.ts";
 import { externalUrl } from "../external-url.ts";
 import { applyMinimumSize } from "./min-size.ts";
@@ -76,19 +77,6 @@ import { createWindows, DEFAULT_FRAME, MIN_FRAME, type OpenedWindow, openingFram
 const GUI_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
 
 /**
- * What `app.info` reports as this build.
- *
- * A bundle has no `package.json` to read and no git checkout to ask, so the
- * version is stamped into the environment by the build and falls back to a
- * label that cannot be mistaken for a release.
- *
- * TODO(evan): stamp this (and the build number and commit) with `--define` at
- * bundle time, so a release pushed from a built app carries the same
- * provenance as one pushed from a source checkout.
- */
-const APP_VERSION = process.env["HERMETIC_APP_VERSION"] ?? "0.0.0-dev";
-
-/**
  * The release channel this bundle was built for, read once.
  *
  * Every accessor on the devkit's `Updater.localInfo` is async — it reads the
@@ -101,10 +89,16 @@ const APP_VERSION = process.env["HERMETIC_APP_VERSION"] ?? "0.0.0-dev";
 const APP_CHANNEL = await Updater.localInfo.channel();
 
 /**
- * The bundle's own version, from the same `version.json`, for the updater's
- * "is the offered release actually newer" comparison (`main/updates.ts`).
+ * The bundle's own version, from the same `version.json`: what `app.info`
+ * reports (Settings › About & updates) and what the updater compares an offered
+ * release against (`main/updates.ts`). Electrobun stamps it from the root
+ * `package.json` (`electrobun.config.ts`), so the app and the core it bundles
+ * ship one version number.
  */
 const BUNDLE_VERSION = await Updater.localInfo.version();
+
+/** The bundle identifier, from the same `version.json`: a prepared update must be for this app. */
+const BUNDLE_IDENTIFIER = (await Updater.getLocalInfo()).identifier;
 
 const fixture = process.env["HERMETIC_FIXTURE"] === "1";
 const uninitialized = process.env["HERMETIC_UNINIT"] === "1";
@@ -326,6 +320,15 @@ const confirmOpenRelease = (message: string): Promise<boolean> =>
     negative: "Later",
   });
 
+/** A verified update installs on restart; declining leaves it ready for later. */
+const confirmRestart = (message: string): Promise<boolean> =>
+  askDialog({
+    title: "Update Hermetic",
+    message,
+    affirmative: "Restart Now",
+    negative: "Later",
+  });
+
 /**
  * Every devkit call is wrapped rather than passed as a bare method reference.
  * `Utils` and `ApplicationMenu` are objects we did not write, and an
@@ -426,7 +429,7 @@ const windows = createWindows({
       terminals,
       autoUpgrade: autoUpgrader,
       /**
-       * What makes this head the desktop one: the same five capabilities the
+       * What makes this head the desktop one: the native capabilities the
        * HTTP head has none of, so `handlers/app.ts` answers instead of
        * refusing. `updater` is read lazily because it is constructed below,
        * after the window set it broadcasts through — this closure runs on
@@ -434,13 +437,15 @@ const windows = createWindows({
        */
       native: {
         info: () => ({
-          version: APP_VERSION,
+          version: BUNDLE_VERSION,
           channel: APP_CHANNEL,
           home: paths.home,
           logPath: paths.logPath,
+          releasesUrl: RELEASES_URL,
         }),
         openExternal: (url) => Utils.openExternal(url),
         checkForUpdate: () => updater.check({ interactive: true }),
+        installUpdate: async () => ({ started: await updater.install() }),
         installCli: runCliInstall,
         notify,
         pickFiles: async () =>
@@ -549,19 +554,30 @@ const teardown = (reason: string): Promise<void> =>
   shutdown({ server: closingWindows, state, log, watchdog, chat: chatOwner, terminals }, reason);
 
 /**
- * Check-and-notify only (`main/updates.ts`). The devkit's updater is handed
- * over as the two members `UpdaterLike` names and nothing else — not spread —
- * so its `downloadUpdate`/`applyUpdate` are unreachable from here: they apply
- * a release verified by TLS alone. `localInfo` is rebuilt because its devkit
- * accessors are async (see `APP_CHANNEL`).
+ * Check, download, verify, install (`main/updates.ts`). The devkit's updater
+ * is handed over member by member — not spread — so `createUpdater` sees
+ * exactly what `UpdaterLike` names, and `applyUpdate` is reached only through
+ * its verified path. `localInfo` is rebuilt because its devkit accessors are
+ * async (see `APP_CHANNEL`).
  */
 const updater = createUpdater({
   updater: {
     localInfo: { channel: () => APP_CHANNEL, version: () => BUNDLE_VERSION },
     checkForUpdate: () => Updater.checkForUpdate(),
+    downloadUpdate: () => Updater.downloadUpdate(),
+    updateInfo: () => Updater.updateInfo(),
+    applyUpdate: () => Updater.applyUpdate(),
   },
   ops,
+  verify: () =>
+    verifyPreparedUpdate({
+      appDataFolder: () => Updater.appDataFolder(),
+      local: { identifier: BUNDLE_IDENTIFIER, channel: APP_CHANNEL, version: BUNDLE_VERSION },
+      assetsUrl: RELEASE_ASSETS_URL,
+      fetch: (url, init) => fetch(url, init),
+    }),
   prompt: confirmOpenRelease,
+  confirmRestart,
   openExternal: (url) => Utils.openExternal(externalUrl(url)),
   broadcast: (name, payload) => windows.broadcast(name, payload),
   log,

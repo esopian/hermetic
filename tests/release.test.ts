@@ -77,7 +77,18 @@ describe("missingAssets", () => {
         "macos-arm64-Hermetic.dmg",
         "stable-macos-arm64-update.json",
         "stable-macos-arm64-abc.patch",
+        "stable-macos-arm64-hx17l0cwsdkl.sig",
       ]),
     ).toEqual(["stable-macos-arm64-Hermetic.app.tar.zst"]);
+  });
+
+  test("a release without its update signature is incomplete", () => {
+    expect(
+      missingAssets([
+        "macos-arm64-Hermetic.dmg",
+        "stable-macos-arm64-Hermetic.app.tar.zst",
+        "stable-macos-arm64-update.json",
+      ]),
+    ).toEqual(["stable-macos-arm64-<hash>.sig"]);
   });
 });

@@ -279,7 +279,7 @@ describe("injection cannot be reached outside fixture mode", () => {
   });
 
   test("the stack factory builds nothing when it is not fixture mode", () => {
-    expect(createFixtureChatStack(false)).toEqual({ hermes: null, controls: null });
+    expect(createFixtureChatStack(false)).toEqual({ hermes: null, controls: null, kanban: null });
   });
 
   /**

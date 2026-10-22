@@ -28,6 +28,7 @@ describe("SETTINGS_SECTIONS", () => {
       "notifications",
       "runs",
       "developer",
+      "about",
       "account",
       "danger",
     ]);

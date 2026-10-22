@@ -1,7 +1,7 @@
 /**
  * The requests only a desktop head can answer: what this build is, opening a
- * URL in the operator's browser, the updater, the `hermetic` shim on `PATH`,
- * and a native notification.
+ * URL in the operator's browser, the updater (check and install), the
+ * `hermetic` shim on `PATH`, and a native notification.
  *
  * None of them reads core. What they need — `Utils.openExternal`, the updater,
  * the shim writer, the notification centre — comes from the main process, and
@@ -9,7 +9,7 @@
  * that builds. A head without one answers `UNSUPPORTED`: the HTTP head is a
  * process with no window, no menu and no notification centre, so "this head
  * cannot do that" is the true answer rather than a missing feature, and it is
- * the same refusal these five gave before there was a desktop head at all.
+ * the same refusal these gave before there was a desktop head at all.
  *
  * The names exist in both heads either way, because a name the page can call
  * has to be a name `dispatch` knows and a name `dispatch` knows has to be
@@ -26,6 +26,7 @@ import type { Handler } from "./dispatch.ts";
 export const APP_INFO = declareMachineryRpc("app.info");
 export const APP_OPEN_EXTERNAL = declareMachineryRpc("app.openExternal");
 export const APP_CHECK_FOR_UPDATE = declareMachineryRpc("app.checkForUpdate");
+export const APP_INSTALL_UPDATE = declareMachineryRpc("app.installUpdate");
 export const APP_INSTALL_CLI = declareMachineryRpc("app.installCli");
 export const APP_NOTIFY = declareMachineryRpc("app.notify");
 
@@ -81,6 +82,16 @@ export async function checkForUpdate(ctx: HandlerContext): Promise<{ checked: tr
   return { checked: true };
 }
 
+/**
+ * "Restart to update". Only an update `main/updates.ts` has downloaded and
+ * verified is installed, and it is verified once more first; with none,
+ * `started` is false and nothing happens. A started install quits the app, so
+ * the page may never see this answer.
+ */
+export async function installUpdate(ctx: HandlerContext): Promise<{ started: boolean }> {
+  return await requireNative(ctx, APP_INSTALL_UPDATE).installUpdate();
+}
+
 export async function installCli(ctx: HandlerContext): Promise<{ path: string; elevated: boolean }> {
   return await requireNative(ctx, APP_INSTALL_CLI).installCli();
 }
@@ -99,6 +110,7 @@ export const appHandlers = {
   [APP_INFO]: info,
   [APP_OPEN_EXTERNAL]: openExternal,
   [APP_CHECK_FOR_UPDATE]: checkForUpdate,
+  [APP_INSTALL_UPDATE]: installUpdate,
   [APP_INSTALL_CLI]: installCli,
   [APP_NOTIFY]: notify,
 } satisfies Record<string, Handler>;

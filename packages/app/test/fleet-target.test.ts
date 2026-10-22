@@ -71,6 +71,7 @@ const UNSCOPED_MACHINERY: Record<string, string> = {
   "app.checkForUpdate": "asks this build about itself; no account is involved",
   "app.info": "asks this build about itself; no account is involved",
   "app.installCli": "writes a shim onto this laptop's PATH",
+  "app.installUpdate": "installs a verified build of this app on this laptop",
   "app.notify": "raises a banner on this laptop",
   "app.openExternal": "hands a URL to this laptop's browser",
   "chat.observe.resume": "re-establishes this head's own observation; it writes nothing",
@@ -238,6 +239,16 @@ const BODIES: Record<string, object> = {
   "routines.delete": { instance: "ember", bot: "default", id: "j-1", confirm: true },
   "routines.run": { instance: "ember", bot: "default", id: "j-1" },
   "routines.history": { instance: "ember", bot: "default", id: "j-1" },
+  "kanban.board": { instance: "ember" },
+  "kanban.task": { instance: "ember", id: "t_0000abcd" },
+  "kanban.log": { instance: "ember", id: "t_0000abcd" },
+  "kanban.create": { instance: "ember", title: "A card" },
+  "kanban.comment": { instance: "ember", id: "t_0000abcd", body: "note" },
+  "kanban.unblock": { instance: "ember", id: "t_0000abcd", answer: "yes" },
+  "kanban.assign": { instance: "ember", id: "t_0000abcd", profile: null },
+  "kanban.move": { instance: "ember", id: "t_0000abcd", status: "todo" },
+  "kanban.archive": { instance: "ember", id: "t_0000abcd" },
+  "kanban.delete": { instance: "ember", id: "t_0000abcd", confirm: true },
 };
 
 function contextFor(state: AppState, ops = new OpRegistry(), log?: AppLog): HandlerContext {

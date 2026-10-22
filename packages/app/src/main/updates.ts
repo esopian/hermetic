@@ -1,24 +1,22 @@
 /**
- * Update notices: find out a newer release exists, and send the operator to it.
+ * Updates: find out a newer release exists, fetch it, prove it is ours, and
+ * install it when the operator says so.
  *
- * This module never installs anything. Electrobun's updater can download a
- * release and swap it in under the running process, but in the devkit this
- * app builds against it verifies nothing beyond TLS: the manifest's `hash` is a
- * short cache key (`SAFE_HASH_PATTERN` in the devkit's `core/Updater.ts`), not a
- * digest or a signature over the bits. Applying what it fetched would mean
- * whoever can publish a release on the repository — or tamper with the asset
- * store behind it — can replace the binary on every installed copy, silently.
- * So the check stays (it reads one small JSON document and nothing else) and
- * everything after it is the operator's browser: "an update is available", and
- * a dialog whose one affirmative opens the release page, where the DMG is
- * downloaded and installed the way the first one was.
+ * Electrobun's updater does the fetching and the installing
+ * (`downloadUpdate`, then `applyUpdate`, which hands the new bundle to a native
+ * helper and relaunches). What it does not do is check what it fetched beyond
+ * TLS: the manifest's `hash` is a short cache key, not a digest or signature.
+ * So nothing is installed until `verify` (`main/update-verify.ts`) has checked
+ * the downloaded tar against the release key's Ed25519 signature
+ * (`@hermetic/core`'s `app-update-signature.ts`, signed in the release
+ * workflow by `scripts/sign-update.ts`). It is checked twice: once after the
+ * download, and again immediately before `applyUpdate`, because the operator
+ * may say "Later" and restart hours afterwards.
  *
- * Re-enabling in-place updates needs signed releases first: a detached
- * signature over each artifact (minisign, with the public key compiled into
- * the app) verified before anything is applied. `UpdaterLike` deliberately has
- * no `downloadUpdate` or `applyUpdate`, and `main/index.ts` hands this module
- * only `checkForUpdate`, so that change cannot be made here by accident;
- * `test/main/updates.test.ts` scans the package source for either call.
+ * Any failure on the way — the download, a missing or bad signature, a build
+ * that is not newer — discards the download and falls back to the manual path:
+ * "an update is available" and a dialog whose one affirmative opens the
+ * release page. A release that cannot be verified is never installed.
  *
  * `Updater` is injected as a structural type rather than imported: importing
  * `electrobun/bun` throws outside a built app, and this module has to be
@@ -27,6 +25,7 @@
 import type { AppLog } from "../log.ts";
 import type { OpSummary } from "../ops.ts";
 import type { WebviewMessages } from "../rpc/schema.ts";
+import type { VerifyResult } from "./update-verify.ts";
 
 /** Six hours. Long enough that a laptop left open does not poll a release server raw. */
 export const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -41,22 +40,27 @@ export const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 export const RELEASES_URL = "https://github.com/esopian/hermetic/releases/latest";
 
 /**
+ * Where the latest release's assets are — `release.baseUrl` exactly — and so
+ * where an update's signature is fetched from. A constant for the same reason.
+ */
+export const RELEASE_ASSETS_URL = `${RELEASES_URL}/download`;
+
+/**
  * What the footer is told. A small closed set rather than free text, because
  * the page switches on it:
  *
  * - `none` — checked, nothing newer. Also what a skipped or dev-channel tick
  *   leaves standing, since neither of those learns anything.
- * - `available` — a newer release exists; the release page is where it is.
+ * - `downloading` — a newer release exists and is being fetched and verified.
+ * - `ready` — downloaded and verified; a restart installs it.
+ * - `available` — a newer release exists but could not be installed here (the
+ *   download or its signature failed); the release page is where it is.
  * - `error` — the check failed. The app keeps running on the version it has.
  */
-export const UPDATE_STATUSES = ["none", "available", "error"] as const;
+export const UPDATE_STATUSES = ["none", "downloading", "ready", "available", "error"] as const;
 export type UpdateStatus = (typeof UPDATE_STATUSES)[number];
 
-/**
- * As much of Electrobun's `Updater` as this module uses — and all of it this
- * module is allowed to use. See the header for why there is no download or
- * apply here.
- */
+/** As much of Electrobun's `Updater` as this module uses. */
 export interface UpdaterLike {
   /** This bundle's channel and version, read once at startup (`version.json`). */
   localInfo: { channel(): string; version(): string };
@@ -65,6 +69,11 @@ export interface UpdaterLike {
    * non-empty one is treated exactly like a throw.
    */
   checkForUpdate(): Promise<{ updateAvailable: boolean; version?: string; error?: string }>;
+  /** Fetches and prepares the checked update. Failure lands in `updateInfo().error`, not a throw. */
+  downloadUpdate(): Promise<void>;
+  updateInfo(): { updateReady: boolean; error: string };
+  /** Hands the prepared update to the native helper and quits. Only ever called right after `verify`. */
+  applyUpdate(): Promise<void>;
 }
 
 /** As much of the op registry as the updater reads. */
@@ -78,8 +87,12 @@ export type SetTimer = (fn: () => void, ms: number) => () => void;
 export interface UpdaterOptions {
   updater: UpdaterLike;
   ops: RunningOps;
+  /** Checks the prepared download's signature, discarding it on failure (`main/update-verify.ts`). */
+  verify(): Promise<VerifyResult>;
   /** Native modal; true means open the release page. */
   prompt(message: string): Promise<boolean>;
+  /** Native modal; true means restart now and install the verified update. */
+  confirmRestart(message: string): Promise<boolean>;
   /** `Utils.openExternal`, behind the same allow-list the page's links use. */
   openExternal(url: string): void;
   /** Pushes `app.update` at every open window (`WindowSet.broadcast`). */
@@ -101,6 +114,11 @@ export interface CheckOptions {
 export interface UpdateChecker {
   /** One check, now. Returns when the flow settles (or immediately if one is in flight). */
   check(options?: CheckOptions): Promise<void>;
+  /**
+   * Installs the verified update and restarts: Settings' "Restart to update".
+   * False when there is nothing verified to install, or a check is in flight.
+   */
+  install(): Promise<boolean>;
   /** Checks once and arms the repeat. */
   start(): void;
   /** Disarms the repeat. Does not abort a check already running. */
@@ -111,6 +129,11 @@ export interface UpdateChecker {
 export function updatePrompt(version: string | undefined): string {
   const which = version === undefined ? "A newer version of Hermetic" : `Hermetic ${version}`;
   return `${which} is available. Open the release page to download it?`;
+}
+
+/** The restart box, once a download has verified. */
+export function restartPrompt(version: string): string {
+  return `Hermetic ${version} is downloaded and verified. Restart now to install it?`;
 }
 
 /** `MAJOR.MINOR.PATCH`, optionally `-prerelease`; build metadata is not compared. */
@@ -162,6 +185,10 @@ export function createUpdater(options: UpdaterOptions): UpdateChecker {
    * doing. An interactive check ignores it — the operator asked.
    */
   let askedVersion: string | null = null;
+  /** The version downloaded and verified this session, waiting for a restart. */
+  let readyVersion: string | null = null;
+  /** The version whose download or signature failed this session. */
+  let refusedVersion: string | null = null;
 
   const broadcast = (status: UpdateStatus, version?: string): void => {
     options.broadcast("app.update", version === undefined ? { status } : { status, version });
@@ -208,23 +235,92 @@ export function createUpdater(options: UpdaterOptions): UpdateChecker {
       return;
     }
 
-    broadcast("available", result.version);
-
-    /**
-     * Keyed by version so a *newer* build still gets asked about. `unknown`
-     * stands in when the updater reports no version, which collapses two
-     * anonymous builds into one — the conservative direction, since the
-     * alternative is nagging.
-     */
+    // Keyed by version so a *newer* build is still fetched and asked about.
+    // `isNewerVersion` refuses an undefined version, so the fallback is never used.
     const version = result.version ?? "unknown";
+    if (readyVersion !== version) {
+      // A version that failed once this session is not fetched again on the
+      // timer — every six hours would be another full download that fails the
+      // same way. The operator asking is worth another try.
+      if (!interactive && version === refusedVersion) {
+        await offerReleasePage(version, interactive);
+        return;
+      }
+      readyVersion = null;
+      broadcast("downloading", version);
+      if (!(await prepare())) {
+        refusedVersion = version;
+        await offerReleasePage(version, interactive);
+        return;
+      }
+      readyVersion = version;
+    }
+    broadcast("ready", version);
+
+    // Asked once per version per session; an interactive check asks again.
     if (!interactive && version === askedVersion) return;
     askedVersion = version;
+    const restart = await options.confirmRestart(restartPrompt(version));
+    options.log?.line("info", "update", restart ? "restarting to install" : "install deferred", {
+      version,
+    });
+    if (restart) await installVerified();
+  };
 
-    const open = await options.prompt(updatePrompt(result.version));
+  /** Download, then verify. False, with the reason logged, for any failure. */
+  const prepare = async (): Promise<boolean> => {
+    try {
+      await options.updater.downloadUpdate();
+    } catch (e: unknown) {
+      options.log?.line(
+        "warn",
+        "update",
+        `download failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      return false;
+    }
+    const info = options.updater.updateInfo();
+    if (!info.updateReady) {
+      options.log?.line("warn", "update", `download failed: ${info.error || "not prepared"}`);
+      return false;
+    }
+    return await verified();
+  };
+
+  const verified = async (): Promise<boolean> => {
+    const result = await options.verify();
+    if (!result.ok) options.log?.line("warn", "update", `update refused: ${result.reason}`);
+    return result.ok;
+  };
+
+  /** The manual path: a release this app could not install is still one the operator can. */
+  const offerReleasePage = async (version: string, interactive: boolean): Promise<void> => {
+    broadcast("available", version);
+    if (!interactive && version === askedVersion) return;
+    askedVersion = version;
+    const open = await options.prompt(updatePrompt(version));
     options.log?.line("info", "update", open ? "opening the release page" : "update deferred", {
       version,
     });
     if (open) options.openExternal(RELEASES_URL);
+  };
+
+  /**
+   * Verified again here, not only after the download: "Later" can leave the
+   * tar on disk for hours before the restart. A tar that no longer verifies
+   * has been discarded, so the release page is what is left to offer.
+   */
+  const installVerified = async (): Promise<boolean> => {
+    const version = readyVersion;
+    if (version === null) return false;
+    if (!(await verified())) {
+      readyVersion = null;
+      broadcast("available", version);
+      return false;
+    }
+    options.log?.line("info", "update", "installing update", { version });
+    await options.updater.applyUpdate();
+    return true;
   };
 
   const check = async (checkOptions: CheckOptions = {}): Promise<void> => {
@@ -241,6 +337,20 @@ export function createUpdater(options: UpdaterOptions): UpdateChecker {
 
   return {
     check,
+    async install() {
+      // Not under a check: a download in flight could replace the tar between
+      // this verification and the install.
+      if (checking) return false;
+      checking = true;
+      try {
+        return await installVerified();
+      } catch (e: unknown) {
+        fail(e);
+        return false;
+      } finally {
+        checking = false;
+      }
+    },
     start() {
       // Once at launch — an app opened after a week away should not wait six
       // hours to notice — then on the interval.

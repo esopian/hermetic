@@ -138,6 +138,10 @@ const RoutineFields = {
   prompt: Text.min(1),
   schedule: z.string().trim().min(1).max(200),
   deliver: z.enum(["local", "bot"]).default("local"),
+  /** Stop after this many runs; null runs forever. Upstream's `repeat.times`. */
+  repeat: z.number().int().min(1).max(100_000).nullable().optional(),
+  /** Each run sees the previous run's output: upstream's `context_from: ["self"]`. */
+  continuity: z.boolean().optional(),
 };
 export const RoutineCreateInput = z.object({ ...Ref, ...RoutineFields }).strict();
 export const RoutineUpdateInput = z
@@ -148,6 +152,8 @@ export const RoutineUpdateInput = z
     prompt: RoutineFields.prompt.optional(),
     schedule: RoutineFields.schedule.optional(),
     deliver: z.enum(["local", "bot"]).optional(),
+    repeat: RoutineFields.repeat,
+    continuity: RoutineFields.continuity,
     paused: z.boolean().optional(),
   })
   .strict();
@@ -331,6 +337,9 @@ export const BotRoutine = z.object({
   next_run_at: z.string().nullable(),
   last_run_at: z.string().nullable(),
   last_status: z.string().nullable(),
+  /** `times` null runs forever; `completed` counts runs toward it. */
+  repeat: z.object({ times: z.number().int().nullable(), completed: z.number().int() }),
+  continuity: z.boolean(),
 });
 export const BotRoutineRun = z.object({
   id: z.string(),

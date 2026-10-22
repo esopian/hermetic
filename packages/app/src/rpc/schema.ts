@@ -50,6 +50,7 @@ import type * as devtools from "../handlers/devtools.ts";
 import type * as files from "../handlers/files.ts";
 import type * as fixture from "../handlers/fixture.ts";
 import type * as fleet from "../handlers/fleet.ts";
+import type * as kanban from "../handlers/kanban.ts";
 import type * as init from "../handlers/init.ts";
 import type * as lifecycle from "../handlers/lifecycle.ts";
 import type * as meta from "../handlers/meta.ts";
@@ -119,6 +120,7 @@ type HandlerTables = typeof agents.agentHandlers &
   typeof files.filesHandlers &
   typeof fixture.fixtureHandlers &
   typeof fleet.fleetHandlers &
+  typeof kanban.kanbanHandlers &
   typeof init.initHandlers &
   typeof lifecycle.lifecycleHandlers &
   typeof meta.metaHandlers &
@@ -237,7 +239,7 @@ export type MachineryRequests = {
   "devtools.export": RpcRequest<DevtoolsExportInput, Answer<typeof devtools.exportCapture>>;
 
   /**
-   * The native five (`handlers/app.ts`). A head without a window refuses every
+   * The native requests (`handlers/app.ts`). A head without a window refuses every
    * one `UNSUPPORTED`, but a refusal is an error rather than an answer, so the
    * responses are the desktop head's real ones — read off the handlers like
    * everything else here. `app.info` and `app.notify` forward what `ctx.native`
@@ -250,6 +252,7 @@ export type MachineryRequests = {
     Answer<typeof app.openExternal>
   >;
   "app.checkForUpdate": RpcRequest<Record<string, never>, Answer<typeof app.checkForUpdate>>;
+  "app.installUpdate": RpcRequest<Record<string, never>, Answer<typeof app.installUpdate>>;
   "app.installCli": RpcRequest<Record<string, never>, Answer<typeof app.installCli>>;
   "app.notify": RpcRequest<Input<typeof app.AppNotifyRequest>, Answer<typeof app.notify>>;
 
@@ -328,6 +331,7 @@ export const MACHINERY_REQUEST_NAMES = [
   "app.info",
   "app.openExternal",
   "app.checkForUpdate",
+  "app.installUpdate",
   "app.installCli",
   "app.notify",
   "terminal.open",

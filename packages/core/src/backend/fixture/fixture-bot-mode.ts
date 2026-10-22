@@ -481,6 +481,8 @@ export function withFixtureBotMode(
       (await roster(box)).delete(decodeURIComponent(url.pathname.split("/").at(-1) ?? ""));
       return { ok: true };
     }
+    // A configured zone, so the rail's times read in something other than UTC.
+    if (url.pathname === "/api/config") return { timezone: "America/Los_Angeles" };
     const parts = url.pathname.split("/"),
       id = parts[4],
       action = parts[5];
@@ -493,6 +495,7 @@ export function withFixtureBotMode(
           enabled: true,
           state: "scheduled",
           next_run_at: now(),
+          repeat: { times: null, completed: 0 },
         };
         list.push(job);
         return job;
@@ -505,7 +508,13 @@ export function withFixtureBotMode(
       list.splice(list.indexOf(job), 1);
       return { ok: true };
     }
-    if (method === "PUT") Object.assign(job, rec(p.updates));
+    if (method === "PUT") {
+      const updates = rec(p.updates);
+      // Upstream's `update_job` stores a bare count as `{ times, completed }`.
+      if ("repeat" in updates)
+        updates.repeat = { times: updates.repeat ?? null, completed: rec(job.repeat).completed ?? 0 };
+      Object.assign(job, updates);
+    }
     if (action === "pause") {
       job.enabled = false;
       job.state = "paused";

@@ -80,6 +80,8 @@ export function createFixtureTurnRow(): FixtureTurnRow {
       // (`fixture-chat-demo.ts` raises both live).
       if (block.kind === "process_event" || (block.kind === "tool" && block.render === "message_agent"))
         row.full = true;
+      // A filed kanban card is the task widget on a re-read too.
+      if (block.kind === "tool" && block.render === "kanban_task") row.full = true;
       if (block.kind === "tool") {
         const found = blocks.findIndex((b) => b.kind === "tool" && b.tool_id === block.tool_id);
         const at = found >= 0 ? found : blocks.length;

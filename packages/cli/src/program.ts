@@ -1,4 +1,5 @@
 import * as botMode from "./commands/bot-mode.ts";
+import * as kanban from "./commands/kanban.ts";
 /**
  * The Commander tree. Exactly one command per public core method (§11.4), and
  * nothing else: the dashboard is its own binary, `hermetic-portal`, not a
@@ -68,6 +69,7 @@ export function buildProgram(): Command {
   chat.register(program);
   files.register(program);
   botMode.register(program);
+  kanban.register(program);
   mobile.register(program);
   ops.register(program);
   policy.register(program);

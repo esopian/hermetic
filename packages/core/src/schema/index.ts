@@ -39,6 +39,7 @@ export * from "./directory.ts";
 export * from "./skew.ts";
 export * from "./userdata.ts";
 export * from "./bot-mode.ts";
+export * from "./kanban.ts";
 export * from "./fixture.ts";
 export * from "./presets.ts";
 export * from "./tombstone.ts";

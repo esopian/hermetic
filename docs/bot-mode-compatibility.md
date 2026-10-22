@@ -32,6 +32,9 @@ The pinned source provides these additional REST contracts:
 | Read job runs | `GET /api/cron/jobs/<id>/runs?profile=<profile>&limit=<n>` |
 | Remove job | `DELETE /api/cron/jobs/<id>?profile=<profile>` |
 | Remove bot profile | `DELETE /api/profiles/<name>` |
+| Read the profile's clock | `GET /api/config?profile=<profile>` → `timezone` |
+
+**Schedules, run caps and continuity.** `parse_schedule` (`cron/jobs.py`) accepts a five-field cron expression; `every 2h`/`every 90m`, a recurring interval (a bare `2h` is recurring too, not one-shot); `in 30m`, one run that long after saving; and an ISO timestamp, one run then, read in Hermes's configured zone when it carries no offset. A listed job's `schedule` is an object; hermetic reads back the form it can send again (a cron job's `expr` rather than its display, `every <minutes>m`, a one-shot's `run_at`). A job's `repeat` is `{times, completed}` (`times` null runs forever). `CronJobCreate` has no `repeat`, so a run cap is set by a `PUT` right after the create; if that fails, hermetic deletes the job rather than leave it running uncapped. Continuity is `context_from: ["self"]`, which the create route accepts before the job exists; toggling it keeps any other job ids in `context_from`. A profile with no `timezone` runs on the box's own clock, which hermetic takes to be UTC.
 
 The routine probe `bots.capabilities` performs is this same read (`GET /api/cron/jobs?profile=<profile>`, `hermes_cli/web_routers/cron.py:211`), scoped to a profile the roster named rather than left to the route's own `profile="all"` default, and never retried unscoped on a refusal.
 
@@ -52,6 +55,39 @@ A message body is drawn the way Desktop draws it. Upstream renders markdown with
 Recovering a failed conversation is targeted. `chat.observe.resume` (`ChatOwner.resume`) re-observes exactly the one conversation it names; it is not a `chat.listen` resync and does not touch any other bot's subscription, owned or guest. A reader that attaches after a conversation's watch has already failed does not see a healthy-looking thread with no explanation: the owner replays that conversation's last health event — `reconnect` mid-backoff, terminal `error` once it ended — under its own event name, after the cached snapshot, on both the single-conversation subscription and the `chat.subscribe` fan-in, so a late joiner lands in the same state a reader who watched the failure happen is in. Joining a conversation whose subscription already ended for a remembered reason replays that `error` and ends the stream rather than opening a fresh read; only `resume` restarts one. The owner pins its own (listened) subscriptions and refcounts only guest ones, so a reader going away can end a guest watch but never a main-process-owned one. Source: `packages/app/test/chat-owner.test.ts`.
 
 Fixture mode has a staging surface for demonstrating an external arrival, since `bun run dev:fixture` has no gateway to produce one: `hermetic.fixture.chat.inject`/`.hint`, reachable as the `fixture.chat.inject` and `fixture.chat.hint` requests (`packages/app/src/handlers/fixture.ts`). `inject` appends a `user` row to the fixture box's transcript and announces it on open hint streams; `hint` announces without appending, for a row already there. Both are fixture-only by two guards, with a third layer bounding the blast radius: construction builds no `fixture` namespace outside fixture mode, and an explicitly-constructed control surface with `fixture: false` throws `UNSUPPORTED` before the input is read, while the methods themselves can reach only an in-memory activity table with no AWS client or config behind it. Neither is a `PUBLIC_METHOD` or a CLI verb; both are `MACHINERY_RPC` entries, which is how the parity test knows they exist without expecting a core method behind them. Source: `packages/app/test/handlers/dispatch.test.ts`.
+
+## Kanban
+
+The board is the box's dashboard plugin over HTTP, not gateway RPC. Upstream registers no kanban method on `/api/ws` (`tui_gateway/`), so `kanban.*` is a REST adapter in core (`packages/core/src/chat/kanban.ts`) on the same authenticated session-token client the routine and profile routes use (`botModeRest`). The page and the CLI never see the upstream shapes; core maps them to the `Kanban*` schemas.
+
+| Operation | Dashboard contract |
+|---|---|
+| Read the board | `GET /api/plugins/kanban/board` |
+| Read a card | `GET /api/plugins/kanban/tasks/<id>` |
+| Create a card | `POST /api/plugins/kanban/tasks` |
+| Move, unblock or archive a card | `PATCH /api/plugins/kanban/tasks/<id>` with `{status}` |
+| Delete a card | `DELETE /api/plugins/kanban/tasks/<id>` |
+| Comment | `POST /api/plugins/kanban/tasks/<id>/comments` |
+| Assign or park | `POST /api/plugins/kanban/tasks/<id>/reassign` |
+| Read the worker log | `GET /api/plugins/kanban/tasks/<id>/log` |
+| Read the box's profiles | `GET /api/plugins/kanban/profiles` |
+| List boards | `GET /api/plugins/kanban/boards` |
+
+Only the box's current (default) board is used; there is no board switcher. The board slug and the profiles are cached for five minutes per instance.
+
+**The capability probe is the board read itself.** A 200 from `GET /board` is `on`. A 404, 403 or 409 is the plugin's answer that it is off or that this Hermes predates the board API, and it is `off`, with the fix `hermes plugins enable kanban` run on the box; hermetic offers no enable action. A reply that is not JSON, or has no columns, is a protocol failure (`CHAT_PROTOCOL`) and is `unknown`, not `off`. A box that cannot be reached, or does not answer within 8 s, is `unreachable`; its last good tasks are returned with `stale_since`. As with `bots.capabilities`, a refusal is never retried on another route.
+
+**Unblock is a comment and a status patch.** Upstream turns `PATCH {status: ready}` into its own unblock for a `blocked` or `scheduled` card, so `kanban.unblock` posts the answer as a comment by `hermetic`, then sends the patch. `running` cannot be set by a patch; upstream refuses it. A delete is a direct `DELETE` behind a `confirm: true` literal in the request; Archive is the reversible alternative.
+
+**What the chat sees.** A `kanban_create` tool call is rendered as a card widget keyed on the `task_id` of its result, and Hermes' notice rows (`session_notifications.py`, `_KANBAN_EVENT_FORMATTERS`) as `kanban` events, matched on `^[✔⏸✖⏱🔄] ([board] )?(@assignee )?Kanban t_xxxxxxxx` at the start of a `user` row with no `display_kind`. Live, the same text arrives as `status.update` with `kind: "process"`; hermetic does not turn that frame into a row and reads the stored one on the next history refresh.
+
+**Known gaps at `v2026.9.24` (0.21.5), recorded rather than worked around:**
+
+- A card created by REST has no session link, so a card made from the dashboard never notifies a chat. Only a card an agent files with `kanban_create` in a conversation notifies it.
+- Compression rekeys the session and leaves the `tui` subscription on the old key, so notices for cards created before a `/compact` stop arriving.
+- The kanban toolset is opt-in per profile (`toolsets: [kanban]`); an agent calls `kanban_create` only when it is enabled.
+- Comments, review requests and a run starting are silent kinds with no notice. The widget and the open card poll the board API (5 s) because there is nothing to wait for, and the board view polls every 10 s.
+- Hermetic does not use an `/events` WebSocket yet; polling is the shortcut, to upgrade if latency matters.
 
 ## Requests, failures and delegated work
 

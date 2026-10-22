@@ -172,10 +172,12 @@ operate the window an operator would see. `app:build:canary` and `app:build:stab
 WKWebView and bundle no CEF. `packages/app/renderer.ts` chooses per build, and the rules that keep
 the two renderers interchangeable are in `AGENTS.md` ("Renderers"). The first CEF dev build
 downloads Electrobun's CEF runtime into `~/.hutch` (about 300 MB, once per Electrobun version).
+On Linux a dev build defaults to CEF too, so the first Linux dev build pays the same roughly
+300 MB download; `HERMETIC_RENDERER=native` there builds against WebKitGTK instead.
 
 | Variable | Effect (dev builds only) |
 | -------- | ------------------------ |
-| `HERMETIC_RENDERER=native` | Build the dev app on WKWebView with no CEF and no DevTools port: the renderer that ships |
+| `HERMETIC_RENDERER=native` | Build the dev app on the system WebKit (WKWebView on macOS, WebKitGTK on Linux) with no CEF and no DevTools port: the renderer that ships |
 | `HERMETIC_CDP_PORT=<port>` | Move the DevTools port; `app:cdp` reads the same variable |
 
 `bun run app:cdp` (`scripts/app-cdp.ts`) drives the app over plain CDP, with no dependencies:
@@ -502,8 +504,8 @@ To have an agent walk you through it, ask for a release or run `/release` (`.cla
 
 1. Bump `version` in the root `package.json`. Commit it on `master`.
 2. Tag the commit `v<version>` (the `v` prefix is required — `.github/workflows/release.yml` checks it against `package.json`) and push the tag: `git push origin v<version>`.
-3. Pushing the tag starts `release.yml` on a `macos-14` runner: it installs Hutch pinned to `.hutch-version` and `uv` (for cfn-lint and shellcheck), asserts the tag matches `package.json`'s version and points at a commit on `master`, runs `bun run check`'s steps (with its tests split into the same `cli` and `non-cli` shards `ci.yml` runs, `scripts/test-shard.ts`), then `bun run app:build` (the stable channel), then publishes a GitHub Release named for the tag with `packages/app/artifacts/*` attached and notes generated from the commits since the last tag. About ten minutes end to end.
-4. Verify: the release has three assets — `macos-arm64-Hermetic.dmg`, `stable-macos-arm64-Hermetic.app.tar.zst`, `stable-macos-arm64-update.json` — and, from the second release on, a fourth, `stable-macos-arm64-<prevhash>.patch`. `update.json` names the archive and the version. An install from an older tag should find the new release through Check for Updates and apply it (full archive if there is no patch to it yet, the patch otherwise); this needs the repository to be public, because the updater fetches `releases/latest/download/` without credentials.
+3. Pushing the tag starts `release.yml`, whose `publish` job runs in the `release` environment and so waits for a required reviewer's approval (the run's page, or `gh run view <id>` → "Review deployments") before it starts; `bun run release` keeps watching through the wait. Once approved it runs on a `macos-14` runner: it installs Hutch pinned to `.hutch-version` and `uv` (for cfn-lint and shellcheck), asserts the tag matches `package.json`'s version and points at a commit on `master`, runs `bun run check`'s steps (with its tests split into the same `cli` and `non-cli` shards `ci.yml` runs, `scripts/test-shard.ts`), then `bun run app:build` (the stable channel), then signs the update (`scripts/sign-update.ts`, "Update signing" below), then publishes a GitHub Release named for the tag with `packages/app/artifacts/*` attached and notes generated from the commits since the last tag. About ten minutes end to end.
+4. Verify: the release has four assets — `macos-arm64-Hermetic.dmg`, `stable-macos-arm64-Hermetic.app.tar.zst`, `stable-macos-arm64-update.json`, `stable-macos-arm64-<hash>.sig` — and, from the second release on, a fifth, `stable-macos-arm64-<prevhash>.patch`. `update.json` names the archive and the version. An install from an older tag (one that has update signing; v0.3.1 and earlier only offer the release page) should find the new release through Check for Updates, download it (the patch if there is one to it, the full archive otherwise), verify its signature and offer to restart into it; this needs the repository to be public, because the updater fetches `releases/latest/download/` without credentials.
 5. If the workflow fails partway, the tag is not undone — tags are never moved. Delete the draft release if `gh release create` left one (a failure before that step leaves none), fix whatever broke, bump the version again and cut a new tag; do not re-push the same tag.
 
 `bun run app:build:canary` (CI's `app` job, every push) builds the canary channel on every commit to prove the app still builds — it is verification, not distribution: nothing it produces is uploaded or published, and the canary channel is never what `release.yml` ships.
@@ -518,19 +520,39 @@ One-time setup, as the Apple Developer team's Account Holder:
 
 1. Create a **Developer ID Application** certificate (developer.apple.com → Certificates, or Xcode → Settings → Accounts → Manage Certificates). It is not the iOS distribution certificate the phone app uses. Export it with its private key from Keychain Access as a `.p12` with a password.
 2. Create an App Store Connect API key (App Store Connect → Users and Access → Integrations → Team Keys, Developer access is enough) and download its `.p8`. Note the key ID and the issuer ID.
-3. Set the repository secrets the `publish` job reads:
+3. Set the secrets the `publish` job reads. They belong to the `release` environment, not the repository: only `publish` names that environment, and it runs only on a `v*` tag after a required reviewer approves (see "Update signing" below), so no other workflow, branch or pull request can read them. The repository itself holds no secrets.
 
 ```
-base64 -i DeveloperID.p12 | gh secret set MACOS_SIGNING_CERT_P12
-gh secret set MACOS_SIGNING_CERT_PASSWORD
-gh secret set ELECTROBUN_DEVELOPER_ID --body "Developer ID Application: <Name> (<TEAMID>)"
-gh secret set ELECTROBUN_TEAMID --body <TEAMID>
-gh secret set ELECTROBUN_APPLEAPIISSUER --body <issuer-id>
-gh secret set ELECTROBUN_APPLEAPIKEY --body <key-id>
-gh secret set APPLE_API_KEY_P8 < AuthKey_<key-id>.p8
+base64 -i DeveloperID.p12 | gh secret set MACOS_SIGNING_CERT_P12 --env release
+gh secret set MACOS_SIGNING_CERT_PASSWORD --env release
+gh secret set ELECTROBUN_DEVELOPER_ID --env release --body "Developer ID Application: <Name> (<TEAMID>)"
+gh secret set ELECTROBUN_TEAMID --env release --body <TEAMID>
+gh secret set ELECTROBUN_APPLEAPIISSUER --env release --body <issuer-id>
+gh secret set ELECTROBUN_APPLEAPIKEY --env release --body <key-id>
+gh secret set APPLE_API_KEY_P8 --env release < AuthKey_<key-id>.p8
 ```
+
+GitHub never returns a secret's value, so keep the `.p12`, its password and the `.p8` somewhere you can read them: rotating or moving a secret means setting it again from the original.
 
 To sign a local stable build, import the certificate into your login keychain and run `bun run app:build` with the same `ELECTROBUN_*` variables and `ELECTROBUN_APPLEAPIKEYPATH` pointing at the `.p8`.
+
+### Update signing
+
+The app installs a downloaded update only if it verifies against an Ed25519 key of our own, independent of Apple's signing and of the OS (`packages/core/src/release/app-update-signature.ts`, design.md §3.6). `release.yml`'s "Sign the update artifacts" step runs `scripts/sign-update.ts`: for each `*-update.json` it hashes the decompressed `.tar` and writes `<channel>-<platform>-<arch>-<hash>.sig`, a signature over the update's identity and that digest. The script refuses to run without the key, and refuses a key that does not match the public key compiled into the app.
+
+- The **private key** is the `UPDATE_SIGNING_KEY` secret of the `release` environment (a PKCS#8 PEM) and an offline backup kept by the maintainer. The environment allows deployments from `v*` tags only and requires a reviewer's approval, and only `release.yml`'s `publish` job names it, so no other workflow, branch or pull request can read the key. It is never committed: `tests/no-signing-private-key.test.ts` fails on any Ed25519 private key in the tree. GitHub never returns a secret's value, so the backup is the only copy that can be read.
+- The **public key** is `APP_UPDATE_PUBLIC_KEY` in the same core module.
+
+To rotate (or to recover from a lost or leaked key):
+
+```
+bun -e 'const {generateKeyPairSync}=require("node:crypto");const k=generateKeyPairSync("ed25519");
+require("node:fs").writeFileSync("update-signing-private.pem",k.privateKey.export({type:"pkcs8",format:"pem"}),{mode:0o600});
+console.log(k.publicKey.export({type:"spki",format:"der"}).toString("base64"))'
+gh secret set UPDATE_SIGNING_KEY --env release < update-signing-private.pem
+```
+
+Run it outside the checkout, paste the printed public key into `APP_UPDATE_PUBLIC_KEY`, back the `.pem` up offline, and release. Installs older than the rotation verify against the old key, so they reject every update signed with the new one and fall back to the release page: they update by hand once.
 
 ## Running the wizard demo
 

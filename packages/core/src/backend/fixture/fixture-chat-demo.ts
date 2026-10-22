@@ -69,7 +69,11 @@ const COMPLETION =
 /** The teammate the `E2E_DM` turn messages, and its handle. */
 const DM_TARGET = "scribe";
 
-function* frames(message: string, blocks: readonly (ChatBlock | string)[]): Generator<SequencedFrame> {
+/** A turn's frames from seq 1: a string streams as a text block, a block lands whole, then `done`. */
+export function* frames(
+  message: string,
+  blocks: readonly (ChatBlock | string)[],
+): Generator<SequencedFrame> {
   let seq = 0;
   for (const piece of blocks) {
     if (typeof piece === "string") {
