@@ -12,7 +12,8 @@
   font-size: 12px;
   color: var(--fg3);
 }
-.ch-dm-mark > button,
+/* The label only: "sent ↑" is a `.ch-ev-jump` and keeps its link style. */
+.ch-dm-mark > button:not(.ch-ev-jump),
 .ch-dm-mark-static {
   all: unset;
   display: inline-flex;
@@ -20,14 +21,14 @@
   gap: 6px;
   color: var(--fg3);
 }
-.ch-dm-mark > button {
+.ch-dm-mark > button:not(.ch-ev-jump) {
   cursor: pointer;
 }
-.ch-dm-mark > button:hover,
-.ch-dm-mark > button:focus-visible {
+.ch-dm-mark > button:not(.ch-ev-jump):hover,
+.ch-dm-mark > button:not(.ch-ev-jump):focus-visible {
   color: var(--fg2);
 }
-.ch-dm-mark > button:focus-visible {
+.ch-dm-mark > button:not(.ch-ev-jump):focus-visible {
   outline: 1px dashed var(--fg3);
   outline-offset: 2px;
 }
@@ -44,7 +45,22 @@
 }
 .ch-dm-mark.from {
   justify-content: flex-start;
+  gap: 10px;
   margin-top: 6px;
+}
+/* The reply body under the notice: plain text, kept as the bot wrote it. */
+.ch-dm-reply {
+  max-width: 72ch;
+  margin: -6px 0 10px;
+}
+.ch-dm-reply-body {
+  margin-top: 4px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--fg2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 /*
  * A refused DM, or one whose delivery upstream could not confirm: the summary
