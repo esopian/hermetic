@@ -32,6 +32,9 @@ The pinned source provides these additional REST contracts:
 | Read job runs | `GET /api/cron/jobs/<id>/runs?profile=<profile>&limit=<n>` |
 | Remove job | `DELETE /api/cron/jobs/<id>?profile=<profile>` |
 | Remove bot profile | `DELETE /api/profiles/<name>` |
+| Read the profile's clock | `GET /api/config?profile=<profile>` → `timezone` |
+
+**Schedules, run caps and continuity.** `parse_schedule` (`cron/jobs.py`) accepts a five-field cron expression; `every 2h`/`every 90m`, a recurring interval (a bare `2h` is recurring too, not one-shot); `in 30m`, one run that long after saving; and an ISO timestamp, one run then, read in Hermes's configured zone when it carries no offset. A listed job's `schedule` is an object; hermetic reads back the form it can send again (a cron job's `expr` rather than its display, `every <minutes>m`, a one-shot's `run_at`). A job's `repeat` is `{times, completed}` (`times` null runs forever). `CronJobCreate` has no `repeat`, so a run cap is set by a `PUT` right after the create; if that fails, hermetic deletes the job rather than leave it running uncapped. Continuity is `context_from: ["self"]`, which the create route accepts before the job exists; toggling it keeps any other job ids in `context_from`. A profile with no `timezone` runs on the box's own clock, which hermetic takes to be UTC.
 
 The routine probe `bots.capabilities` performs is this same read (`GET /api/cron/jobs?profile=<profile>`, `hermes_cli/web_routers/cron.py:211`), scoped to a profile the roster named rather than left to the route's own `profile="all"` default, and never retried unscoped on a refusal.
 
