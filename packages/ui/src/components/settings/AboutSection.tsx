@@ -3,12 +3,14 @@
  * newer one exists.
  *
  * The check is the menu's "Check for Updates…" (`app.checkForUpdate`), and its
- * result is the same `app.update` push the footer reads. The app never installs
- * a release itself (`app/src/main/updates.ts` says why), so "update" is the
- * release page, where the DMG is downloaded and installed like the first one.
+ * result is the same `app.update` push the footer reads. A newer release is
+ * downloaded and checked against the release signing key in the main process
+ * (`app/src/main/updates.ts`); once it verifies, "Restart to update"
+ * (`app.installUpdate`) installs it. One that cannot be verified is offered as
+ * a download from the release page instead.
  */
 import { useEffect, useState } from "react";
-import { type AppInfo, appInfo, checkForUpdate } from "../../api/app.ts";
+import { type AppInfo, appInfo, checkForUpdate, installUpdate } from "../../api/app.ts";
 import { openExternal } from "../../lib/open-external.ts";
 import { type AppUpdate, useAppUpdate } from "../../state/app-update-state.tsx";
 import { Block, Callout, Facts, PageFoot, SettingsPage } from "./Section.tsx";
@@ -23,6 +25,17 @@ export function updateFact(update: AppUpdate | null): Fact {
   switch (update?.status) {
     case "none":
       return { k: "Updates", v: "Up to date", tone: "ok" };
+    case "downloading":
+      return {
+        k: "Updates",
+        v: update.version === undefined ? "Downloading" : `Downloading v${update.version}`,
+      };
+    case "ready":
+      return {
+        k: "Updates",
+        v: update.version === undefined ? "Ready to install" : `v${update.version} ready`,
+        tone: "ok",
+      };
     case "available":
       return {
         k: "Updates",
@@ -39,7 +52,8 @@ export function updateFact(update: AppUpdate | null): Fact {
 export function AboutSection() {
   const update = useAppUpdate();
   const [info, setInfo] = useState<AppInfo | null>(null);
-  const [busy, setBusy] = useState(false);
+  /** Which request is in flight; the check stays open while its native dialog is up. */
+  const [busy, setBusy] = useState<"check" | "install" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -63,31 +77,45 @@ export function AboutSection() {
   // never asks (`main/updates.ts`) and a button would do nothing.
   const dev = info?.channel === "dev";
 
-  async function check() {
-    setBusy(true);
+  async function run(which: "check" | "install", request: () => Promise<unknown>) {
+    setBusy(which);
     setError(null);
     try {
-      await checkForUpdate();
+      await request();
     } catch (e) {
       setError(message(e));
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   }
 
+  const version = update?.version === undefined ? "" : ` v${update.version}`;
   const primary =
-    update?.status === "available" && info !== null ? (
+    update?.status === "ready" ? (
+      <button
+        type="button"
+        className="btn btn-primary"
+        disabled={busy !== null}
+        onClick={() => void run("install", installUpdate)}
+      >
+        {busy === "install" ? "Restarting…" : "Restart to update"}
+      </button>
+    ) : update?.status === "available" && info !== null ? (
       <button type="button" className="btn btn-primary" onClick={() => openExternal(info.releasesUrl)}>
-        {update.version === undefined ? "Download update" : `Download v${update.version}`}
+        {`Download${version}`}
       </button>
     ) : (
       <button
         type="button"
         className="btn btn-primary"
-        disabled={busy || info === null || dev}
-        onClick={() => void check()}
+        disabled={busy !== null || info === null || dev || update?.status === "downloading"}
+        onClick={() => void run("check", checkForUpdate)}
       >
-        {busy ? "Checking…" : "Check for updates"}
+        {update?.status === "downloading"
+          ? "Downloading…"
+          : busy === "check"
+            ? "Checking…"
+            : "Check for updates"}
       </button>
     );
 
@@ -111,10 +139,15 @@ export function AboutSection() {
           <Callout tone="info">
             Dev builds do not check for updates. Release builds check at launch and every six hours.
           </Callout>
+        ) : update?.status === "ready" ? (
+          <Callout tone="ok">
+            Downloaded and verified against Hermetic&apos;s release signing key. Restart to install it;
+            your fleet and settings stay where they are.
+          </Callout>
         ) : update?.status === "available" ? (
           <Callout tone="warn">
-            A newer release is out. Download it from the release page and install it over this one; your
-            fleet and settings stay where they are.
+            A newer release is out, but this app could not download and verify it. Download it from the
+            release page and install it over this one; your fleet and settings stay where they are.
           </Callout>
         ) : null}
       </Block>

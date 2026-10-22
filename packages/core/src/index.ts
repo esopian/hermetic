@@ -13,6 +13,7 @@ export * from "./agents/state.ts";
 export * from "./render/render.ts";
 export * from "./render/cloud-init.ts";
 export * from "./release/tar.ts";
+export * from "./release/app-update-signature.ts";
 export * from "./backend/types.ts";
 export * from "./backend/constants.ts";
 export * from "./backend/memory.ts";

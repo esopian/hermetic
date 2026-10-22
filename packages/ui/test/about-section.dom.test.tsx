@@ -22,6 +22,7 @@ function serve(channel: string): FakeServer {
       releasesUrl: "https://example.com/releases",
     },
     "app.checkForUpdate": { checked: true },
+    "app.installUpdate": { started: true },
     "app.openExternal": { opened: true },
   });
   return server;
@@ -48,7 +49,7 @@ describe("AboutSection", () => {
     expect(screen.getByText("Up to date")).toBeDefined();
   });
 
-  test("a newer release turns the button into the download", async () => {
+  test("a release that could not be verified falls back to the download", async () => {
     const s = serve("stable");
     render(<AboutSection />);
     await screen.findByText("v1.2.3");
@@ -59,6 +60,24 @@ describe("AboutSection", () => {
     expect(s.to("app.openExternal").map((c) => c.params)).toEqual([
       { url: "https://example.com/releases" },
     ]);
+  });
+
+  test("a verified download turns the button into the restart", async () => {
+    const s = serve("stable");
+    render(<AboutSection />);
+    await screen.findByText("v1.2.3");
+    await act(async () => emitAppUpdate({ status: "downloading", version: "1.3.0" }));
+    expect(screen.getByText("Downloading v1.3.0")).toBeDefined();
+    expect((screen.getByRole("button", { name: "Downloading…" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+
+    await act(async () => emitAppUpdate({ status: "ready", version: "1.3.0" }));
+    expect(screen.getByText("v1.3.0 ready")).toBeDefined();
+    await userEvent.click(screen.getByRole("button", { name: "Restart to update" }));
+    expect(s.to("app.installUpdate")).toHaveLength(1);
+    // Restarting is the install; the release page is not involved.
+    expect(s.to("app.openExternal")).toHaveLength(0);
   });
 
   test("a dev build cannot check", async () => {

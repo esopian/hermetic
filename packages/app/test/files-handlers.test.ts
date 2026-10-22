@@ -298,6 +298,7 @@ function nativeWith(
       releasesUrl: "https://example.com/releases",
     }),
     openExternal: () => undefined,
+    installUpdate: async () => ({ started: false }),
     checkForUpdate: async () => undefined,
     installCli: async () => ({ path: "/x", elevated: false }),
     notify: () => ({ delivered: true, permission: "granted" }),

@@ -71,6 +71,12 @@ describe("appUpdateText", () => {
     expect(appUpdateText({ status: "none" })).toBe(null);
     expect(appUpdateText({ status: "available", version: "1.2.3" })).toBe("Update v1.2.3 available");
     expect(appUpdateText({ status: "error" })).toBe("Update check failed");
+    expect(appUpdateText({ status: "downloading", version: "1.2.3" })).toBe(
+      "Downloading update v1.2.3",
+    );
+    expect(appUpdateText({ status: "ready", version: "1.2.3" })).toBe(
+      "Update v1.2.3 ready — restart to install",
+    );
   });
 
   test("a status this build has never heard of draws nothing", () => {
@@ -79,7 +85,7 @@ describe("appUpdateText", () => {
     // word in the footer is worse than drawing nothing.
     expect(appUpdateText({ status: "rolling-back" })).toBe(null);
     // Including the one an older main process sent after downloading a build
-    // in place: this one never does, and has no restart to offer.
+    // in place: this one says `ready`, and only once the download verified.
     expect(appUpdateText({ status: "downloaded", version: "1.2.3" })).toBe(null);
   });
 

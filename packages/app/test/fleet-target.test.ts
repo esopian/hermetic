@@ -71,6 +71,7 @@ const UNSCOPED_MACHINERY: Record<string, string> = {
   "app.checkForUpdate": "asks this build about itself; no account is involved",
   "app.info": "asks this build about itself; no account is involved",
   "app.installCli": "writes a shim onto this laptop's PATH",
+  "app.installUpdate": "installs a verified build of this app on this laptop",
   "app.notify": "raises a banner on this laptop",
   "app.openExternal": "hands a URL to this laptop's browser",
   "chat.observe.resume": "re-establishes this head's own observation; it writes nothing",

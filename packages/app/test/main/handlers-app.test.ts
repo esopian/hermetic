@@ -31,6 +31,7 @@ afterAll(async () => {
 interface Calls {
   opened: string[];
   checks: number;
+  updates: number;
   installs: number;
   notified: { title: string; body: string; tag?: string }[];
 }
@@ -51,6 +52,10 @@ function fakeNative(calls: Calls): NativeDeps {
     },
     checkForUpdate: async () => {
       calls.checks += 1;
+    },
+    installUpdate: async () => {
+      calls.updates += 1;
+      return { started: true };
     },
     installCli: async () => {
       calls.installs += 1;
@@ -87,7 +92,7 @@ async function harness(): Promise<{ ctx: HandlerContext; bare: HandlerContext; c
     opts: { fixture: true },
     streams: createStreamRegistry(),
   };
-  const calls: Calls = { opened: [], checks: 0, installs: 0, notified: [] };
+  const calls: Calls = { opened: [], checks: 0, updates: 0, installs: 0, notified: [] };
   return { ctx: { ...bare, native: fakeNative(calls) }, bare, calls };
 }
 
@@ -128,6 +133,12 @@ describe("the native requests, with a desktop head behind them", () => {
     expect(calls.checks).toBe(1);
   });
 
+  test("app.installUpdate starts the verified install", async () => {
+    const { ctx, calls } = await harness();
+    expect(await dispatch(ctx, "app.installUpdate", {})).toEqual({ started: true });
+    expect(calls.updates).toBe(1);
+  });
+
   test("app.installCli answers with where the shim landed", async () => {
     const { ctx, calls } = await harness();
     expect(await dispatch(ctx, "app.installCli", {})).toEqual({
@@ -161,7 +172,7 @@ describe("the native requests, with a desktop head behind them", () => {
   });
 });
 
-describe("the same five with no desktop head", () => {
+describe("the same requests with no desktop head", () => {
   test("are refused UNSUPPORTED rather than answered with nothing", async () => {
     const { bare } = await harness();
     // The HTTP head's context is this one: no window, no updater, no
@@ -172,6 +183,7 @@ describe("the same five with no desktop head", () => {
       "UNSUPPORTED",
     );
     expect(await codeOf(dispatch(bare, "app.checkForUpdate", {}))).toBe("UNSUPPORTED");
+    expect(await codeOf(dispatch(bare, "app.installUpdate", {}))).toBe("UNSUPPORTED");
     expect(await codeOf(dispatch(bare, "app.installCli", {}))).toBe("UNSUPPORTED");
     expect(await codeOf(dispatch(bare, "app.notify", { title: "a", body: "b" }))).toBe("UNSUPPORTED");
   });

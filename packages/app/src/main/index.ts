@@ -57,7 +57,8 @@ import { installMenu, type MenuItemModel } from "./menu.ts";
 import { createNotifier } from "./notify.ts";
 import { markQuarantined } from "./quarantine.ts";
 import { bundlePaths } from "./paths.ts";
-import { createUpdater, RELEASES_URL } from "./updates.ts";
+import { createUpdater, RELEASE_ASSETS_URL, RELEASES_URL } from "./updates.ts";
+import { verifyPreparedUpdate } from "./update-verify.ts";
 import { applyNavigationRules, installNavigationGuard, mainNavigationRules } from "./navigation.ts";
 import { externalUrl } from "../external-url.ts";
 import { applyMinimumSize } from "./min-size.ts";
@@ -94,6 +95,9 @@ const APP_CHANNEL = await Updater.localInfo.channel();
  * ship one version number.
  */
 const BUNDLE_VERSION = await Updater.localInfo.version();
+
+/** The bundle identifier, from the same `version.json`: a prepared update must be for this app. */
+const BUNDLE_IDENTIFIER = (await Updater.getLocalInfo()).identifier;
 
 const fixture = process.env["HERMETIC_FIXTURE"] === "1";
 const uninitialized = process.env["HERMETIC_UNINIT"] === "1";
@@ -305,6 +309,15 @@ const confirmOpenRelease = (message: string): Promise<boolean> =>
     negative: "Later",
   });
 
+/** A verified update installs on restart; declining leaves it ready for later. */
+const confirmRestart = (message: string): Promise<boolean> =>
+  askDialog({
+    title: "Update Hermetic",
+    message,
+    affirmative: "Restart Now",
+    negative: "Later",
+  });
+
 /**
  * Every devkit call is wrapped rather than passed as a bare method reference.
  * `Utils` and `ApplicationMenu` are objects we did not write, and an
@@ -404,7 +417,7 @@ const windows = createWindows({
       streams: createStreamRegistry(),
       terminals,
       /**
-       * What makes this head the desktop one: the same five capabilities the
+       * What makes this head the desktop one: the native capabilities the
        * HTTP head has none of, so `handlers/app.ts` answers instead of
        * refusing. `updater` is read lazily because it is constructed below,
        * after the window set it broadcasts through — this closure runs on
@@ -420,6 +433,7 @@ const windows = createWindows({
         }),
         openExternal: (url) => Utils.openExternal(url),
         checkForUpdate: () => updater.check({ interactive: true }),
+        installUpdate: async () => ({ started: await updater.install() }),
         installCli: runCliInstall,
         notify,
         pickFiles: async () =>
@@ -528,19 +542,30 @@ const teardown = (reason: string): Promise<void> =>
   shutdown({ server: closingWindows, state, log, watchdog, chat: chatOwner, terminals }, reason);
 
 /**
- * Check-and-notify only (`main/updates.ts`). The devkit's updater is handed
- * over as the two members `UpdaterLike` names and nothing else — not spread —
- * so its `downloadUpdate`/`applyUpdate` are unreachable from here: they apply
- * a release verified by TLS alone. `localInfo` is rebuilt because its devkit
- * accessors are async (see `APP_CHANNEL`).
+ * Check, download, verify, install (`main/updates.ts`). The devkit's updater
+ * is handed over member by member — not spread — so `createUpdater` sees
+ * exactly what `UpdaterLike` names, and `applyUpdate` is reached only through
+ * its verified path. `localInfo` is rebuilt because its devkit accessors are
+ * async (see `APP_CHANNEL`).
  */
 const updater = createUpdater({
   updater: {
     localInfo: { channel: () => APP_CHANNEL, version: () => BUNDLE_VERSION },
     checkForUpdate: () => Updater.checkForUpdate(),
+    downloadUpdate: () => Updater.downloadUpdate(),
+    updateInfo: () => Updater.updateInfo(),
+    applyUpdate: () => Updater.applyUpdate(),
   },
   ops,
+  verify: () =>
+    verifyPreparedUpdate({
+      appDataFolder: () => Updater.appDataFolder(),
+      local: { identifier: BUNDLE_IDENTIFIER, channel: APP_CHANNEL, version: BUNDLE_VERSION },
+      assetsUrl: RELEASE_ASSETS_URL,
+      fetch: (url, init) => fetch(url, init),
+    }),
   prompt: confirmOpenRelease,
+  confirmRestart,
   openExternal: (url) => Utils.openExternal(externalUrl(url)),
   broadcast: (name, payload) => windows.broadcast(name, payload),
   log,

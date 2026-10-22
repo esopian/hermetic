@@ -41,6 +41,8 @@ export interface NativeDeps {
   openExternal(url: string): void;
   /** One update check, now — the menu's "Check for Updates…" (`main/updates.ts`). */
   checkForUpdate(): Promise<void>;
+  /** Installs the downloaded, verified update and restarts; `started` is false when there is none. */
+  installUpdate(): Promise<{ started: boolean }>;
   /** Writes the `hermetic` shim onto `PATH`, elevating once if it must (`main/cli-install.ts`). */
   installCli(): Promise<{ path: string; elevated: boolean }>;
   /** Raises a desktop banner (`main/notify.ts`); the page decides whether to. */

@@ -151,6 +151,17 @@ jobs:
           xcrun stapler validate "${mnt}/Hermetic.app"
           spctl --assess --type execute --verbose=2 "${mnt}/Hermetic.app"
 
+      # The app installs an update only if this signature verifies against the
+      # public key compiled into it (packages/core/src/release/
+      # app-update-signature.ts). The script refuses to run without the secret,
+      # and refuses a secret that does not match that key, so a release never
+      # ships updates no installed app can verify. The `.sig` files land in
+      # packages/app/artifacts/ and are published with everything else.
+      - name: Sign the update artifacts
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: bun scripts/sign-update.ts packages/app/artifacts
+
       - name: Publish the GitHub Release
         env:
           # Scoped to this job by the `permissions` block above; every other

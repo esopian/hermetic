@@ -237,7 +237,7 @@ export type MachineryRequests = {
   "devtools.export": RpcRequest<DevtoolsExportInput, Answer<typeof devtools.exportCapture>>;
 
   /**
-   * The native five (`handlers/app.ts`). A head without a window refuses every
+   * The native requests (`handlers/app.ts`). A head without a window refuses every
    * one `UNSUPPORTED`, but a refusal is an error rather than an answer, so the
    * responses are the desktop head's real ones — read off the handlers like
    * everything else here. `app.info` and `app.notify` forward what `ctx.native`
@@ -250,6 +250,7 @@ export type MachineryRequests = {
     Answer<typeof app.openExternal>
   >;
   "app.checkForUpdate": RpcRequest<Record<string, never>, Answer<typeof app.checkForUpdate>>;
+  "app.installUpdate": RpcRequest<Record<string, never>, Answer<typeof app.installUpdate>>;
   "app.installCli": RpcRequest<Record<string, never>, Answer<typeof app.installCli>>;
   "app.notify": RpcRequest<Input<typeof app.AppNotifyRequest>, Answer<typeof app.notify>>;
 
@@ -328,6 +329,7 @@ export const MACHINERY_REQUEST_NAMES = [
   "app.info",
   "app.openExternal",
   "app.checkForUpdate",
+  "app.installUpdate",
   "app.installCli",
   "app.notify",
   "terminal.open",
