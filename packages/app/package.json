@@ -10,7 +10,7 @@
     "@hermetic/core": "workspace:*",
     "@xterm/addon-serialize": "0.13.0",
     "@xterm/headless": "5.5.0",
-    "zod": "^4.5.4"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "electrobun": "2.0.1"
