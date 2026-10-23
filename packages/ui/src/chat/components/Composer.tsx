@@ -21,8 +21,10 @@
  * While a turn runs, the footer's right end carries the one Stop control (Esc
  * does the same); the send button keeps queueing, so the two never share a key
  * or a place. A turn the box reports that this tab did not start (`working`
- * without `sending`) queues and steers the same way, but offers no Stop: it is
- * not this window's to end. The input grows with its text up to a cap and then scrolls
+ * without `sending`) queues and steers the same way, and offers the same Stop
+ * button, so an agent stalled after a reload or started elsewhere can still be
+ * ended; Esc stays for this tab's own turn. Once a Stop lands, the footer says
+ * "Stopped" until the next turn starts. The input grows with its text up to a cap and then scrolls
  * (`autosize.ts`); its border and padding sit on the box around it, so text
  * scrolled past the cap is clipped inside the padding rather than at the edge.
  * Before Stop sits the context meter (`ContextMeter.tsx`), when the gateway
@@ -107,6 +109,27 @@ export function Composer({
   // Switching back to the app lands the caret here, so a paste goes in.
   useFocusOnReturn(input, editable);
   const chat = useChatIfAvailable();
+  // The Thread is reused across conversations, so a Stop belongs to the one it was pressed in.
+  const convo = chat?.selection
+    ? JSON.stringify([chat.selection.instance, chat.selection.bot, chat.selection.session])
+    : "";
+  const abortFailed = chat?.turnError?.code === "ABORT_FAILED";
+  /** A Stop pressed here: `stopping` until the turn ends, `stopped` until the next one starts. */
+  const [stop, setStop] = useState<{ convo: string; phase: "stopping" | "stopped" } | null>(null);
+  const stopped = stop?.convo === convo ? stop.phase : null;
+  useEffect(() => {
+    setStop((s) => {
+      if (s?.convo !== convo) return null;
+      if (working) return s.phase === "stopped" ? null : s;
+      // "Stopped" only once the stop landed; a failed abort says so in the thread instead.
+      if (s.phase === "stopping") return abortFailed ? null : { convo, phase: "stopped" };
+      return s;
+    });
+  }, [working, convo, abortFailed]);
+  const stopTurn = () => {
+    setStop({ convo, phase: "stopping" });
+    onAbort();
+  };
   const fleetId = useFleetIfAvailable()?.meta?.config?.fleet_id ?? "";
   const text = chat ? chat.draft : localText;
   const setText = chat ? chat.setDraft : setLocalText;
@@ -441,114 +464,120 @@ export function Composer({
           </section>
         ) : null}
         {/*
-          The box draws the border and padding; the textarea inside has none, so
-          a draft taller than the cap scrolls inside the padding instead of
-          running into the border. A label, so a press on the padding focuses
-          the input natively; the textarea's own `aria-label` still names it.
+          The box draws the border; the field inside it draws the padding and
+          the textarea has none, so a draft taller than the cap scrolls inside
+          the padding instead of running into the border. The field is a label,
+          so a press on the padding focuses the input natively; the textarea's
+          own `aria-label` still names it. Under it, inside the same box, the
+          toolbar: attach at the left, send at the right (Slack's shape).
         */}
         {files ? <AttachTray files={files} /> : null}
-        <label className="ch-input-box">
-          <textarea
-            ref={input}
-            className="ch-input"
-            aria-label={placeholder}
-            {...picker.inputProps}
-            {...slash.inputProps}
-            // Focus gone elsewhere: a list left open would float over whatever took it.
-            onBlur={() => {
-              picker.inputProps.onBlur?.();
-              slash.close();
-            }}
-            rows={1}
-            disabled={!editable}
-            placeholder={placeholder}
-            value={text}
-            onChange={(e) => {
-              setText(e.target.value);
-              picker.track(e.target);
-            }}
-            onSelect={(e) => picker.track(e.currentTarget)}
-            onPaste={(e) => {
-              // Files on the clipboard become attachments; a text paste is
-              // untouched, and so is a paste that is both (`isFilePaste`).
-              const data = e.clipboardData;
-              if (!files || !canAttach || !data || !isFilePaste(data)) return;
-              e.preventDefault();
-              files.addFiles(Array.from(data.files));
-            }}
-            onKeyDown={(e) => {
-              if (e.defaultPrevented || e.nativeEvent.isComposing) return;
-              if (slash.onKeyDown(e) || picker.onKeyDown(e)) return;
-              // ⌘⇧A opens the native file dialog for this conversation.
-              if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "a") {
+        <div className="ch-input-box">
+          <label className="ch-input-field">
+            <textarea
+              ref={input}
+              className="ch-input"
+              aria-label={placeholder}
+              {...picker.inputProps}
+              {...slash.inputProps}
+              // Focus gone elsewhere: a list left open would float over whatever took it.
+              onBlur={() => {
+                picker.inputProps.onBlur?.();
+                slash.close();
+              }}
+              rows={1}
+              disabled={!editable}
+              placeholder={placeholder}
+              value={text}
+              onChange={(e) => {
+                setText(e.target.value);
+                picker.track(e.target);
+              }}
+              onSelect={(e) => picker.track(e.currentTarget)}
+              onPaste={(e) => {
+                // Files on the clipboard become attachments; a text paste is
+                // untouched, and so is a paste that is both (`isFilePaste`).
+                const data = e.clipboardData;
+                if (!files || !canAttach || !data || !isFilePaste(data)) return;
                 e.preventDefault();
-                if (canAttach) files?.pick();
-                return;
+                files.addFiles(Array.from(data.files));
+              }}
+              onKeyDown={(e) => {
+                if (e.defaultPrevented || e.nativeEvent.isComposing) return;
+                if (slash.onKeyDown(e) || picker.onKeyDown(e)) return;
+                // ⌘⇧A opens the native file dialog for this conversation.
+                if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "a") {
+                  e.preventDefault();
+                  if (canAttach) files?.pick();
+                  return;
+                }
+                // Enter sends — or queues, while the agent works — and Shift+Enter
+                // is a newline. ⌘Enter (Ctrl+Enter) sends now: the same as Enter
+                // when idle, past the queue when not.
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  if (e.metaKey || e.ctrlKey) submitNow();
+                  else submit();
+                  return;
+                }
+                // Esc stops the turn. `preventDefault` is load-bearing rather than
+                // tidy: the app shell has a window-level Escape handler that closes
+                // whichever full-page view is up, and it checks `defaultPrevented`
+                // first — so without this, stopping a turn would also leave the
+                // chat view.
+                if (e.key === "Escape" && sending) {
+                  e.preventDefault();
+                  stopTurn();
+                }
+              }}
+            />
+          </label>
+          <div className="ch-input-tools">
+            {files ? (
+              <button
+                type="button"
+                className="ch-attach-btn"
+                aria-label="Attach files"
+                disabled={!canAttach}
+                title={noFiles ? NO_FILES_COPY : "Attach files (⌘⇧A)"}
+                onClick={() => files.pick()}
+              >
+                ⊕
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className={[
+                "ch-send",
+                label || pending.uploading > 0 ? `label ${label?.tone ?? ""}` : "",
+                hasContent && enabled && !filesBlock ? "ready" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              disabled={!enabled || !hasContent || filesBlock || (working && !chat)}
+              title={
+                pending.uploading > 0
+                  ? "Send waits for uploads to finish"
+                  : pending.failed > 0
+                    ? "Remove the failed attachments to send"
+                    : canQueue
+                      ? "Queue (Enter)"
+                      : "Send (Enter or ⌘↵)"
               }
-              // Enter sends — or queues, while the agent works — and Shift+Enter
-              // is a newline. ⌘Enter (Ctrl+Enter) sends now: the same as Enter
-              // when idle, past the queue when not.
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                if (e.metaKey || e.ctrlKey) submitNow();
-                else submit();
-                return;
-              }
-              // Esc stops the turn. `preventDefault` is load-bearing rather than
-              // tidy: the app shell has a window-level Escape handler that closes
-              // whichever full-page view is up, and it checks `defaultPrevented`
-              // first — so without this, stopping a turn would also leave the
-              // chat view.
-              if (e.key === "Escape" && sending) {
-                e.preventDefault();
-                onAbort();
-              }
-            }}
-          />
-        </label>
-        {files ? (
-          <button
-            type="button"
-            className="ch-attach-btn"
-            aria-label="Attach files"
-            disabled={!canAttach}
-            title={noFiles ? NO_FILES_COPY : "Attach files (⌘⇧A)"}
-            onClick={() => files.pick()}
-          >
-            ⊕
-          </button>
-        ) : null}
-        <button
-          type="button"
-          className={[
-            "ch-send",
-            label || pending.uploading > 0 ? `label ${label?.tone ?? ""}` : "",
-            hasContent && enabled && !filesBlock ? "ready" : "",
-          ]
-            .filter(Boolean)
-            .join(" ")}
-          disabled={!enabled || !hasContent || filesBlock || (working && !chat)}
-          title={
-            pending.uploading > 0
-              ? "Send waits for uploads to finish"
-              : pending.failed > 0
-                ? "Remove the failed attachments to send"
-                : canQueue
-                  ? "Queue (Enter)"
-                  : "Send (Enter or ⌘↵)"
-          }
-          onClick={() => submit()}
-        >
-          {pending.uploading > 0 ? (
-            "Send · uploading…"
-          ) : label ? (
-            <>
-              {label.label} <span className="k">↵</span>
-            </>
-          ) : (
-            "↵"
-          )}
-        </button>
+              onClick={() => submit()}
+            >
+              {pending.uploading > 0 ? (
+                "Send · uploading…"
+              ) : label ? (
+                <>
+                  {label.label} <span className="k">↵</span>
+                </>
+              ) : (
+                "↵"
+              )}
+            </button>
+          </div>
+        </div>
       </div>
 
       {mentionHint ? <div className="bm-mention-hint">{mentionHint}</div> : null}
@@ -581,7 +610,13 @@ export function Composer({
           {items.length > 0 ? (
             <span className="ch-attach-sum">{`${attachSummary(items)} · `}</span>
           ) : null}
-          {sending ? (
+          {stopped === "stopped" ? (
+            <span className="ch-composer-stopped" role="status">
+              Stopped
+            </span>
+          ) : stopped === "stopping" ? (
+            "stopping…"
+          ) : sending ? (
             "turn in flight"
           ) : remote ? (
             <span
@@ -603,13 +638,14 @@ export function Composer({
         </span>
         {context ? <ContextMeter usage={context} /> : null}
         {/* Outside `.right`, so the skin's dimmed footer text never dims it. */}
-        {sending ? (
+        {working ? (
           <button
             type="button"
             className="ch-stop"
             aria-label="Stop turn"
-            title="Stop the turn (Esc)"
-            onClick={onAbort}
+            title={sending ? "Stop the turn (Esc)" : "Stop the agent's turn, started elsewhere"}
+            disabled={stopped === "stopping"}
+            onClick={stopTurn}
           >
             <i aria-hidden="true" />
             Stop

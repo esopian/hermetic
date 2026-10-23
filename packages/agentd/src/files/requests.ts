@@ -105,6 +105,7 @@ function fileSlot(body: OpenFileRequestBody, fileCap: number): SlotFields {
     sensitivity,
     durable: body.durable ?? sensitivity === "secret",
     ...(body.session_id ? { session_id: body.session_id } : {}),
+    ...(body.task_id ? { task_id: body.task_id } : {}),
   };
 }
 
@@ -138,6 +139,7 @@ function secretTextSlot(body: OpenSecretRequestBody): SlotFields {
     slug: secretTextSlug(body.keys, body.slug),
     input: body.input ?? "auto",
     ...(body.session_id ? { session_id: body.session_id } : {}),
+    ...(body.task_id ? { task_id: body.task_id } : {}),
   };
 }
 

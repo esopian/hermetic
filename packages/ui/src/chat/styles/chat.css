@@ -1465,31 +1465,21 @@
 }
 
 /* ── composer attachments (attachments plan §8.1) ─────────────────────────
-   The tray of pending files sits over the input; the ⊕ button beside Send
-   opens the native dialog. Every control here is styled explicitly, so the
-   two engines draw them the same. */
-.ch-input-wrap:has(> .ch-attach-btn) {
-  grid-template-columns: 1fr auto auto;
-}
+   The tray of pending files sits over the input; the ⊕ button at the left of
+   the box's toolbar opens the native dialog. Every control here is styled
+   explicitly, so the two engines draw them the same. */
 .ch-input-wrap > .ch-tray {
   grid-column: 1 / -1;
   grid-row: 1;
   min-width: 0;
 }
-.ch-input-wrap:has(> .ch-queue) > .ch-attach-btn {
-  grid-row: 2;
-}
 .ch-input-wrap:has(> .ch-queue) > .ch-tray {
   grid-row: 2;
 }
-.ch-input-wrap:has(> .ch-tray) > .ch-input-box,
-.ch-input-wrap:has(> .ch-tray) > .ch-attach-btn,
-.ch-input-wrap:has(> .ch-tray) > .ch-send {
+.ch-input-wrap:has(> .ch-tray) > .ch-input-box {
   grid-row: 2;
 }
-.ch-input-wrap:has(> .ch-queue):has(> .ch-tray) > .ch-input-box,
-.ch-input-wrap:has(> .ch-queue):has(> .ch-tray) > .ch-attach-btn,
-.ch-input-wrap:has(> .ch-queue):has(> .ch-tray) > .ch-send {
+.ch-input-wrap:has(> .ch-queue):has(> .ch-tray) > .ch-input-box {
   grid-row: 3;
 }
 .ch-tray {
@@ -1874,26 +1864,61 @@
   resize: none;
   width: 100%;
 }
-/* The thread composer's input: the box draws the border and the padding, and
-   the textarea inside it has neither, so text scrolled past the autosize cap
+/* The thread composer's input: the box draws the border, the field inside it
+   the padding, and the textarea neither, so text scrolled past the autosize cap
    (`autosize.ts`) is clipped inside the padding, never against the border.
    The right padding is split so the scrollbar sits near the edge while the
-   text keeps its distance from it. */
+   text keeps its distance from it. The box holds the send and attach controls
+   too, so it spans the whole composer. */
+.ch-input-wrap:has(> .ch-input-box) {
+  grid-template-columns: 1fr;
+}
 .ch-input-box {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   min-width: 0;
-  min-height: 46px;
-  padding: 12px 6px 12px 16px;
   border: 2px solid var(--fg);
   background: var(--bg);
-  cursor: text;
 }
 .ch-input-box:focus-within {
   outline: 2px solid var(--text-accent);
   outline-offset: -2px;
 }
-.ch-input-box > textarea.ch-input {
+.ch-input-field {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding: 12px 6px 8px 16px;
+  cursor: text;
+}
+/* Under the text, inside the box: attach at the left, send at the right. */
+.ch-input-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 8px 10px;
+}
+.ch-input-tools > .ch-attach-btn {
+  height: 28px;
+  min-width: 28px;
+  padding: 0 6px;
+  border-color: transparent;
+  background: transparent;
+  font-size: 17px;
+}
+.ch-input-tools > .ch-attach-btn:hover:not(:disabled) {
+  border-color: var(--line2);
+}
+.ch-input-tools > .ch-attach-btn:disabled {
+  background: transparent;
+}
+.ch-input-tools > .ch-send {
+  height: 30px;
+  min-width: 38px;
+  padding: 0 10px;
+  margin-left: auto;
+}
+.ch-input-field > textarea.ch-input {
   display: block;
   flex: 1;
   min-width: 0;
@@ -1906,16 +1931,16 @@
   overflow-y: hidden;
 }
 /* The ring is the box's (above), so it frames the padding, not the text. */
-.ch-input-box > textarea.ch-input:focus-visible {
+.ch-input-field > textarea.ch-input:focus-visible {
   outline: none;
 }
-.ch-input-box > textarea.ch-input::-webkit-scrollbar {
+.ch-input-field > textarea.ch-input::-webkit-scrollbar {
   width: 10px;
 }
-.ch-input-box > textarea.ch-input::-webkit-scrollbar-thumb {
+.ch-input-field > textarea.ch-input::-webkit-scrollbar-thumb {
   background: var(--line2);
 }
-.ch-input-box > textarea.ch-input::-webkit-scrollbar-track {
+.ch-input-field > textarea.ch-input::-webkit-scrollbar-track {
   background: transparent;
 }
 .ch-send {
@@ -2004,6 +2029,10 @@
   vertical-align: 1px;
   background: var(--acc);
 }
+/* After a Stop landed, until the next turn: plain, not an error. */
+.ch-composer-stopped {
+  color: var(--fg2);
+}
 /* The context-window meter: a ring and a percentage, neutral until the window
    nears full (`context-usage.ts`). Its exact figures are a tooltip above it. */
 .ch-window {
@@ -2078,6 +2107,12 @@
 .ch-stop:hover {
   background: var(--bad);
   color: var(--danger-text);
+}
+.ch-stop:disabled {
+  cursor: default;
+  opacity: 0.5;
+  background: none;
+  color: var(--bad);
 }
 .ch-stop:focus-visible {
   outline: 2px solid var(--text-accent);
@@ -2796,7 +2831,7 @@ body:has(.app > .ch-body) {
  * which is the whole animation.
  */
 /* Inside the input's grid, over the text box's column only, so it is exactly
-   as wide as the box it sits on and the send button stays clear of it. */
+   as wide as the box it sits on (the whole composer, which holds send). */
 .ch-input-wrap:has(> .ch-queue) {
   row-gap: 0;
 }
@@ -2804,12 +2839,10 @@ body:has(.app > .ch-body) {
   grid-column: 1;
   grid-row: 1;
   /* A grid item will not shrink below its content otherwise, and a long
-     queued line would push the send button out of the composer. */
+     queued line would widen the composer past its column. */
   min-width: 0;
 }
-.ch-input-wrap:has(> .ch-queue) > .ch-input,
-.ch-input-wrap:has(> .ch-queue) > .ch-input-box,
-.ch-input-wrap:has(> .ch-queue) > .ch-send {
+.ch-input-wrap:has(> .ch-queue) > .ch-input-box {
   grid-row: 2;
 }
 .ch-queue {

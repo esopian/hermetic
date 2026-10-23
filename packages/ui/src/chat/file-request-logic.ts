@@ -129,10 +129,11 @@ export function secretContinueMessage(
  * warning.
  */
 export function requestOrigin(
-  slot: Pick<FileRequestSlot, "request_id" | "session_id">,
+  slot: Pick<FileRequestSlot, "request_id" | "session_id" | "task_id">,
   session_id: string | null | undefined,
 ): { own: boolean; label: string } {
-  const own = slot.session_id !== undefined && slot.session_id === session_id;
+  // A compression mid-turn moves `session_id` off the conversation; `task_id` stays.
+  const own = session_id != null && (slot.session_id === session_id || slot.task_id === session_id);
   const where = own
     ? "from this conversation"
     : slot.session_id === undefined

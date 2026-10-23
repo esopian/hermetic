@@ -12,7 +12,15 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "./dom.ts";
 import { afterEach, describe, expect, test } from "bun:test";
 import type { ChatMessageView, ChatObserveView, ChatSteerResult } from "../src/api/index.ts";
-import { ATLAS, arrival, deliver, harness, messageOf, mount } from "./chat-observe-fixtures.tsx";
+import {
+  ATLAS,
+  arrival,
+  deliver,
+  harness,
+  messageOf,
+  mount,
+  swarmWith,
+} from "./chat-observe-fixtures.tsx";
 import type { Harness } from "./chat-observe-fixtures.tsx";
 import { sendable } from "./chat-fixtures.tsx";
 import { Thread } from "../src/chat/components/Thread.tsx";
@@ -71,17 +79,89 @@ async function open(h: Harness) {
 }
 
 describe("a turn the box reports, started elsewhere", () => {
-  test("Enter queues behind it, the composer says the agent is working, and no Stop is offered", async () => {
+  test("Enter queues behind it, and the composer says the agent is working", async () => {
     const r = recording();
     const v = await open(r.h);
     await deliver(r.h, busy(true));
     expect(v.held.store?.remoteBusy).toBe(true);
     expect(screen.getByText("agent is working")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Stop turn" })).toBeNull();
 
     v.say("after you");
     await waitFor(() => expect(v.rows()).toHaveLength(1));
     expect(r.sends).toEqual([]);
+  });
+
+  test("a stalled turn offers Stop, which aborts it once and says Stopped", async () => {
+    const r = recording();
+    const v = await open(r.h);
+    expect(screen.queryByRole("button", { name: "Stop turn" })).toBeNull();
+    await deliver(r.h, busy(true));
+    const stop = screen.getByRole("button", { name: "Stop turn" });
+    fireEvent.click(stop);
+    fireEvent.click(stop);
+    await waitFor(() => expect(screen.getByText("Stopped").getAttribute("role")).toBe("status"));
+    expect(r.aborts).toBe(1);
+    expect(v.held.store?.remoteBusy).toBe(false);
+    expect(screen.queryByRole("button", { name: "Stop turn" })).toBeNull();
+
+    // The next turn clears it.
+    await deliver(r.h, busy(true));
+    expect(screen.queryByText("Stopped")).toBeNull();
+    expect(screen.getByText("agent is working")).toBeTruthy();
+  });
+
+  test("a Stop whose abort fails never says Stopped", async () => {
+    const r = recording();
+    r.h.api.abortTurn = async () => {
+      throw new Error("the box did not answer");
+    };
+    await open(r.h);
+    await deliver(r.h, busy(true));
+    fireEvent.click(screen.getByRole("button", { name: "Stop turn" }));
+    await screen.findByText("the box did not answer");
+    expect(screen.queryByText("Stopped")).toBeNull();
+    expect(screen.queryByText("stopping…")).toBeNull();
+  });
+
+  /** A Stop pressed on atlas whose abort never answers, with beta beside it. */
+  async function stoppingOnA(betaBusy: boolean) {
+    const r = recording();
+    r.h.swarms = [swarmWith("atlas", ["atlas", "beta"])];
+    r.h.api.abortTurn = () => new Promise(() => {});
+    const v = await open(r.h);
+    const beta = { instance: "atlas", bot: "beta", session: "s1" };
+    if (betaBusy) {
+      // Visited first, so beta is watched when its busy frame arrives.
+      await act(async () => {
+        v.held.store?.select("atlas", "beta");
+      });
+      await deliver(r.h, { ...busy(true), bot: "beta" } as ChatObserveView, beta);
+      await screen.findByText("agent is working");
+      await act(async () => {
+        v.held.store?.select("atlas", "atlas");
+      });
+    }
+    await deliver(r.h, busy(true));
+    fireEvent.click(screen.getByRole("button", { name: "Stop turn" }));
+    expect(screen.getByText("stopping…")).toBeTruthy();
+    await act(async () => {
+      v.held.store?.select("atlas", "beta");
+    });
+  }
+
+  test("a Stop on one conversation does not disable Stop on a working one", async () => {
+    await stoppingOnA(true);
+    await waitFor(() => expect(screen.getByText("agent is working")).toBeTruthy());
+    expect(screen.queryByText("stopping…")).toBeNull();
+    const stop = screen.getByRole("button", { name: "Stop turn" }) as HTMLButtonElement;
+    expect(stop.disabled).toBe(false);
+  });
+
+  test("a Stop on one conversation never says Stopped on an idle one", async () => {
+    await stoppingOnA(false);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Stop turn" })).toBeNull());
+    expect(screen.queryByText("Stopped")).toBeNull();
+    expect(screen.queryByText("stopping…")).toBeNull();
   });
 
   test("the queue drains once the box says it is idle, sent with queued: true", async () => {
@@ -195,6 +275,16 @@ describe("a turn the box reports, started elsewhere", () => {
     const v = await open(r.h);
     await deliver(r.h, busy(true, "s-other"));
     expect(v.held.store?.remoteBusy).toBeNull();
+  });
+
+  test("Esc on this tab's own turn stops it and says Stopped", async () => {
+    const r = recording();
+    const v = await open(r.h);
+    v.say("mine");
+    await waitFor(() => expect(v.held.store?.sending).toBe(true));
+    fireEvent.keyDown(v.input, { key: "Escape" });
+    await waitFor(() => expect(screen.getByText("Stopped").getAttribute("role")).toBe("status"));
+    expect(r.aborts).toBe(1);
   });
 
   test("this tab's own turn ending reads as idle until the box says otherwise", async () => {

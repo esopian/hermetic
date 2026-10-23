@@ -228,6 +228,11 @@ export const FileRequest = z.object({
   created_at: Iso,
   expires_at: Iso,
   session_id: OpaqueId.optional(),
+  /**
+   * The Hermes turn's task id: the session key the turn started under. Unlike
+   * `session_id`, a context compression mid-turn does not move it.
+   */
+  task_id: OpaqueId.optional(),
   /** `secret_text` requests: key names required, never values. */
   keys: z.array(z.string().min(1).max(128)).optional(),
   optional_keys: z.array(z.string().min(1).max(128)).optional(),

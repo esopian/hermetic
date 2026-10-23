@@ -912,6 +912,8 @@ export function useConversations(
       const record = get(where);
       if (record.aborting) return;
       record.aborting = true;
+      // A stop that fails says so; an earlier failure must not outlive this attempt.
+      if (record.turnError?.code === "ABORT_FAILED") record.turnError = null;
       const turn = record.turn;
       const cancel = record.cancel;
       clearReconnect(record);

@@ -593,17 +593,18 @@
 /* The thread composer's box takes the skin's hairline, and its input none: the
    rules above would otherwise draw a second border inside the box. */
 [data-skin="soft"] .ch-input-box {
-  min-height: 50px;
-  padding: 13px 6px 13px 18px;
   border: 1px solid var(--line2);
   background: var(--bg);
+}
+[data-skin="soft"] .ch-input-field {
+  padding: 13px 6px 8px 18px;
 }
 [data-skin="soft"] .ch-input-box:focus-within {
   border-color: var(--fg3);
   box-shadow: 0 0 0 1px var(--fg3);
 }
-[data-skin="soft"] .ch-input-box > .ch-input,
-[data-skin="soft"] .ch-input-box > .ch-input:focus {
+[data-skin="soft"] .ch-input-field > .ch-input,
+[data-skin="soft"] .ch-input-field > .ch-input:focus {
   min-height: 0;
   padding: 0 12px 0 0;
   border: 0;
@@ -768,10 +769,10 @@
 [data-skin="soft"] .ch-file.error {
   border-color: var(--bad);
 }
-[data-skin="soft"] .ch-attach-btn {
-  height: auto;
-  min-height: 50px;
-  border-color: var(--line2);
+[data-skin="soft"] .ch-input-tools > .ch-send {
+  height: 30px;
+  min-width: 38px;
+  font-size: 15px;
 }
 [data-skin="soft"] .ch-drop {
   border-color: var(--line2);
