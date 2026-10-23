@@ -57,6 +57,28 @@ export {
 } from "./process-event.ts";
 export type { ProcessEventLike } from "./process-event.ts";
 
+// --- Hermes's task list (§9.2) --------------------------------------------
+// Which snapshot is current and what the strip and the rail show, for the
+// desktop and the phone alike.
+export {
+  latestTodoList,
+  todoAge,
+  todoDiff,
+  todoFraction,
+  todoLifecycle,
+  todoRunning,
+  todoSupersedes,
+} from "./todos.ts";
+export type {
+  TodoFound,
+  TodoItemLike,
+  TodoLifecycle,
+  TodoMessageLike,
+  TodoPhase,
+  TodoSnapshotLike,
+  TodoView,
+} from "./todos.ts";
+
 // --- Intentional silence (§9.2) ------------------------------------------
 // Upstream's `NO_REPLY`/`[SILENT]` matcher: core keeps a silent reply out of
 // the inbox, the UI draws it as a marker and holds back a streamed prefix.

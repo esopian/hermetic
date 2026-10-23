@@ -334,6 +334,26 @@ export const RequestCloseReason = z.enum([
 ]);
 export type RequestCloseReason = z.infer<typeof RequestCloseReason>;
 
+/**
+ * One item of Hermes's task list (`tools/todo_tool.py`), statuses mapped onto
+ * `ProcessTaskStatus`'s words so `todoSummary` reads both. `parent` names an
+ * earlier item's id, or is null.
+ */
+export const TodoItem = z.object({
+  id: z.string(),
+  content: z.string().max(4000),
+  status: z.enum(["done", "active", "pending", "cancelled"]),
+  parent: z.string().nullish(),
+});
+export type TodoItem = z.infer<typeof TodoItem>;
+
+/** A whole task list as of `revision` (monotonic per session; null when upstream gave none). */
+export const TodoSnapshot = z.object({
+  todos: z.array(TodoItem).max(256),
+  revision: z.number().int().nonnegative().nullable(),
+});
+export type TodoSnapshot = z.infer<typeof TodoSnapshot>;
+
 /** A replaceable progress snapshot, distinct from transcript prose and final usage. */
 const ActivityBlock = z.object({
   kind: z.literal("activity"),
@@ -358,6 +378,8 @@ const ActivityBlock = z.object({
    * else, and on a notice minted before this field existed.
    */
   reason: RequestCloseReason.nullish(),
+  /** The task list, on the `todo.updated` notice and the resume seed (key `tasks`). */
+  todos: TodoSnapshot.nullish(),
   /** Retained for inspection and redacted by the same boundary as every other block. */
   payload: z.unknown().optional(),
 });
@@ -410,6 +432,8 @@ const ToolBlock = z.object({
    * row. The bytes are fetched by `share_id` through `files.content`.
    */
   share: ShareFileResult.nullish(),
+  /** The list a completed `todo_list`/`todo` call left, when its result parses. */
+  todos: TodoSnapshot.nullish(),
 });
 
 /**

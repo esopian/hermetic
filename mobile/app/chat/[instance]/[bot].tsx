@@ -16,8 +16,9 @@
  * `?attach=image,file` puts the kit's canned files in the tray, `?paste=image`
  * pastes the kit's canned clipboard picture through the composer's paste path,
  * `&send=<text>` then sends them as the Send button does, and `?attachSheet=1`
- * opens the attach sheet. A build without the fixture has no list and ignores
- * all five.
+ * opens the attach sheet, and `?tasks=fold` starts a running task strip
+ * folded and `?tasks=sheet` opens the Tasks sheet. A build without the
+ * fixture has no list and ignores all six.
  */
 import { router, Stack, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
@@ -37,6 +38,9 @@ import { DemoSheet } from "../../../src/chat/DemoSheet.tsx";
 import { type AttachKind, Composer, openAttachSheet } from "../../../src/chat/Composer.tsx";
 import { isFresh } from "../../../src/chat/new-chat.ts";
 import { SessionSheet, sessionLabel } from "../../../src/chat/SessionSheet.tsx";
+import { TaskSheet } from "../../../src/chat/TaskSheet.tsx";
+import { TasksChip, TaskStrip } from "../../../src/chat/TaskStrip.tsx";
+import { useTaskList } from "../../../src/chat/use-task-list.ts";
 import { type SubagentControl, SubagentSheet } from "../../../src/chat/SubagentSheet.tsx";
 import { Transcript, type TranscriptItem, transcriptItems } from "../../../src/chat/Transcript.tsx";
 import {
@@ -55,6 +59,13 @@ import { type TurnPrompt, turnErrorNeedsBand } from "../../../src/client/chat-re
 import { questionsOf } from "../../../src/client/chat-requests.ts";
 import type { RespondResult, SendAttachments } from "../../../src/client/chat-types.ts";
 import type { ConversationTarget, RespondInput } from "../../../src/client/conversation-store.ts";
+import {
+  changedIds,
+  previousLists,
+  taskStrip,
+  todoStepKey,
+  turnState,
+} from "../../../src/client/task-list.ts";
 import { ATTACHMENT_LIMIT, errorCopy, HermeticError } from "../../../src/client/errors.ts";
 import { openSeparateSession, opensNewSession } from "../../../src/client/new-session.ts";
 import {
@@ -78,7 +89,7 @@ import {
 } from "../../../src/fleet/hooks.ts";
 import { useTheme } from "../../../src/theme/theme.tsx";
 import type { AvatarStatus } from "@hermetic/core/shared";
-import type { ErrorCode } from "@hermetic/core/chat-client";
+import type { ChatBlock, ErrorCode } from "@hermetic/core/chat-client";
 import { haptic } from "../../../src/ui/haptics.ts";
 import { Avatar, SkeletonRow, Text } from "../../../src/ui/index.ts";
 import { useNow } from "../../../src/ui/useNow.ts";
@@ -120,6 +131,7 @@ export default function Conversation() {
     paste?: string;
     send?: string;
     attachSheet?: string;
+    tasks?: string;
   }>();
   const { client, focusConversation, fixture } = useFleetContext();
   const demoPrompts = fixture?.demoPrompts ?? null;
@@ -188,6 +200,47 @@ export default function Conversation() {
     lastItems.current = next;
     return next;
   }, [messages, live, sending, now, remote]);
+  // The task list (§9.4): pinned under the bar, its sheet, its transcript rows.
+  const all = useMemo(
+    () => (live && !messages.some((m) => m.id === live.id) ? [...messages, live] : messages),
+    [messages, live],
+  );
+  const turn = turnState({ sending, activity: view?.activity ?? "idle", remote });
+  const tasks = useTaskList({
+    fleetId,
+    instance: target.instance,
+    bot: target.bot,
+    messages: all,
+    busy: turn.busy,
+    live: turn.live,
+    now,
+  });
+  const observing = view?.observe === "live";
+  const [tasksFolded, setTasksFolded] = useState(() => !!demoPrompts && params.tasks === "fold");
+  const [tasksSheet, setTasksSheet] = useState<{
+    flash: { ids: ReadonlySet<string>; key: number } | null;
+  } | null>(() => (demoPrompts && params.tasks === "sheet" ? { flash: null } : null));
+  const prevOf = useMemo(() => previousLists(all), [all]);
+  const flashes = useRef(0);
+  const openTasks = useCallback(
+    (step?: ChatBlock) => {
+      const ids =
+        step?.kind === "tool" && step.todos
+          ? changedIds(prevOf.get(todoStepKey(step)) ?? null, step.todos)
+          : [];
+      flashes.current += 1;
+      setTasksSheet({ flash: ids.length ? { ids: new Set(ids), key: flashes.current } : null });
+    },
+    [prevOf],
+  );
+  const strip = taskStrip({ found: tasks.found, life: tasks.life, folded: tasksFolded, observing });
+  const chipFound = strip.kind === "none" && tasks.life.phase !== "none" ? tasks.found : null;
+  const chipPhase = tasks.life.phase;
+  const tasksFooter = useMemo(
+    () => (chipFound ? <TasksChip found={chipFound} phase={chipPhase} onPress={openTasks} /> : null),
+    [chipFound, chipPhase, openTasks],
+  );
+
   const state = threadState({
     status: agent?.status ?? null,
     reachable: swarm?.reachable ?? true,
@@ -388,6 +441,7 @@ export default function Conversation() {
       sending,
       released: view?.released ?? [],
       messages: live ? [...messages, live] : messages,
+      tasks: { prevOf, open: openTasks },
       respond,
       openSubagent: setSubagentId,
       draft: (text) => {
@@ -431,6 +485,8 @@ export default function Conversation() {
       client,
       openNewSession,
       resendOrSay,
+      prevOf,
+      openTasks,
     ],
   );
 
@@ -567,6 +623,7 @@ export default function Conversation() {
   const onSend = useCallback(
     (text: string) => {
       if (!client || sendBusy.current) return;
+      tasks.sent();
       if (attachments.length > 0 && sending) {
         // The files wait for the running turn to finish, with their words.
         haptic.warning();
@@ -646,7 +703,17 @@ export default function Conversation() {
         if (upload.current === controller) upload.current = null;
       });
     },
-    [client, target, attachments, files, view?.resolvedSession, sending, session, openNewSession],
+    [
+      client,
+      target,
+      attachments,
+      files,
+      view?.resolvedSession,
+      sending,
+      session,
+      openNewSession,
+      tasks.sent,
+    ],
   );
 
   const onSendNow = useCallback(
@@ -848,6 +915,16 @@ export default function Conversation() {
             This conversation moved to a new session; earlier messages are in the session list.
           </Text>
         ) : null}
+        {tasks.found ? (
+          <TaskStrip
+            state={strip}
+            snapshot={tasks.found.snapshot}
+            pulse={tasks.life.pulse}
+            onToggle={() => setTasksFolded((folded) => !folded)}
+            onOpen={() => openTasks()}
+            onHide={tasks.hide}
+          />
+        ) : null}
         {loading ? (
           <View style={{ flex: 1, justifyContent: "flex-end", paddingBottom: t.space.lg }}>
             {[0, 1, 2, 3].map((i) => (
@@ -866,6 +943,7 @@ export default function Conversation() {
             refreshing={refreshing}
             pinSignal={pinSignal}
             onRefresh={onRefresh}
+            footer={tasksFooter}
             empty={empty}
           />
         )}
@@ -921,6 +999,15 @@ export default function Conversation() {
           onSelect={goSession}
           onNew={() => openNewSession()}
           onClose={() => setSessionsOpen(false)}
+        />
+        <TaskSheet
+          visible={!!tasksSheet}
+          found={tasks.found}
+          life={tasks.life}
+          observing={observing}
+          now={now}
+          flash={tasksSheet?.flash ?? null}
+          onClose={() => setTasksSheet(null)}
         />
         {demoPrompts ? (
           <DemoSheet

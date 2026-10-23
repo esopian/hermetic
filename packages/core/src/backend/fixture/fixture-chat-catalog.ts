@@ -10,6 +10,7 @@
 import { HERMES_HOME } from "../../shared/hermes.ts";
 import type { ChatMessage } from "../../schema/index.ts";
 import { at } from "./fixture-chat-roster.ts";
+import { CORVID_TODO_BLOCK } from "./fixture-chat-todos.ts";
 import {
   FIXTURE_CHAT_FILES,
   FIXTURE_CHAT_SCREENSHOT,
@@ -730,6 +731,8 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
       author: { instance: "corvid", bot: "default" },
       at: at("09:12:55"),
       blocks: [
+        // The task list the switch was planned with, left 2 of 5 done (`fixture-chat-todos.ts`).
+        CORVID_TODO_BLOCK,
         {
           kind: "text",
           markdown:

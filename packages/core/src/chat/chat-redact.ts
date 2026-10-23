@@ -40,7 +40,7 @@
  * existing leak-grep test greps for" describes something that did not exist.
  * This is that library.
  */
-import type { ChatBlock, ChatFailure, ChatFrame, ChatMessage } from "../schema/index.ts";
+import type { ChatBlock, ChatFailure, ChatFrame, ChatMessage, TodoSnapshot } from "../schema/index.ts";
 
 /** What every match is replaced with. Bracketed so it cannot re-match as a value. */
 export const REDACTED = "[redacted]";
@@ -352,6 +352,23 @@ function isPlainObject(value: object): boolean {
 }
 
 /**
+ * A task list's items are the agent's words, like a tool's arguments. The parser
+ * truncated them first, so a secret cut at the cap can leave a prefix too short
+ * for its pattern to match.
+ */
+function redactTodos(snapshot: TodoSnapshot): TodoSnapshot {
+  return {
+    ...snapshot,
+    todos: snapshot.todos.map((item) => ({
+      ...item,
+      id: redactText(item.id),
+      content: redactText(item.content),
+      parent: typeof item.parent === "string" ? redactText(item.parent) : item.parent,
+    })),
+  };
+}
+
+/**
  * Deep-walks one block.
  *
  * Written as an exhaustive switch rather than as a generic object walk so that
@@ -370,6 +387,7 @@ export function redactBlock(block: ChatBlock): ChatBlock {
         key: redactText(block.key),
         title: redactText(block.title),
         detail: typeof block.detail === "string" ? redactText(block.detail) : block.detail,
+        ...(block.todos ? { todos: redactTodos(block.todos) } : {}),
         ...(block.payload !== undefined ? { payload: redactDeep(block.payload) } : {}),
       };
     case "reasoning":
@@ -381,6 +399,7 @@ export function redactBlock(block: ChatBlock): ChatBlock {
         result: block.result === undefined ? block.result : redactDeep(block.result),
         // A share's name is free text the agent chose, like an attachment's.
         ...(block.share ? { share: { ...block.share, name: redactText(block.share.name) } } : {}),
+        ...(block.todos ? { todos: redactTodos(block.todos) } : {}),
       };
     case "attachment":
       // `href` is a URL the box minted, and a signed one carries its credential

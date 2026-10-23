@@ -34,6 +34,8 @@ import {
   needsBots,
   sectionState,
 } from "../src/client/home-rows.ts";
+import { homeTaskTag, taskViewKey } from "../src/client/task-list.ts";
+import { useConversationTasks, useTaskViews } from "../src/chat/use-task-list.ts";
 import { useFleetContext } from "../src/fleet/FleetProvider.tsx";
 import { useFleetAgents, useFleetState, useInbox, useRoster } from "../src/fleet/hooks.ts";
 import { useTheme } from "../src/theme/theme.tsx";
@@ -67,6 +69,9 @@ export default function Home() {
   const inbox = useInbox();
   const now = useNow();
   const fleetId = fleet.link?.payload.fleet_id ?? "";
+  // Each Bot Chat's task list, for its row's tag (not the hero's).
+  const conversationTasks = useConversationTasks(client);
+  const taskViews = useTaskViews(fleetId);
 
   useFocusEffect(
     useCallback(() => {
@@ -157,6 +162,10 @@ export default function Home() {
     setScrolled(e.nativeEvent.contentOffset.y > 2);
   }, []);
 
+  const homeExtra = useMemo(
+    () => ({ now, conversationTasks, taskViews }),
+    [now, conversationTasks, taskViews],
+  );
   const renderItem = useCallback(
     ({ item, index }: { item: HomeItem; index: number }) =>
       item.type === "section" ? (
@@ -174,12 +183,19 @@ export default function Home() {
           suffix={item.row.suffix}
           reachable={item.row.reachable}
           failed={item.row.failed}
+          tasks={(() => {
+            const entry = conversationTasks.get(item.row.key);
+            const key = entry
+              ? taskViewKey(item.row.bot.instance, item.row.bot.name, entry.found.session)
+              : null;
+            return homeTaskTag(entry, (key && taskViews[key]) || {}, now);
+          })()}
           lastInSection={items[index + 1]?.type !== "row"}
           onPress={() => open(item.row.bot)}
           onLongPress={() => menu(item.row)}
         />
       ),
-    [fleetId, now, open, menu, fold, agentStatus, items],
+    [fleetId, now, open, menu, fold, agentStatus, items, conversationTasks, taskViews],
   );
 
   if (pairing === "unpaired") return <Redirect href="/pair" />;
@@ -266,7 +282,7 @@ export default function Home() {
           keyExtractor={(item) => item.key}
           getItemType={(item) => item.type}
           renderItem={renderItem}
-          extraData={now}
+          extraData={homeExtra}
           // A bot that just spoke moves up; without this the list holds the old
           // rows in place and the mover lands above the viewport.
           maintainVisibleContentPosition={{ disabled: true }}

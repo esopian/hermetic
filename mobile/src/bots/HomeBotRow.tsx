@@ -13,6 +13,7 @@ import type { AvatarStyle } from "@hermetic/core/shared";
 import { memo } from "react";
 import { Pressable, View } from "react-native";
 import { homePreview, homeTime } from "../client/home-rows.ts";
+import type { HomeTaskTag } from "../client/task-list.ts";
 import { usePrefs } from "../prefs/prefs.tsx";
 import { useTheme } from "../theme/theme.tsx";
 import { Avatar } from "../ui/avatar/Avatar.tsx";
@@ -29,6 +30,8 @@ export interface HomeBotRowProps {
   suffix: string | null;
   reachable: boolean;
   failed?: boolean;
+  /** The Bot Chat's task list, boxed beside the name (`homeTaskTag`). */
+  tasks?: HomeTaskTag | null;
   /** The home section band supplies the edge after this row. */
   lastInSection?: boolean;
   onPress: () => void;
@@ -155,10 +158,12 @@ export function homeRowLabel(input: {
   badge: string | null;
   failed?: boolean;
   reachable: boolean;
+  tasks?: HomeTaskTag | null;
 }): string {
   const parts = [`${input.bot.title || input.bot.name}${input.suffix ? ` (${input.suffix})` : ""}`];
   if (input.badge === "!") parts.push("needs you");
   else if (input.badge) parts.push(`${input.badge} unread`);
+  if (input.tasks) parts.push(input.tasks.label);
   if (input.failed) parts.push("last turn failed");
   if (!input.reachable) parts.push("box not answering");
   return parts.join(", ");
@@ -192,6 +197,7 @@ function HomeBotRowImpl({
   suffix,
   reachable,
   failed = false,
+  tasks = null,
   lastInSection = false,
   onPress,
   onLongPress,
@@ -206,7 +212,7 @@ function HomeBotRowImpl({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={homeRowLabel({ bot, suffix, badge, failed, reachable })}
+      accessibilityLabel={homeRowLabel({ bot, suffix, badge, failed, reachable, tasks })}
       accessibilityHint={onLongPress ? "Long-press for more" : undefined}
       onPress={onPress}
       onLongPress={onLongPress}
@@ -234,6 +240,21 @@ function HomeBotRowImpl({
               </Text>
             ) : null}
           </Text>
+          {tasks ? (
+            <View
+              testID="row-tasks"
+              style={{
+                borderWidth: t.border.row,
+                borderColor: tasks.tone === "acc" ? t.c.acc : tasks.tone === "ok" ? t.c.ok : t.c.line2,
+                paddingHorizontal: 5,
+              }}
+            >
+              {/* Capped so at the largest sizes the name keeps the room. */}
+              <Text mono variant="caption" weight={700} tone={tasks.tone} maxFontSizeMultiplier={1.3}>
+                {tasks.text}
+              </Text>
+            </View>
+          ) : null}
           <View style={{ flex: 1 }} />
           {time ? (
             <Text mono variant="caption" tone={hot ? "fg2" : "fg3"}>

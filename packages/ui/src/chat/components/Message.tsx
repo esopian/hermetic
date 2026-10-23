@@ -212,8 +212,10 @@ export const Message = memo(function Message({
   // A skill invoked with no instruction has no text block, and is still the operator's turn.
   const skill = mine ? (message.skill ?? null) : null;
   const replyTo = mine ? (message.reply_to ?? null) : null;
-  if (message.blocks.length === 0 && !broken && !message.usage && !skill) return null;
-  const blocks = message.blocks.filter(
+  // The task list's notice and resume seed: the strip draws the list, the call's row the change.
+  const drawn = message.blocks.filter((block) => !(block.kind === "activity" && block.todos));
+  if (drawn.length === 0 && !broken && !message.usage && !skill) return null;
+  const blocks = drawn.filter(
     (block) =>
       (block.kind !== "text" || block.markdown.trim().length > 0) &&
       !(

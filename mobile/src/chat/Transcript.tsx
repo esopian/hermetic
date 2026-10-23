@@ -188,6 +188,7 @@ function TranscriptImpl({
   activity,
   released,
   header,
+  footer,
   empty,
   onRefresh,
   refreshing = false,
@@ -201,6 +202,8 @@ function TranscriptImpl({
   activity: TurnActivity;
   released: readonly string[];
   header?: ReactElement | null;
+  /** Under the last turn (the Tasks chip, when nothing is pinned). */
+  footer?: ReactElement | null;
   empty?: ReactElement | null;
   onRefresh?: () => void;
   refreshing?: boolean;
@@ -372,6 +375,7 @@ function TranscriptImpl({
           paddingBottom: padBottom,
         }}
         ListHeaderComponent={header ?? null}
+        ListFooterComponent={footer ?? null}
         ListEmptyComponent={empty ?? null}
         {...(onRefresh ? { onRefresh, refreshing } : {})}
       />

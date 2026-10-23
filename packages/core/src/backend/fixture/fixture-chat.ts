@@ -88,6 +88,13 @@ import {
 import { fixtureFileShareScript, type FixtureShareFiles } from "./fixture-chat-file-share.ts";
 import { fixtureErrorScript } from "./fixture-chat-error.ts";
 import { fixtureDemoTurn } from "./fixture-chat-demo.ts";
+import {
+  FIXTURE_TODO_SLOW_STEP_MS,
+  FIXTURE_TODO_SLOW_TRIGGER,
+  FIXTURE_TODO_STEP_MS,
+  fixtureTodoTurn,
+} from "./fixture-chat-todos.ts";
+import { latestTodoList } from "../../shared/todos.ts";
 import { fixtureCommand, fixtureCommandCatalog } from "./fixture-chat-command.ts";
 import { createFixtureTurnRow } from "./fixture-chat-fold.ts";
 import { createFixtureSubagents, settleFixtureSubagents } from "./fixture-chat-subagent.ts";
@@ -622,8 +629,21 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
         const asking = files ? fixtureFileRequestScript(text) : null;
         const sharing = files?.share ? fixtureFileShareScript(text) : null;
         const demo = fixtureDemoTurn(text);
+        const todo = fixtureTodoTurn(text, () =>
+          session === null
+            ? null
+            : (latestTodoList([
+                ...(FIXTURE_CHAT_TRANSCRIPTS[session] ?? []),
+                ...sentRows(instance, bot, session),
+              ])?.snapshot ?? null),
+        );
+        const todoStepMs = text.includes(FIXTURE_TODO_SLOW_TRIGGER)
+          ? FIXTURE_TODO_SLOW_STEP_MS
+          : delayMs > 0
+            ? delayMs * 6
+            : FIXTURE_TODO_STEP_MS;
         const log =
-          clarify || approval || failing || asking || sharing
+          clarify || approval || failing || asking || sharing || todo
             ? []
             : attached.length > 0
               ? [...attachmentTurn(id, attached)]
@@ -770,6 +790,15 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
           if (sharing && files?.share) {
             const share = files.share.bind(files);
             yield* deliver(sharing.frames(id, { share }, instance, session));
+            return;
+          }
+          /** A task-list turn (`fixture-chat-todos.ts`), its steps a watchable beat apart. */
+          if (todo) {
+            for (const [i, batch] of todo(id).entries()) {
+              if (i > 0) await sleep(todoStepMs);
+              if (opts.signal?.aborted) return;
+              yield* deliver(batch);
+            }
             return;
           }
           /**

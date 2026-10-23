@@ -244,6 +244,7 @@ export function BotWorkspace({
         }
         statusOf={statusOf}
         activities={chat.turnActivities}
+        tasks={chat.taskLists}
         canonicalId={chat.sessions.find((s) => s.kind === "canonical")?.id}
       />
       <div className="bm-narrow-actions">

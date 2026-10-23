@@ -395,6 +395,11 @@ export class ConversationStore {
     return record.view;
   }
 
+  /** Every conversation this store holds, for home's task tags. */
+  views(): ConversationView[] {
+    return [...this.records.values()].map((r) => this.view(r.target));
+  }
+
   /** Every conversation with a turn running, for the rail's activity dots. */
   active(): ConversationView[] {
     return [...this.records.values()].filter((r) => r.sending).map((r) => this.view(r.target));

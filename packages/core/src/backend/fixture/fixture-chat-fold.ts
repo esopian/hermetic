@@ -52,6 +52,8 @@ export function createFixtureTurnRow(): FixtureTurnRow {
       // fixture mints, and folding it in would make the durable row depend on
       // whether the socket happened to survive the turn.
       if (block.kind === "activity" && block.role === "status") return;
+      // `todo.updated` is an event; the list lives in the `todo_list` call's result.
+      if (block.kind === "activity" && block.key === "tasks") return;
       // The gateway's withdrawal of a request is an event, not a row.
       if (block.kind === "activity" && block.key.startsWith("request:")) return;
       // A parked request. Its answer lives in the tool's result.
@@ -80,6 +82,7 @@ export function createFixtureTurnRow(): FixtureTurnRow {
       // (`fixture-chat-demo.ts` raises both live).
       if (block.kind === "process_event" || (block.kind === "tool" && block.render === "message_agent"))
         row.full = true;
+      if (block.kind === "tool" && block.todos) row.full = true;
       if (block.kind === "tool") {
         const found = blocks.findIndex((b) => b.kind === "tool" && b.tool_id === block.tool_id);
         const at = found >= 0 ? found : blocks.length;

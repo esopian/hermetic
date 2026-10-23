@@ -16,6 +16,7 @@ import {
 } from "../../schema/index.ts";
 import { hermesActivity } from "./hermes-chat-activity.ts";
 import { FILE_REQUEST_TOOL_RENDER, toolRequestId } from "./hermes-chat-file-requests.ts";
+import { toolTodos } from "./hermes-chat-todos.ts";
 import { nonNegative, num, rec, scaleSeconds, str } from "./hermes-chat-wire.ts";
 
 /**
@@ -110,8 +111,16 @@ function pick(
  *
  * Live start and completion frames retain tool_id so a head can replace the
  * running card by identity, including parallel calls to the same tool.
+ *
+ * `todos` is read only when the caller vouches that this is a real todo call:
+ * the live `tool.complete`, or a history result paired with an assistant call
+ * named `todo_list`/`todo`. A history row's own `tool_name` is not enough.
  */
-export function toolBlock(payload: Record<string, unknown>, force: "running" | null): ChatBlock {
+export function toolBlock(
+  payload: Record<string, unknown>,
+  force: "running" | null,
+  todoCall = false,
+): ChatBlock {
   const name = str(payload.name) ?? str(payload.tool) ?? "tool";
   const picked = pick(payload, TOOL_ARG_KEYS);
   const result = pick(payload, TOOL_RESULT_KEYS).value;
@@ -134,6 +143,7 @@ export function toolBlock(payload: Record<string, unknown>, force: "running" | n
   }
 
   const render = TOOL_RENDER[name.toLowerCase()] ?? null;
+  const status = force ?? toolStatus(payload, exit);
   return {
     kind: "tool",
     tool_id: str(payload.tool_id) ?? str(payload.call_id) ?? str(payload.id),
@@ -141,7 +151,7 @@ export function toolBlock(payload: Record<string, unknown>, force: "running" | n
     server: mcpServer(name),
     args,
     result,
-    status: force ?? toolStatus(payload, exit),
+    status,
     exit_code: exit,
     duration_ms: num(payload.duration_ms) ?? scaleSeconds(num(payload.duration_s)),
     render,
@@ -153,6 +163,7 @@ export function toolBlock(payload: Record<string, unknown>, force: "running" | n
       : {}),
     // Likewise only a share card, and only from the plugin's result.
     ...(render === "file_share" ? { share: toolShare(result) } : {}),
+    ...(todoCall ? toolTodos(name, status, payload, result) : {}),
   };
 }
 
