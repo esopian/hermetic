@@ -59,17 +59,35 @@ async function runIn(home: string, ...args: string[]): Promise<Run> {
 // §4.8: the fleet name comes first — one account may hold several fleets.
 const HEADER = "▸ main · acme-dev · 123456789012 · us-west-2 · profile acme-dev · FIXTURE";
 
+/**
+ * The fixture's `main` rows carry this build's real render hash
+ * (`memory-fixture.ts`), which moves with every pin bump. The golden is the
+ * shape, so a render hash reads as `<render>`; a placeholder or stale hash stays.
+ * Likewise this build's Hermes pin (`ibis` sits on it), as `<build hermes>`.
+ */
+const RENDER_KEYS = new Set(["config_hash", "applied_config_hash", "config_key"]);
+const PIN_KEYS = new Set(["hermes_version", "running_hermes_version"]);
+function golden(stdout: string): unknown {
+  return JSON.parse(stdout, (key, value) =>
+    PIN_KEYS.has(key) && value === BUILD_VERSIONS.hermes
+      ? "<build hermes>"
+      : RENDER_KEYS.has(key) && typeof value === "string"
+        ? value.replace(/\b[0-9a-f]{16}\b/, "<render>")
+        : value,
+  );
+}
+
 describe("--json output is a golden contract", () => {
   test("agent ps", async () => {
     const { code, stdout } = await run("agent", "ps", "--json");
     expect(code).toBe(0);
-    expect(JSON.parse(stdout)).toMatchSnapshot();
+    expect(golden(stdout)).toMatchSnapshot();
   });
 
   test("agent status atlas", async () => {
     const { code, stdout } = await run("agent", "status", "atlas", "--json");
     expect(code).toBe(0);
-    expect(JSON.parse(stdout)).toMatchSnapshot();
+    expect(golden(stdout)).toMatchSnapshot();
   });
 
   test("agent probe atlas", async () => {
@@ -1543,6 +1561,16 @@ describe.concurrent("upgrade --now: converge the box in place", () => {
     const { code, stdout } = await run("settings", "set", "--no-auto-update-hermeticd");
     expect(code).toBe(0);
     expect(stdout).toMatch(/hermeticd auto-update\s+off/);
+  });
+
+  test("`settings set --auto-upgrade` switches it on and `settings show` says so", async () => {
+    const shown = await run("settings", "show");
+    expect(shown.stdout).toMatch(/auto-upgrade\s+off/);
+    const { code, stdout } = await run("settings", "set", "--auto-upgrade");
+    expect(code).toBe(0);
+    expect(stdout).toMatch(/auto-upgrade\s+on/);
+    const off = await run("settings", "set", "--no-auto-upgrade");
+    expect(off.stdout).toMatch(/auto-upgrade\s+off/);
   });
 
   test("`upgrade --help` documents --now with an example", async () => {

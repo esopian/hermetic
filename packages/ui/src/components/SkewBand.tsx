@@ -65,12 +65,16 @@ function BandBody({
   }
 
   /**
-   * Only `degraded`'s fix is something this app performs — Settings' foundation
-   * update. `drifted`'s is a command (`hermetic plan rollout`) that no button
+   * Only `degraded`'s and `update`'s fix is something this app performs —
+   * Settings' foundation update, which also converges every changed agent's
+   * config. `drifted`'s is a command (`hermetic plan rollout`) that no button
    * here runs, so it is named in the band rather than hidden behind an
    * "Update foundation…" that would open the wrong thing.
    */
-  const fixButton = band.severity === "degraded" && band.fix !== null && onFix !== undefined;
+  const fixButton =
+    (band.severity === "degraded" || band.severity === "update") &&
+    band.fix !== null &&
+    onFix !== undefined;
   const fixCommand = band.severity === "drifted" ? band.fix : null;
 
   return (

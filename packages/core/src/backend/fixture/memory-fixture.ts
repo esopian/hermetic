@@ -64,6 +64,7 @@ import { fixtureBrowserBytes, fixtureBrowserEntry } from "../../release/browser-
 import { foundationTemplateSha256 } from "../../aws/cfn-template.ts";
 import { HermeticError } from "../../errors.ts";
 import { SEEDS, STAGING_SEEDS } from "./fixture-agents.ts";
+import { renderAgentRow } from "../../agents/agent-runtime.ts";
 import {
   type FixtureAccount,
   type FixtureDirectoryMode,
@@ -118,6 +119,12 @@ const FIXTURE_FLEET_IDS: Record<FixtureFleetName, string> = {
  */
 export interface FixtureSeed {
   fleet?: string | undefined;
+  /**
+   * Seed `config_update` (`fixture-agents.ts`) as an older render. Fixture mode
+   * only (`open.ts`), whose boxes answer a converge: a test's never do, so the
+   * update would wait out its converge on one.
+   */
+  configUpdate?: boolean | undefined;
   /**
    * Seed the fleet a foundation update has something to do to: no
    * `foundation_version`, no `fleet_name`, no settings, an older release, and
@@ -763,6 +770,18 @@ export function seedFixtureFoundation(backend: MemoryBackend, opts: FixtureSeed 
           foundation_version: opts.foundationVersion ?? fixtureFoundationVersion(fixtureName),
           foundation_template_sha256: foundationTemplateSha256(),
           artifacts_version: ARTIFACTS_VERSION,
+          /**
+           * §6.6: the build one commit back published both fleets, so this
+           * build orders `newer` against each (`compareBuild`; fixture git is
+           * canned at `FIXTURE_BUILD_NUMBER`). That is what lets the fixture
+           * exercise `auto_upgrade`: on `main`, whose foundation is current,
+           * turning it on starts the update; on `staging`, one foundation
+           * version behind, it stays manual.
+           */
+          published_by: {
+            hermetic_version: HERMETIC_VERSION,
+            build_number: FIXTURE_BUILD_NUMBER - 1,
+          },
         }),
     tailnet: FIXTURE_TAILNET,
     // Seeded on both fixture fleets, because a fleet created by this build
@@ -943,7 +962,8 @@ export function seedFixtureAgents(backend: MemoryBackend, opts: FixtureSeed = {}
   const natMode = backend.stack?.parameters["Network"] === "nat";
 
   let n = 0;
-  for (const seed of fixtureFleetName(opts.fleet ?? "main") === "staging" ? STAGING_SEEDS : SEEDS) {
+  const staging = fixtureFleetName(opts.fleet ?? "main") === "staging";
+  for (const seed of staging ? STAGING_SEEDS : SEEDS) {
     n += 1;
     const volume_id = `vol-fixture${String(n).padStart(11, "0")}`;
     const instance_id = `i-fixture${String(n).padStart(11, "0")}`;
@@ -1022,7 +1042,6 @@ export function seedFixtureAgents(backend: MemoryBackend, opts: FixtureSeed = {}
     for (const p of ssm_paths) {
       backend.params.set(p, p === copied ? FIXTURE_PROFILE_KEY : `${FIXTURE_TS_KEY}-${seed.name}`);
     }
-    backend.objects.set(`config/${seed.name}/${config_hash}.tgz`, new Uint8Array([1, 2, 3]));
     // Every seeded agent has a matching tailscale device, so `doctor` sees no
     // tailscale_missing drift on the baseline fixture (§9). `hostname` is the
     // OS hostname stage 00 set — the agent's own name — and `name` the FQDN
@@ -1052,7 +1071,7 @@ export function seedFixtureAgents(backend: MemoryBackend, opts: FixtureSeed = {}
       });
     }
 
-    const agent: Agent = {
+    const row: Agent = {
       name: seed.name,
       status: seed.status,
       version: 7 + n,
@@ -1191,6 +1210,11 @@ export function seedFixtureAgents(backend: MemoryBackend, opts: FixtureSeed = {}
       created_at: seed.created_at,
       updated_at: new Date(nowMs - 60_000).toISOString(),
     };
+    const older: Agent = { ...row, hermes: { max_turns: 60 } };
+    const [agent, tarball] = staging
+      ? [row, new Uint8Array([1, 2, 3])]
+      : onThisRender(row, config_hash, region, seed.config_update && opts.configUpdate ? older : row);
+    backend.objects.set(agent.resources.config_key!, tarball);
     backend.agents.set(seed.name, agent);
 
     const created = Date.parse(seed.created_at);
@@ -1414,6 +1438,30 @@ export function seedFixtureVolumes(backend: MemoryBackend): MemoryBackend {
 }
 
 /**
+ * §6.6: `main`'s rows carry what this build renders for them (`as`), so they
+ * read `current` rather than a fleet-wide update on every launch; its
+ * `published_by` is one build back, so `auto_upgrade` has a fleet to fire on.
+ * `config_update` renders an older row instead — the one `update`. A drifted
+ * seed keeps its stale applied hash. `staging` keeps the placeholder hashes.
+ *
+ * Returns the real tarball too: a recreate re-renders the same hash and skips
+ * the upload when the key exists, and the update's diff reads the applied one.
+ */
+function onThisRender(row: Agent, placeholder: string, region: string, as: Agent): [Agent, Uint8Array] {
+  const { config_hash, key, tarball } = renderAgentRow(as, region, FIXTURE_TAILNET);
+  return [
+    {
+      ...row,
+      config_hash,
+      applied_config_hash:
+        row.applied_config_hash === placeholder ? config_hash : row.applied_config_hash,
+      resources: { ...row.resources, config_key: key },
+    },
+    tarball,
+  ];
+}
+
+/**
  * A seeded fixture backend plus its frozen config — one call for heads and
  * tests. `fleet` picks which of `FIXTURE_FLEETS` is seeded; the default is
  * `main`, which is the fleet every test written before this existed means.
@@ -1428,7 +1476,7 @@ export function fixtureBackend(opts: FixtureSeed & { account?: FixtureAccount | 
   const fleet = fixtureFleetName(opts.fleet ?? "main");
   const backend = seedFixtureFleet(
     new MemoryBackend({ account: opts.account ?? createFixtureAccount("seeded") }),
-    { fleet, outdated: opts.outdated },
+    { fleet, outdated: opts.outdated, configUpdate: opts.configUpdate },
   );
   // The unexplained volumes of §9 are `main`'s story — five groups on one
   // board. `staging` exists to be small, and giving it four volumes no agent

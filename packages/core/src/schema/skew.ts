@@ -38,18 +38,25 @@ import { z } from "zod";
  *   rollout` and `apply`, `upgrade --now`, or a recreate), so this one does not
  *   resolve itself and says which command does. Amber, like `degraded`, and
  *   dismissible like it.
+ * - `update` — the fleet is current, every box applied what it was sent, and
+ *   this build renders a newer config for some of them: an update available,
+ *   not a fault. Neutral, never amber. The same Update that resolves
+ *   `degraded` applies it (`artifacts push` and `foundation update` both end by
+ *   converging every changed agent), so it names that command. Only a build
+ *   strictly newer than the one that last published to the fleet raises it
+ *   (`compareBuild`); an older build has nothing to offer the boxes.
  * - `pending` — the fleet is current and some agents have not caught up yet:
  *   their hermeticd is behind the release the fleet points at, which their
  *   runners take on their own next tick, or a config apply was asked of them
  *   moments ago and is still landing. Either way an operator who acts on this
  *   makes it slower, not faster. Never amber; never a block.
  *
- * The array is in ascending order of severity — `none < pending < drifted <
- * degraded < blocked` — so that `SkewSeverity.options.indexOf` ranks two of
+ * The array is in ascending order of severity — `none < pending < update <
+ * drifted < degraded < blocked` — so that `SkewSeverity.options.indexOf` ranks two of
  * them, should a reader ever need to. `computeSkew` tests them most-severe
  * first and returns the first that holds, which is the same order.
  */
-export const SkewSeverity = z.enum(["none", "pending", "drifted", "degraded", "blocked"]);
+export const SkewSeverity = z.enum(["none", "pending", "update", "drifted", "degraded", "blocked"]);
 export type SkewSeverity = z.infer<typeof SkewSeverity>;
 
 /**
@@ -62,13 +69,18 @@ export type SkewSeverity = z.infer<typeof SkewSeverity>;
 export const SKEW_MESSAGE: Readonly<Record<SkewSeverity, string>> = {
   none: "",
   pending: "agents are taking the new release; they catch up on their own",
+  update: "this build has a newer config for some agents; updating the fleet applies it",
   drifted:
     "some agents are not running the config rendered for them; they converge only when it is applied",
   degraded: "some things will not behave as expected until the fleet is updated",
   blocked: "some things will not behave as expected; this build cannot update this fleet",
 };
 
-/** The command that resolves a `degraded` fleet. `blocked` has no command — see below. */
+/**
+ * The command that resolves a `degraded` fleet, and an `update` one: it pushes
+ * the release and converges every agent whose config changed. `blocked` has no
+ * command — see below.
+ */
 export const SKEW_FIX = "hermetic foundation update";
 
 /**
@@ -82,12 +94,20 @@ export const SKEW_DRIFT_FIX = "hermetic plan rollout";
 /**
  * What an agent's applied config is, relative to what the fleet rendered for it.
  *
- * `unknown` is a first-class answer and not a synonym for `current`. An agent
- * that has never reported an applied hash — it predates the field, or it has
- * not heartbeated since it was created — is genuinely not known to be either,
- * and reporting it as current is the one way this could actively mislead.
+ * - `current` — the box applied what it was sent, and that is what this build
+ *   renders for it.
+ * - `update` — the box applied what it was sent, and this build renders
+ *   something newer: an update available, not a fault (`computeSkew` folds it
+ *   into the fleet's update signal). Never reported by a build older than the
+ *   one that last published to the fleet — that build is behind, not the box.
+ * - `drifted` — the box's applied hash is not the one the row says it was
+ *   sent: it did not apply what it was asked to. A real fault.
+ * - `unknown` is a first-class answer and not a synonym for `current`. An agent
+ *   that has never reported an applied hash — it predates the field, or it has
+ *   not heartbeated since it was created — is genuinely not known to be either,
+ *   and reporting it as current is the one way this could actively mislead.
  */
-export const ConfigVerdict = z.enum(["current", "drifted", "unknown"]);
+export const ConfigVerdict = z.enum(["current", "update", "drifted", "unknown"]);
 export type ConfigVerdict = z.infer<typeof ConfigVerdict>;
 
 /**

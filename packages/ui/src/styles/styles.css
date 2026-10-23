@@ -349,6 +349,14 @@ button:focus-visible,
 .pill-warn[disabled] {
   cursor: default;
 }
+/*
+ * The same pill for an update that is not a fault: only agents' config is
+ * behind this build (§6.6 `update`). Neutral, so it does not read as a warning.
+ */
+.pill-warn.pill-neutral {
+  background: var(--line2);
+  color: var(--fg);
+}
 
 .logpane {
   background: #0a0a09;

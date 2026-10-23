@@ -19,6 +19,7 @@ import type { Hermetic, RecordRunInput, RunRecorder } from "@hermetic/core";
 import { createChatOwner } from "../src/chat-owner.ts";
 import type { HandlerContext } from "../src/handlers/ctx.ts";
 import { dispatch } from "../src/handlers/dispatch.ts";
+import { holdFoundationUpdate } from "../src/handlers/shared.ts";
 import { createStreamRegistry } from "../src/handlers/streams.ts";
 import { OpRegistry } from "../src/ops.ts";
 import { AppState } from "../src/state.ts";
@@ -109,6 +110,7 @@ describe("the foundation reads", () => {
       "artifacts",
       "migrate",
       "rollout",
+      "config",
     ]);
     // A plan is a read: nothing about the fleet moved.
     expect(await hermetic.foundation.status()).toEqual(before);
@@ -432,5 +434,55 @@ describe("meta.get carries the foundation status", () => {
     };
     const { ctx } = harnessOver(broken);
     expect(await dispatch(ctx, "meta.get", {})).toMatchObject({ foundation: null });
+  });
+});
+
+/**
+ * Core releases `_fleet.lock` before the update's `config` phase and then
+ * converges agents one by one for minutes; the app's slot goes with the lock,
+ * not with the op, or every agent write is refused for that whole time.
+ */
+describe("the foundation-update slot", () => {
+  const AT = "2026-10-22T00:00:00.000Z";
+  /** An op that emits `phases` and then waits for `finish` before ending. */
+  function gatedOp(phases: string[]) {
+    let finish!: (fail: boolean) => void;
+    const gate = new Promise<boolean>((r) => (finish = r));
+    async function* run() {
+      for (const phase of phases) yield { phase, progress: 0.5, message: phase, at: AT };
+      if (await gate) throw new Error("boom");
+      yield { phase: "done", progress: 1, message: "done", at: AT };
+    }
+    return { run, finish };
+  }
+
+  async function until(check: () => boolean): Promise<void> {
+    for (let i = 0; i < 200 && !check(); i++) await Bun.sleep(1);
+    expect(check()).toBe(true);
+  }
+
+  test("is released at the config phase while the op runs on", async () => {
+    const { ctx, state, ops } = await harness();
+    const { run, finish } = gatedOp(["stack", "config"]);
+    const op = ops.start("foundation.update", null, run);
+    holdFoundationUpdate(ctx, op.id);
+    expect(state.foundationUpdateOpId).toBe(op.id);
+
+    await until(() => state.foundationUpdateOpId === null);
+    expect(ops.get(op.id)?.status).toBe("running");
+    finish(false);
+    expect((await ops.wait(op.id))?.status).toBe("ok");
+  });
+
+  test("is held until the end when the op never reaches config", async () => {
+    const { ctx, state, ops } = await harness();
+    const { run, finish } = gatedOp(["stack"]);
+    const op = ops.start("foundation.update", null, run);
+    holdFoundationUpdate(ctx, op.id);
+    await Bun.sleep(5);
+    expect(state.foundationUpdateOpId).toBe(op.id);
+    finish(true);
+    await ops.wait(op.id);
+    await until(() => state.foundationUpdateOpId === null);
   });
 });

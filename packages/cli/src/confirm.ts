@@ -53,6 +53,19 @@ export function renderPlan(plan: Plan): string {
   for (const step of plan.steps) {
     lines.push(`  ${step.destructive ? "!" : "·"} ${step.id.padEnd(14, " ")} ${step.description}`);
   }
+  // §6.5: per agent, what a converge would change on its box — paths, never content.
+  // An agent already current changes nothing; it stays in the data, not here.
+  const changes = (plan.config_changes ?? []).filter((c) => c.deferred !== "already current");
+  if (changes.length > 0) {
+    lines.push("  config changes:");
+    for (const c of changes) {
+      const head = c.deferred === null ? `${c.from ?? "—"} → ${c.to}` : `deferred — ${c.deferred}`;
+      lines.push(`    ${c.name}: ${head}${c.pending === null ? "" : `; ${c.pending}`}`);
+      for (const path of c.files ?? []) lines.push(`      ${path}`);
+      if (c.manifest.length > 0) lines.push(`      manifest: ${c.manifest.join(", ")}`);
+      if (c.note !== null) lines.push(`      (${c.note})`);
+    }
+  }
   for (const warning of plan.warnings) lines.push(`  warning: ${warning}`);
   return lines.join("\n");
 }

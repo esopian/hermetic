@@ -159,3 +159,15 @@ export function autoUpdateHermeticd(
 ): boolean {
   return source?.auto_update_hermeticd ?? true;
 }
+
+/**
+ * Whether the fleet asked the desktop app to run its update automatically when
+ * the app is a newer build (`FleetSettings.auto_upgrade`, §6.6). Absent means
+ * **off**: the update restarts Hermes on every box whose config changed, which
+ * no fleet gets without opting in.
+ */
+export function autoUpgrade(
+  source: { readonly auto_upgrade?: boolean | undefined } | null | undefined,
+): boolean {
+  return source?.auto_upgrade ?? false;
+}

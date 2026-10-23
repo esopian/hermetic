@@ -413,6 +413,8 @@ describe.concurrent("plan foundation", () => {
       "artifacts",
       "migrate",
       "rollout",
+      // The update ends by converging every agent whose config changed.
+      "config",
     ]);
   });
 

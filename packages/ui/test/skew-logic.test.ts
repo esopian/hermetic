@@ -94,8 +94,22 @@ describe("fleetBand", () => {
     expect(band?.headline).toBe("Config not applied · 1 agent affected");
   });
 
+  /**
+   * A newer render for boxes that applied what they were sent is an offer, not
+   * a fault: quiet like `pending`, and resolved by the same Update as `degraded`.
+   */
+  test("update is quiet, dismissible, and carries the foundation update", () => {
+    const band = fleetBand(
+      status("update", {}, { agents_affected: 1, fix: "hermetic foundation update" }),
+    );
+    expect(band?.tone).toBe("muted");
+    expect(band?.dismissible).toBe(true);
+    expect(band?.fix).toBe("hermetic foundation update");
+    expect(band?.headline).toBe("Config update available · 1 agent affected");
+  });
+
   test("only blocked may not be dismissed", () => {
-    for (const severity of ["pending", "drifted", "degraded"] as const) {
+    for (const severity of ["pending", "update", "drifted", "degraded"] as const) {
       expect(fleetBand(status(severity))?.dismissible).toBe(true);
     }
     expect(fleetBand(status("blocked"))?.dismissible).toBe(false);
@@ -207,6 +221,7 @@ describe("marks", () => {
 
   test("config: unknown is a third answer, and not a warning", () => {
     expect(configLabel("drifted")).toEqual({ label: "drifted", warn: true });
+    expect(configLabel("update")).toEqual({ label: "update", warn: false });
     expect(configLabel("current")).toEqual({ label: "current", warn: false });
     expect(configLabel("unknown")).toEqual({ label: "unknown", warn: false });
     expect(configLabel(null)).toEqual({ label: "unknown", warn: false });

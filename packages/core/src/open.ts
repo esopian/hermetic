@@ -340,6 +340,7 @@ export async function openHermetic(opts: OpenOptions = {}): Promise<Hermetic> {
       fleet: fleetId,
       account: knobs.account,
       outdated: knobs.outdated,
+      configUpdate: true,
     });
     backend.slowStackMs = knobs.slowStackMs ?? 0;
     if (knobs.foundationUnsafe === true) backend.changeSetChanges = [...FIXTURE_UNSAFE_CHANGES];

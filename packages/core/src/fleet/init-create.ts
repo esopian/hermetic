@@ -248,7 +248,9 @@ export async function* create(
     tailscale_oauth_client_id,
     min_hermetic_version: hermeticdVersion,
     // `--skip-artifacts` pushes nothing, so the fleet stays at 0 and is offered the update.
-    ...(parsed.skip_artifacts === true ? {} : { artifacts_version: ARTIFACTS_VERSION }),
+    ...(parsed.skip_artifacts === true
+      ? {}
+      : { artifacts_version: ARTIFACTS_VERSION, published_by: deps.ctx.buildIdentity() }),
     // §6.6: a fleet created by this build is on this build's foundation
     // contract, recorded with the digest of the template that made it — so a
     // template edit that forgot to bump the version still shows up as an

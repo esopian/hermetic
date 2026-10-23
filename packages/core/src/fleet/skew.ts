@@ -25,6 +25,7 @@
 // sibling schemas should not make itself depend on the whole of it.
 import type { AgentStatus } from "../schema/agent.ts";
 import type { ConfigVerdict, Skew } from "../schema/skew.ts";
+import type { BuildOrder } from "./build-order.ts";
 import { SKEW_DRIFT_FIX, SKEW_FIX, SKEW_MESSAGE } from "../schema/skew.ts";
 
 /**
@@ -69,10 +70,17 @@ export function counts(status: AgentStatus): boolean {
  * which is precisely why drift was invisible — a box that applied an old bundle
  * overwrote the record of what it should have applied.
  *
+ * `drifted` is only the box disagreeing with its own row: it was sent one
+ * config and applied another. That is a fault, and nothing but an apply ends it.
+ *
  * `rendered_config_hash`, when supplied, is the same prospective hash used by
- * `plan.rollout`. A stored `config_hash` can be current with the box while this
- * build has gained a new managed file or setting; that case still needs a
- * rollout. Callers without a prospective render compare the stored hashes.
+ * `plan.rollout`. A box that applied what its row names while this build renders
+ * something newer (a new managed file, a changed setting) is `update`, not
+ * `drifted`: nothing went wrong, this build simply has more to send. Unless
+ * `order` says this build is `older` than the one that last published to the
+ * fleet — then the newer render on the box is the other laptop's, and offering
+ * this build's as an "update" is how two laptops flap a fleet's config. Callers
+ * without a prospective render compare the stored hashes only.
  *
  * A missing half is `unknown` rather than a guess in either direction. Rows
  * written before the field existed have no applied hash and never will until
@@ -80,17 +88,22 @@ export function counts(status: AgentStatus): boolean {
  * saying "drifted" would report the whole fleet as broken on the day this
  * shipped.
  */
-export function configVerdict(agent: {
-  status?: AgentStatus | undefined;
-  config_hash?: string | null | undefined;
-  applied_config_hash?: string | null | undefined;
-  rendered_config_hash?: string | null | undefined;
-}): ConfigVerdict {
+export function configVerdict(
+  agent: {
+    status?: AgentStatus | undefined;
+    config_hash?: string | null | undefined;
+    applied_config_hash?: string | null | undefined;
+    rendered_config_hash?: string | null | undefined;
+  },
+  order?: BuildOrder,
+): ConfigVerdict {
   if (agent.status !== undefined && !reportsItsOwnConfig(agent.status)) return "unknown";
   const recorded = agent.config_hash ?? null;
   const applied = agent.applied_config_hash ?? null;
   if (recorded === null || applied === null) return "unknown";
-  return (agent.rendered_config_hash ?? recorded) === applied ? "current" : "drifted";
+  if (applied !== recorded) return "drifted";
+  const rendered = agent.rendered_config_hash ?? null;
+  return rendered !== null && rendered !== applied && order !== "older" ? "update" : "current";
 }
 
 /**
@@ -218,7 +231,10 @@ export interface SkewInput {
  *    is applying? A config does not arrive on its own (§6.5): it lands only
  *    when a rollout, an `upgrade --now` or a recreate asks the box to apply it,
  *    so this is `drifted`, and it names the command that asks.
- * 4. Otherwise anything still behind is an agent catching up — a hermeticd its
+ * 4. Otherwise, does this build render a newer config for some agent that
+ *    applied what it was sent (`update`)? An update available, not a fault:
+ *    neutral, and resolved by the same Update as `degraded`.
+ * 5. Otherwise anything still behind is an agent catching up — a hermeticd its
  *    runner will update on its own, or a config apply asked for moments ago and
  *    still landing — which resolves itself, and must not be dressed up as
  *    something the operator has failed to do.
@@ -235,7 +251,7 @@ export function computeSkew(input: SkewInput): Skew {
    * one — a stopped agent, or one whose replacement is still booting, reports
    * nothing at all, and `!a.current` counted every one of them as a straggler.
    * Same rule as `config === "drifted"` on the line below, which has always had
-   * to be written this way because `ConfigVerdict` has had three states from the
+   * to be written this way because `ConfigVerdict` has had more than two states from the
    * day it was split out.
    */
   const behind = live.filter((a) => a.current === false).length;
@@ -295,6 +311,18 @@ export function computeSkew(input: SkewInput): Skew {
       // it here would make the number disagree with the command's own plan.
       agents_affected: stuck,
       fix: SKEW_DRIFT_FIX,
+    };
+  }
+
+  const updates = live.filter((a) => a.config === "update").length;
+  if (updates > 0) {
+    return {
+      ...base,
+      severity: "update",
+      headline: `foundation v${input.fleetVersion} is current · ${updates === 1 ? "1 agent has" : `${updates} agents have`} a config update from this build`,
+      message: SKEW_MESSAGE.update,
+      agents_affected: updates,
+      fix: SKEW_FIX,
     };
   }
 

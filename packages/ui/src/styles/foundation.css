@@ -144,3 +144,24 @@
   content: "·";
   color: var(--fg3);
 }
+
+/* ── config converge ───────────────────────────────────────────────────────
+   One row per agent, folded like a step but not numbered: agents are not an
+   order. */
+.fu-config .fu-step {
+  grid-template-columns: minmax(0, 1fr);
+}
+.fu-config .fu-step::before {
+  content: none;
+}
+/* `.fu-tag-bad`'s shape in the quiet tone: a deferred agent is not a fault. */
+.fu-tag {
+  flex: none;
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg3);
+  border: 1px solid var(--line);
+  padding: 3px 5px;
+}

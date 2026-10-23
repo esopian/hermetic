@@ -530,6 +530,12 @@ export const SettingsSetInput = z
      */
     auto_update_hermeticd: z.boolean().optional(),
     /**
+     * Switch the desktop app's automatic fleet update on or off
+     * (`FleetSettings.auto_upgrade`, §6.6). Laptop-only: no box reads it, so
+     * changing it republishes nothing.
+     */
+    auto_upgrade: z.boolean().optional(),
+    /**
      * The external memory provider a create with no `memory_provider`
      * inherits. `null` clears it back to built-in memory only.
      */
@@ -563,11 +569,12 @@ export const SettingsSetInput = z
       v.agent_defaults !== undefined ||
       v.default_profile !== undefined ||
       v.auto_update_hermeticd !== undefined ||
+      v.auto_upgrade !== undefined ||
       v.default_memory_provider !== undefined ||
       v.files !== undefined,
     {
       message:
-        "name at least one of defaults, agent_defaults, default_profile, auto_update_hermeticd, default_memory_provider or files",
+        "name at least one of defaults, agent_defaults, default_profile, auto_update_hermeticd, auto_upgrade, default_memory_provider or files",
     },
   );
 export type SettingsSetInput = z.infer<typeof SettingsSetInput>;

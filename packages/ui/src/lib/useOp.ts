@@ -186,7 +186,7 @@ export function teardownPhases(options: {
  * and pinned by `test/foundation-phases.test.ts`.
  */
 export function foundationPhases(): string[] {
-  return ["preflight", "archive", "stack", "artifacts", "migrate", "rollout", "done"];
+  return ["preflight", "archive", "stack", "artifacts", "migrate", "rollout", "config", "done"];
 }
 
 /**

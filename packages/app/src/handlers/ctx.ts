@@ -7,6 +7,7 @@
  * same context to the desktop bridge, and `dispatch.ts` is the table.
  */
 import type { Hermetic } from "@hermetic/core";
+import type { AutoUpgrade } from "../auto-upgrade.ts";
 import type { ChatOwner } from "../chat-owner.ts";
 import type { AppLog } from "../log.ts";
 import type { OpRegistry } from "../ops.ts";
@@ -148,6 +149,11 @@ export interface HandlerContext {
    * refuses the `terminal.*` requests `UNSUPPORTED` and ignores their messages.
    */
   terminals?: TerminalHost;
+  /**
+   * The fleet's opt-in automatic update (`auto-upgrade.ts`), handed the status
+   * `meta.get` reads. Optional: only the desktop head runs it.
+   */
+  autoUpgrade?: AutoUpgrade;
 }
 
 /**
