@@ -1,5 +1,6 @@
 /** Pinned Hermes event vocabulary translated once, before either head renders it. */
 import type { ApprovalChoice, ChatBlock, RequestCloseReason } from "../../schema/chat.ts";
+import { todoSnapshotFrom } from "./hermes-chat-todos.ts";
 
 type Activity = Extract<ChatBlock, { kind: "activity" }>;
 const text = (value: unknown): string | null => (typeof value === "string" && value ? value : null);
@@ -193,10 +194,15 @@ export function hermesActivity(
           ? `${payload.refs_done} of ${payload.refs_total} references ready`
           : text(payload.aggregator),
       );
-    case "todo.updated":
-      return Array.isArray(payload.todos)
-        ? make("notice", "tasks", "Task list updated", "done", `${payload.todos.length} tasks`)
-        : null;
+    case "todo.updated": {
+      // Null for a list that does not parse; the turn then drops the event.
+      const todos = todoSnapshotFrom(payload);
+      if (!todos) return null;
+      return {
+        ...make("notice", "tasks", "Task list updated", "done", `${todos.todos.length} tasks`),
+        todos,
+      };
+    }
     default:
       return null;
   }

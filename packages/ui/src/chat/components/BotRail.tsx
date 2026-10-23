@@ -19,6 +19,10 @@ import { Face } from "./Face.tsx";
 import { RedactedText } from "./RedactedText.tsx";
 import { SILENT_LABEL, isSilentPreview } from "../chat-silence.ts";
 import { matchesQuery } from "../conversation-search.ts";
+import { railTasks } from "../task-list.ts";
+import type { ConversationTasks } from "../task-list.ts";
+import { useTaskViews } from "../task-list-prefs.ts";
+import { RailTaskBar } from "./TaskStrip.tsx";
 
 export function BotRail({
   swarms,
@@ -36,6 +40,7 @@ export function BotRail({
   onNewSession,
   statusOf,
   activities,
+  tasks = [],
   canonicalId,
 }: {
   swarms: SwarmView[];
@@ -53,6 +58,8 @@ export function BotRail({
   onNewSession: () => void;
   statusOf: (instance: string) => AvatarStatus;
   activities: readonly ConversationActivity[];
+  /** Each conversation's task list (`Chat.taskLists`), drawn as the row's bottom bar. */
+  tasks?: readonly ConversationTasks[];
   canonicalId?: string | null;
 }) {
   const [tab, setTab] = useState<"bots" | "sessions">("bots");
@@ -85,6 +92,8 @@ export function BotRail({
         (filter === "unread" && unreadOf(item.instance, item.id) > 0),
     );
   const searching = query.trim() !== "";
+  const taskViews = useTaskViews(fleetId);
+  const tasksOf = new Map(tasks.map((entry) => [railKey(entry.instance, entry.bot), entry]));
   const prefs = useRailPrefs(fleetId);
   const pinned = new Set(prefs.pinned);
   const collapsed = new Set(prefs.collapsed);
@@ -113,6 +122,7 @@ export function BotRail({
   const row = (bot: BotView, inPinned: boolean) => {
     const unread = railUnread(bot, unreadOf(bot.instance, bot.name));
     const isPinned = pinned.has(railKey(bot.instance, bot.name));
+    const progress = railTasks(tasksOf.get(railKey(bot.instance, bot.name)), taskViews, now);
     return (
       <div className="bm-row" key={`${bot.instance}/${bot.name}`}>
         <button
@@ -164,6 +174,7 @@ export function BotRail({
               </span>
             ) : null}
           </span>
+          {progress ? <RailTaskBar {...progress} /> : null}
         </button>
         {/* A sibling, not a child: a button inside a button is not a button. */}
         <button

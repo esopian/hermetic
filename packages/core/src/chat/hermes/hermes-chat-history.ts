@@ -18,6 +18,7 @@ import {
 } from "./hermes-chat-types.ts";
 import type { ChatConnection } from "./hermes-chat-connect.ts";
 import { chatFailure, mapUsage, toolBlock } from "./hermes-chat-blocks.ts";
+import { TODO_TOOL_NAMES } from "./hermes-chat-todos.ts";
 import { subagentVerdict } from "./hermes-chat-subagent.ts";
 import { memberRef } from "./hermes-chat-roster.ts";
 import { stripBotDelivery } from "./bot-delivery.ts";
@@ -812,6 +813,8 @@ function durableHistoryBlocks(
         status: metadata?.status,
       },
       null,
+      // Only a result paired with the assistant's own todo call carries a list.
+      TODO_TOOL_NAMES.has(str(fn?.name)?.toLowerCase() ?? ""),
     );
     const lower = name.toLowerCase();
     if (lower === "delegate_task") return [tool, ...settledDelegation(id, args, result)];

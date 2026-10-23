@@ -262,6 +262,9 @@ const EXPECTED: Record<string, string> = {
   "Text secret": "tool:secret_request",
   "Text secret, several keys": "tool:secret_request",
   "Request times out": "tool:file_request",
+  "Plan a task list": "tool:null",
+  "Finish the list": "text",
+  "Plan, slowly": "tool:null",
 };
 
 function expectedKind(p: DemoPrompt): string {
@@ -286,6 +289,7 @@ describe("FIXTURE_DEMO_PROMPTS", () => {
       "Subagents",
       "Errors",
       "Files",
+      "Tasks",
     ]);
     const prompts = FIXTURE_DEMO_PROMPTS.map((p) => p.prompt);
     expect(new Set(prompts).size).toBe(prompts.length);

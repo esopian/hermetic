@@ -17,6 +17,7 @@ import { failureOf } from "../client/chat-recovery.ts";
 import { closedRequests, keepsCard, openRequests } from "../client/chat-requests.ts";
 import type { TurnRow as TurnRowType } from "../client/chat-turns.ts";
 import { isLocal } from "../client/conversation-store.ts";
+import { isTodoStep } from "../client/task-list.ts";
 import type { TurnActivity } from "../client/turn-reducer.ts";
 import type { ChatMessage } from "@hermetic/core/chat-client";
 import { useTheme } from "../theme/theme.tsx";
@@ -25,6 +26,7 @@ import { Text } from "../ui/Text.tsx";
 import { ActivityGroup } from "./blocks/Activity.tsx";
 import { Block } from "./blocks/Block.tsx";
 import { FailureCard } from "./blocks/Failure.tsx";
+import { TaskChange } from "./blocks/TaskChange.tsx";
 import { PlainText } from "./PlainText.tsx";
 import { chatTime } from "./time.ts";
 
@@ -206,7 +208,7 @@ function TurnRowImpl({
       ),
   );
   const pending = open.filter((b) => b.kind === "approval").length;
-  const list = sections(blocks);
+  const list = sections(blocks, streaming);
   const live = activeGroup(list, streaming, activity, waiting);
   const meta = [
     chatTime(message.at, now),
@@ -241,6 +243,8 @@ function TurnRowImpl({
             waiting={waiting}
             turnRunning={streaming}
           />
+        ) : section.blocks[0] && isTodoStep(section.blocks[0]) ? (
+          <TaskChange key={`b${index}`} block={section.blocks[0]} />
         ) : (
           <Block
             key={`b${index}`}

@@ -126,7 +126,8 @@ describe("@hermetic/core/shared is browser-safe", () => {
     // Nor is anything under `shared/avatar/`: no schema draws a face. The
     // desktop page and the phone read the seed and geometry through the shared
     // door, and only `style.ts` is reached by a schema (`schema/mobile.ts`, the
-    // pairing link's style choice).
+    // pairing link's style choice). Nor is `todos.ts`: the heads read the task
+    // list through the shared and chat-client doors; no schema computes one.
     const schemaReach = new Set(reachable(join(ROOT, "src/schema/index.ts")));
     for (const path of modules) {
       if (
@@ -134,6 +135,7 @@ describe("@hermetic/core/shared is browser-safe", () => {
         path.endsWith("/tailscale-urls.ts") ||
         path.endsWith("/shared/sha256.ts") ||
         path.endsWith("/shared/expo-push.ts") ||
+        path.endsWith("/shared/todos.ts") ||
         (path.includes("/shared/avatar/") && !path.endsWith("/shared/avatar/style.ts"))
       )
         continue;

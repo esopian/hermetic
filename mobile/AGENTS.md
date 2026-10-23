@@ -50,7 +50,9 @@ everything from `mobile/` with bun. Run `bun install` at the repo root first: Me
   grammar in `src/fixture/drive.ts`), and the chat link takes
   `?attach=image,file` (the kit's canned files into the tray), `?paste=image` (the kit's canned
   clipboard picture through the composer's paste path), `&send=<text>` (sent as the Send
-  button does) and `?attachSheet=1` (opens the attach sheet). Nothing
+  button does), `?attachSheet=1` (opens the attach sheet) and `?tasks=fold|sheet` (the task strip
+  folded, or the Tasks sheet open; `E2E_TODO_SLOW` in a prompt keeps a task list running long
+  enough to look at). Nothing
   outside `src/fixture/` may know about it.
 - Real: the Tailscale app signed into the fleet's tailnet, then scan the QR from
   `hermetic mobile pair` (or paste the link). The link carries no secret. There is no token on the

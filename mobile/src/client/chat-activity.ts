@@ -14,6 +14,7 @@ import type { ChatBlock, SubagentBlock } from "@hermetic/core/chat-client";
 import { isRequestTool } from "./file-request-logic.ts";
 import { isDmTool } from "./message-agent.ts";
 import { isShareTool } from "./share-logic.ts";
+import { isTodoNotice, isTodoStep } from "./task-list.ts";
 import type { TurnActivity } from "./turn-reducer.ts";
 
 /* ── which blocks are run machinery ──────────────────────────────────────── */
@@ -72,16 +73,27 @@ export interface Section {
   blocks: ChatBlock[];
 }
 
-/** Split a turn's blocks into sections, the desktop's way (`Message.tsx`). */
-export function sections(blocks: readonly ChatBlock[]): Section[] {
+/**
+ * Split a turn's blocks into sections, the desktop's way (`Message.tsx`).
+ * `todosApart`: the turn is running, so each todo call is its own one-line
+ * Tasks row; once it settles they stay steps of their run. The `todo.updated`
+ * notice and the resume seed restate a call and are never drawn.
+ */
+export function sections(blocks: readonly ChatBlock[], todosApart = false): Section[] {
   const out: Section[] = [];
   let run: Section | null = null;
   for (const block of blocks) {
+    if (isTodoNotice(block)) continue;
     // A file or secret request is a card the operator answers, a shared file
     // is a card with Save, and a bot-to-bot DM is a line between the prose:
     // none is a step folded into "Tools complete". Each stands alone and
     // closes the run.
-    if (isRequestTool(block) || isShareTool(block) || isDmTool(block)) {
+    if (
+      isRequestTool(block) ||
+      isShareTool(block) ||
+      isDmTool(block) ||
+      (todosApart && isTodoStep(block))
+    ) {
       out.push({ activity: false, blocks: [block] });
       run = null;
       continue;
@@ -115,7 +127,12 @@ export function activeGroup(
       break;
     }
   const trailingNotices =
-    lastActivity >= 0 && list.slice(lastActivity + 1).every((s) => s.blocks[0]?.kind === "activity");
+    lastActivity >= 0 &&
+    list.slice(lastActivity + 1).every((s) => {
+      const first = s.blocks[0];
+      // A Tasks row after the run is part of it, like a notice.
+      return first?.kind === "activity" || (!!first && isTodoStep(first));
+    });
   return trailingNotices || (streaming && (activity === "thinking" || waiting))
     ? lastActivity
     : list.length - 1;
@@ -209,7 +226,11 @@ export function groupSummary(
   const kids = all.filter((b): b is SubagentBlock => b.kind === "subagent");
   const kidsRunning = kids.filter((k) => k.verdict === "running" && k.status !== "dispatched").length;
   const kidsFailed = kids.some((k) => k.verdict === "failed");
-  const tools = steps.filter((b) => b.kind === "tool");
+  const allTools = steps.filter((b) => b.kind === "tool");
+  // A todo call is a task update, not a tool, in the head's words.
+  const updates = steps.filter(isTodoStep).length;
+  const tools = allTools.filter((b) => !isTodoStep(b));
+  const finished = tools.length ? "Tools complete" : updates ? "Tasks updated" : null;
   const latest = steps[steps.length - 1];
   const working =
     !!latest &&
@@ -223,8 +244,8 @@ export function groupSummary(
     (streaming
       ? [...snapshots].reverse().find((b) => b.kind === "activity" && b.state === "running")
       : undefined) ?? (steps.length === 0 ? snapshots[snapshots.length - 1] : undefined);
-  const failed = tools.some((b) => b.kind === "tool" && b.status === "bad");
-  const warning = tools.some((b) => b.kind === "tool" && b.status === "warn");
+  const failed = allTools.some((b) => b.kind === "tool" && b.status === "bad");
+  const warning = allTools.some((b) => b.kind === "tool" && b.status === "warn");
   const current =
     streaming && !waiting && activity !== "streaming"
       ? working && latest
@@ -234,7 +255,7 @@ export function groupSummary(
           : undefined
       : undefined;
   const allSettled =
-    tools.length > 0 && tools.every((b) => b.kind === "tool" && b.status !== "running");
+    allTools.length > 0 && allTools.every((b) => b.kind === "tool" && b.status !== "running");
   const status = failed
     ? "Tool failed"
     : warning
@@ -248,31 +269,27 @@ export function groupSummary(
             : streaming
               ? activity === "streaming"
                 ? allSettled
-                  ? "Tools complete"
+                  ? (finished ?? "Tools complete")
                   : "Responding…"
                 : (current ??
                   (working
                     ? "Working…"
                     : activity === "thinking"
                       ? "Thinking…"
-                      : tools.length
-                        ? "Tools complete"
-                        : "Thinking…"))
-              : tools.some((b) => b.kind === "tool" && b.status === "running")
+                      : (finished ?? "Thinking…")))
+              : allTools.some((b) => b.kind === "tool" && b.status === "running")
                 ? turnRunning
                   ? "Working…"
                   : "Activity stopped"
-                : tools.length
-                  ? "Tools complete"
-                  : turnRunning
-                    ? "Working…"
-                    : "Activity complete";
+                : (finished ?? (turnRunning ? "Working…" : "Activity complete"));
+  const others = steps.length - updates;
   const count = [
     tools.length
       ? `${tools.length} tool${tools.length === 1 ? "" : "s"}`
-      : steps.length || !kids.length
-        ? `${steps.length} step${steps.length === 1 ? "" : "s"}`
+      : others || (!kids.length && !updates)
+        ? `${others} step${others === 1 ? "" : "s"}`
         : null,
+    updates ? `${updates} task update${updates === 1 ? "" : "s"}` : null,
     kids.length ? `${kids.length} subagent${kids.length === 1 ? "" : "s"}` : null,
   ]
     .filter(Boolean)

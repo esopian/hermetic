@@ -2,6 +2,7 @@
  * Status dot = square, 8–14px, no radius; busy states pulse (1.2 s).
  */
 import { useEffect } from "react";
+import type { ViewStyle } from "react-native";
 import Animated, {
   cancelAnimation,
   useAnimatedStyle,
@@ -18,12 +19,15 @@ export function StatusSquare({
   size = 10,
   color,
   pulse,
+  style: shape,
 }: {
   status?: string;
   size?: number;
   /** Override the status mapping. */
   color?: string;
   pulse?: boolean;
+  /** Another shape for the same mark (a task rail's cell). */
+  style?: ViewStyle;
 }) {
   const t = useTheme();
   const { reduceMotion } = useAccessibilityPreferences();
@@ -40,11 +44,11 @@ export function StatusSquare({
     }
     return () => cancelAnimation(opacity);
   }, [pulsing, opacity, t.motion.pulse, reduceMotion]);
-  const style = useAnimatedStyle(() => ({ opacity: opacity.value }));
+  const animated = useAnimatedStyle(() => ({ opacity: opacity.value }));
   return (
     <Animated.View
       accessibilityLabel={status}
-      style={[{ width: size, height: size, backgroundColor: fill }, style]}
+      style={[{ width: size, height: size, backgroundColor: fill }, shape, animated]}
     />
   );
 }

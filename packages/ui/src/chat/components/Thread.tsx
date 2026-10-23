@@ -57,6 +57,8 @@ import { SubagentScope } from "./blocks/SubagentModal.tsx";
 import { useChatIfAvailable } from "../chat-state.tsx";
 import type { SentAttachment } from "../chat-attachments.ts";
 import { useFileDrop } from "./AttachTray.tsx";
+import { TaskTranscriptContext, turnState, useTaskList } from "../task-list.ts";
+import { TaskStrip } from "./TaskStrip.tsx";
 
 /** The avatar status for a thread, read off the fleet row rather than guessed. */
 function faceStatus(agent: AgentView | null): Parameters<typeof Face>[0]["status"] {
@@ -512,6 +514,15 @@ export function Thread({
     return tail?.kind === "turn" && tail.row.message.id !== liveId ? tail.row.message.id : null;
   }, [items, liveId]);
   const working = sending || remoteBusy === true;
+  const tasks = useTaskList({
+    fleetId,
+    instance,
+    bot,
+    session: session?.id ?? null,
+    messages: all,
+    now,
+    ...turnState({ sending, remoteBusy, activity }),
+  });
   const scoped = useChatIfAvailable();
   const subagents = scoped?.subagents ?? null;
   // This pane's own drop target: a dock pane is its own scope, so a file
@@ -650,7 +661,15 @@ export function Thread({
     pin.current.following = true;
     const node = log.current;
     if (node) pinToBottom(node, pin.current);
-    return onSend(text, attachments);
+    const sent = onSend(text, attachments);
+    // Only a send that was taken clears a finished list.
+    const clear = tasks.sent;
+    // A rejected send is the caller's to report; it clears nothing here.
+    void Promise.resolve(sent).then(
+      (ok) => ok !== false && clear(),
+      () => {},
+    );
+    return sent;
   };
   sendRef.current = send;
 
@@ -781,6 +800,8 @@ export function Thread({
             </div>
           </div>
 
+          <TaskStrip tasks={tasks} />
+
           <Band
             state={state}
             instance={instance}
@@ -820,38 +841,40 @@ export function Thread({
           >
             <div className="ch-log" ref={log} data-autoscroll>
               <BotDmContext.Provider value={dm}>
-                <DisclosureContext.Provider value={disclosures}>
-                  <ProcessEventContext.Provider value={processContext}>
-                    {rows.length === 0 ? (
-                      <Empty
-                        state={state}
-                        instance={instance}
-                        bot={bot}
-                        tailnetDetail={tailnetDetail}
-                      />
-                    ) : null}
-                    {/*
+                <TaskTranscriptContext.Provider value={tasks.transcript}>
+                  <DisclosureContext.Provider value={disclosures}>
+                    <ProcessEventContext.Provider value={processContext}>
+                      {rows.length === 0 ? (
+                        <Empty
+                          state={state}
+                          instance={instance}
+                          bot={bot}
+                          tailnetDetail={tailnetDetail}
+                        />
+                      ) : null}
+                      {/*
                     Mounted even with no rows, so that the log knows its
                     viewport before the first ones arrive.
                   */}
-                    <TranscriptLog
-                      items={items}
-                      liveId={liveId}
-                      sending={sending}
-                      activity={activity}
-                      tailId={tailId}
-                      remoteBusy={remoteBusy}
-                      fleetId={fleetId}
-                      instance={instance}
-                      bot={bot}
-                      botTitle={botTitle}
-                      status={status}
-                      scroller={log}
-                      pin={pin}
-                      handle={handle}
-                    />
-                  </ProcessEventContext.Provider>
-                </DisclosureContext.Provider>
+                      <TranscriptLog
+                        items={items}
+                        liveId={liveId}
+                        sending={sending}
+                        activity={activity}
+                        tailId={tailId}
+                        remoteBusy={remoteBusy}
+                        fleetId={fleetId}
+                        instance={instance}
+                        bot={bot}
+                        botTitle={botTitle}
+                        status={status}
+                        scroller={log}
+                        pin={pin}
+                        handle={handle}
+                      />
+                    </ProcessEventContext.Provider>
+                  </DisclosureContext.Provider>
+                </TaskTranscriptContext.Provider>
               </BotDmContext.Provider>
             </div>
           </SubagentScope>

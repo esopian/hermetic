@@ -43,6 +43,8 @@ import {
 } from "./chat-attachments.ts";
 import type { SentAttachment } from "./chat-attachments.ts";
 import type { ChatArrival, Observation } from "./chat-observation.ts";
+import { conversationTasks, taskListCache } from "./task-list.ts";
+import type { TodoFound } from "@hermetic/core/shared";
 
 export { OBSERVE_QUIET_MS } from "./chat-observation.ts";
 export type { ChatArrival, Observation } from "./chat-observation.ts";
@@ -530,8 +532,11 @@ export function useConversations(
     [changed, readHistory, refreshSwarms],
   );
 
+  const refusedTasks = useRef(new Map<string, TodoFound>());
+  const taskCache = useRef(taskListCache());
   const { observe, observeDropped, observeTransport, resumeObservation } = useObservation({
     records,
+    refusedTasks,
     alive,
     apiRef,
     arrived,
@@ -1001,6 +1006,12 @@ export function useConversations(
       session: record.resolvedSession ?? record.target.session,
       activity: record.activity,
     }));
+  const taskLists = conversationTasks(
+    records.current,
+    refusedTasks.current,
+    permits,
+    taskCache.current,
+  );
   // Stable while the watch is: the provider's context value is memoised on it,
   // and a fresh object every render would make every consumer re-render.
   const observation = useMemo<Observation>(
@@ -1021,6 +1032,7 @@ export function useConversations(
   return {
     ...current,
     turnActivities,
+    taskLists,
     selection,
     select,
     send,
