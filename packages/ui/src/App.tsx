@@ -147,9 +147,8 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
   const [query, setQuery] = useState("");
   /**
    * §6.7: a destroy deletes the agent's row, so a destroyed agent is on no
-   * layout here; its tombstone and history are the Destroyed lens's. Read once
-   * up front so the toolbar's `<n> DESTROYED` has its number before the lens is
-   * opened, then again on lens entry and when a destroy settles.
+   * layout here; its tombstone and history are the Destroyed lens's. Read only
+   * while that lens is up: on entry, and again when a destroy settles.
    */
   const destroyedAudit = useDestroyedAudit(initialized, nav.fleetLens === "destroyed");
   /** The create drawer's running op, so reopening re-attaches to its stream. */
@@ -336,7 +335,7 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
   const prevFleetId = useRef(fleetId);
   /** Each agent's last settled phase, for `settleVolumes` below; forgotten on a switch. */
   const settled = useRef<ReadonlyMap<string, SettledPhase> | null>(null);
-  /** The fleet's names at the last read, for the destroyed count below; forgotten on a switch. */
+  /** The fleet's names at the last read, for the destroyed re-read below; forgotten on a switch. */
   const knownNames = useRef<ReadonlySet<string> | null>(null);
   useEffect(() => {
     const previous = prevFleetId.current;
@@ -363,8 +362,8 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
     if (changed) refreshVolumes();
   }, [fleet.scanned, fleet.agents, refreshVolumes]);
   /**
-   * A destroy settling is a new tombstone, and the toolbar shows the count on
-   * every lens, so it is read again whichever lens is up. A destroy ends by
+   * A destroy settling is a new tombstone, so an open Destroyed lens reads
+   * again (the hook ignores a refresh while the lens is down). A destroy ends by
    * deleting the row, so it shows here as a name leaving the fleet — including
    * one that never reached a settled phase, which `settleVolumes` would miss.
    */
@@ -721,8 +720,6 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
         onQuery={setQuery}
         layout={layout}
         onLayout={setLayout}
-        destroyedCount={destroyedAudit.tombstones?.length ?? null}
-        destroyedRead={destroyedAudit.hasRead}
         destroyedBusy={destroyedAudit.loading}
         onRefreshDestroyed={destroyedAudit.refresh}
         sort={sort}

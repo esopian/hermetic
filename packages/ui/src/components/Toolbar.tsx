@@ -8,10 +8,11 @@
  * its own bold label for that reason. The volumes half also carries the alert
  * the old Volumes tab's badge did (`2 free · $16/mo`), in the accent colour.
  *
- * The third half, `DESTROYED`, is the audit lens (`#fleet/destroyed`): a
- * destroy deletes the agent's row (§6.7), so a destroyed agent is never on the
- * agents lens, and its tombstone is reviewed there instead. Its count is read
- * up front like the other two, so the headline never grows a number on click.
+ * The destroyed-agent audit (`#fleet/destroyed`) is a third lens with no half
+ * in the switch: a destroy deletes the agent's row (§6.7), so its tombstone is
+ * reviewed there, but that is rarely wanted. A muted `destroyed agents` link at
+ * the end of the agents legend opens it, with no count, so nothing is read
+ * until it is opened; on the lens, the headline is `‹ Fleet` and its title.
  *
  * The toolbar is two rows: the kicker and the switch across the full width
  * (`.toolbar-head`), so the headline never wraps to make room for controls;
@@ -58,8 +59,6 @@ export function Toolbar({
   onQuery,
   layout,
   onLayout,
-  destroyedCount = null,
-  destroyedRead = false,
   destroyedBusy = false,
   onRefreshDestroyed,
   sort = null,
@@ -90,10 +89,6 @@ export function Toolbar({
   onQuery: (v: string) => void;
   layout: Layout;
   onLayout: (l: Layout) => void;
-  /** Tombstones last read; `null` before the first read comes back, or when it failed. */
-  destroyedCount?: number | null;
-  /** A read of `agents.destroyed` has come back, good or failed (`—` rather than `···`). */
-  destroyedRead?: boolean;
   /** The Destroyed lens is reading `agents.destroyed`. */
   destroyedBusy?: boolean;
   onRefreshDestroyed?: () => void;
@@ -117,36 +112,39 @@ export function Toolbar({
       <div className="toolbar-head">
         <div className="kicker">Fleet · {region}</div>
         <div className="lens-switch" role="group" aria-label="Fleet lens">
-          <button type="button" aria-pressed={lens === "agents"} onClick={() => onLens("agents")}>
-            {scanning ? <Skel w="48px" h={26} /> : <b>{counts.total}</b>} agents
-          </button>
-          <button type="button" aria-pressed={lens === "volumes"} onClick={() => onLens("volumes")}>
-            {volumeSummary ? (
-              <b>{volumeSummary.total}</b>
-            ) : (
-              <b className={volumesRead ? "lens-pending lens-failed" : "lens-pending"}>
-                {volumesRead ? "—" : "···"}
-              </b>
-            )}{" "}
-            volumes{" "}
-            {loose > 0 ? (
-              <em>
-                {loose} free · ${looseMonthly.toFixed(0)}/mo
-              </em>
-            ) : !volumesRead && volumeSummary === null ? (
-              <em className="lens-pending">{VOLUME_BADGE_PENDING}</em>
-            ) : null}
-          </button>
-          <button type="button" aria-pressed={lens === "destroyed"} onClick={() => onLens("destroyed")}>
-            {destroyedCount !== null ? (
-              <b>{destroyedCount}</b>
-            ) : (
-              <b className={destroyedRead ? "lens-pending lens-failed" : "lens-pending"}>
-                {destroyedRead ? "—" : "···"}
-              </b>
-            )}{" "}
-            destroyed
-          </button>
+          {lens === "destroyed" ? (
+            <>
+              <button type="button" aria-pressed={false} onClick={() => onLens("agents")}>
+                <span aria-hidden="true">‹</span> Fleet
+              </button>
+              <button type="button" aria-pressed={true}>
+                destroyed agents
+              </button>
+            </>
+          ) : (
+            <>
+              <button type="button" aria-pressed={lens === "agents"} onClick={() => onLens("agents")}>
+                {scanning ? <Skel w="48px" h={26} /> : <b>{counts.total}</b>} agents
+              </button>
+              <button type="button" aria-pressed={lens === "volumes"} onClick={() => onLens("volumes")}>
+                {volumeSummary ? (
+                  <b>{volumeSummary.total}</b>
+                ) : (
+                  <b className={volumesRead ? "lens-pending lens-failed" : "lens-pending"}>
+                    {volumesRead ? "—" : "···"}
+                  </b>
+                )}{" "}
+                volumes{" "}
+                {loose > 0 ? (
+                  <em>
+                    {loose} free · ${looseMonthly.toFixed(0)}/mo
+                  </em>
+                ) : !volumesRead && volumeSummary === null ? (
+                  <em className="lens-pending">{VOLUME_BADGE_PENDING}</em>
+                ) : null}
+              </button>
+            </>
+          )}
         </div>
       </div>
       <div className="toolbar-legend">
@@ -158,6 +156,7 @@ export function Toolbar({
             looseMonthly={looseMonthly}
             showVolumes={showVolumes}
             onShowVolumes={onShowVolumes}
+            onDestroyed={() => onLens("destroyed")}
           />
         ) : lens === "volumes" ? (
           <VolumeLegend volumes={volumes} summary={volumeSummary} scan={volumeScan} />
@@ -266,6 +265,7 @@ function AgentLegend({
   looseMonthly,
   showVolumes,
   onShowVolumes,
+  onDestroyed,
 }: {
   counts: Counts;
   scanning: boolean;
@@ -273,6 +273,7 @@ function AgentLegend({
   looseMonthly: number;
   showVolumes: boolean;
   onShowVolumes: (v: boolean) => void;
+  onDestroyed: () => void;
 }) {
   if (scanning) {
     return (
@@ -321,6 +322,9 @@ function AgentLegend({
           <EyeIcon open={showVolumes} />
         </button>
       ) : null}
+      <button type="button" className="legend legend-link legend-quiet mono" onClick={onDestroyed}>
+        destroyed agents <span aria-hidden="true">›</span>
+      </button>
     </div>
   );
 }
