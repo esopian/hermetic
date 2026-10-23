@@ -13,6 +13,8 @@ import { ToolBlock } from "./blocks/Tool.tsx";
 import { SubagentGroup } from "./blocks/Subagent.tsx";
 import { dispatchedOnly, isSubagent, subagentLayout } from "../chat-subagents.ts";
 import { useDisclosure, useRowPosition } from "../disclosures.ts";
+import { todoDiff, todoFraction } from "@hermetic/core/shared";
+import { todoStepKey, useTaskTranscript } from "../task-list.ts";
 
 export function isActivity(block: ChatBlockView): boolean {
   return ["activity", "tool", "reasoning", "subagent", "unknown"].includes(block.kind);
@@ -299,6 +301,36 @@ function Step({
   );
 }
 
+/** A todo call: what it changed in the list, one line that opens the task sheet. */
+function TodoStep({
+  block,
+  streaming,
+  remoteBusy,
+}: {
+  block: ChatBlockOf<"tool">;
+  streaming: boolean;
+  remoteBusy?: boolean | null;
+}) {
+  const tasks = useTaskTranscript();
+  const todos = block.todos;
+  if (!todos) return null;
+  const prev = tasks?.prevOf.get(todoStepKey(block)) ?? null;
+  return (
+    <button type="button" className="ch-activity-todo" onClick={tasks?.show}>
+      <span
+        className={`ch-activity-glyph ${stepStatus(block, streaming, remoteBusy).tone}`}
+        aria-hidden="true"
+      >
+        ▤
+      </span>
+      <span className="ch-activity-todo-diff">
+        <RedactedText text={todoDiff(prev, todos)} />
+      </span>
+      {todos.revision === null ? null : <span>{`rev ${todos.revision}`}</span>}
+    </button>
+  );
+}
+
 interface ActivityGroupProps {
   blocks: ChatBlockView[];
   streaming: boolean;
@@ -382,6 +414,9 @@ function ActivityGroupView({
   const kidsRunning = kids.filter((kid) => kid.verdict === "running" && !dispatchedOnly(kid)).length;
   const kidsFailed = kids.some((kid) => kid.verdict === "failed");
   const tools = steps.filter((block) => block.kind === "tool");
+  const lastTodos = tools.findLast((block) => block.kind === "tool" && block.todos);
+  const taskCount =
+    lastTodos?.kind === "tool" && lastTodos.todos ? todoFraction(lastTodos.todos) : null;
   // Whether the run's last step is still going. Its name is not read from here
   // — the step itself names it, and so does the status line under the list.
   const latest = steps[steps.length - 1];
@@ -480,6 +515,7 @@ function ActivityGroupView({
                 ? `${steps.length} step${steps.length === 1 ? "" : "s"}`
                 : null,
             kids.length ? `${kids.length} subagent${kids.length === 1 ? "" : "s"}` : null,
+            taskCount ? `tasks ${taskCount.done}/${taskCount.total}` : null,
           ]
             .filter(Boolean)
             .join(" · ")}
@@ -500,12 +536,16 @@ function ActivityGroupView({
             block.kind === "tool" && block.tool_id ? layout.byTool.get(block.tool_id) : undefined;
           return [
             <li key={key}>
-              <Step
-                id={`${group}/${key}`}
-                block={block}
-                streaming={streaming}
-                remoteBusy={remoteBusy}
-              />
+              {block.kind === "tool" && block.todos ? (
+                <TodoStep block={block} streaming={streaming} remoteBusy={remoteBusy} />
+              ) : (
+                <Step
+                  id={`${group}/${key}`}
+                  block={block}
+                  streaming={streaming}
+                  remoteBusy={remoteBusy}
+                />
+              )}
             </li>,
             ...(children
               ? [

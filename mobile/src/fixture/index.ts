@@ -332,6 +332,11 @@ export const FIXTURE_DEMO_PROMPTS: readonly DemoPrompt[] = [
     prompt: "I need the keys E2E_TEXT_SECRET_MULTI",
   },
   { group: "Files", label: "Request times out", prompt: "I need the log E2E_FILE_REQUEST_TIMEOUT" },
+  // The task list (`fixture-chat-todos.ts`): plan and advance it, finish it,
+  // or plan it 30 s a step so the running strip can be looked at.
+  { group: "Tasks", label: "Plan a task list", prompt: "Change the snapshot policy E2E_TODO" },
+  { group: "Tasks", label: "Finish the list", prompt: "Wrap it up E2E_TODO_DONE" },
+  { group: "Tasks", label: "Plan, slowly", prompt: "Change the snapshot policy E2E_TODO_SLOW" },
 ];
 
 /* ── the demo gallery bot ───────────────────────────────────────────────── */

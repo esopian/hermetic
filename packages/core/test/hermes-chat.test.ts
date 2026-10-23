@@ -359,6 +359,55 @@ describe("hermes-chat · prompt capability", () => {
     expect(resumed.sockets[0]?.sent.some((call) => call.method === "session.create")).toBe(false);
   });
 
+  test("a resumed session's todo_state leads the turn", async () => {
+    const todo_state = { todos: [{ id: "1", content: "Plan", status: "in_progress" }], revision: 2 };
+    const resumed = harness({
+      results: {
+        "session.resume": { session_id: "runtime-1", running: false, info: {}, todo_state },
+        "prompt.submit": PROMPT_SUBMIT_RESULT,
+      },
+    });
+    const turn = createHermesChat(resumed.deps)
+      .send(BOX, "default", "again", { session: "durable-1" })
+      [Symbol.asyncIterator]();
+    let first: ChatFrame | undefined;
+    for (let i = 0; i < 10 && !first; i += 1) {
+      const next = await turn.next();
+      if (next.done) break;
+      // The connection and queue cards are the adapter's own; the seed leads the turn's content.
+      const block = next.value.type === "block" ? next.value.block : null;
+      if (block && !(block.kind === "activity" && ["connection", "queue"].includes(block.category)))
+        first = next.value;
+    }
+    await turn.return?.();
+    expect(first?.type === "block" ? first.block : null).toMatchObject({
+      kind: "activity",
+      key: "tasks",
+      title: "Task list",
+      role: "status",
+      todos: { revision: 2, todos: [{ id: "1", status: "active" }] },
+    });
+  });
+
+  test("a todo.updated that does not parse leaves no block, a good one a notice", async () => {
+    const good = { todos: [{ id: "1", content: "Plan", status: "pending" }], revision: 1 };
+    const h = harness(
+      turnScript([
+        eventFrame("todo.updated", 2, { todos: "nope", revision: 1 }),
+        eventFrame("todo.updated", 3, good),
+        eventFrame("message.complete", 4, { text: "ok", status: "complete" }),
+      ]),
+    );
+    const frames = await collect(createHermesChat(h.deps).send(BOX, "default", "hi"));
+    const tasks = blocks(frames).filter(
+      (b) =>
+        (b.kind === "activity" && b.key === "tasks") ||
+        (b.kind === "unknown" && b.name === "todo.updated"),
+    );
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({ detail: "1 tasks", todos: { revision: 1 } });
+  });
+
   test("a gateway that predates the method still runs the turn", async () => {
     const h = harness({
       ...turnScript(RECORDED_TURN),

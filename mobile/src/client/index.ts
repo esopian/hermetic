@@ -12,7 +12,8 @@
  * - `chat` — `ConversationStore`: one conversation's transcript, live reply,
  *   queue, requests and observation. `view/subscribe/open/leave/reload/send/
  *   steer/stop/enqueue/unqueue/sendMessage/sendNow/respond/release`, and
- *   `reopen` (restart one conversation's observation, e.g. on foreground).
+ *   `reopen` (restart one conversation's observation, e.g. on foreground),
+ *   and `views` (every conversation held, for home's task tags).
  *   `suspend`/`resume`/`endObservations` are the client's (phase, listening),
  *   as are `turnTarget`/`onTurnRemote`/`onRemoteDone`: a turn still running
  *   on its box after the app was away, shown by `view.remote` (`RemoteBand`).

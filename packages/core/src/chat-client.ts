@@ -82,6 +82,26 @@ export { HermeticError, hasCode, isHermeticError } from "./errors.ts";
 export type { ErrorCode } from "./shared/error-codes.ts";
 export { abortableSleep, checkAbort } from "./abort.ts";
 
+// --- Hermes's task list (§9.2) ------------------------------------------
+export {
+  latestTodoList,
+  todoAge,
+  todoDiff,
+  todoFraction,
+  todoLifecycle,
+  todoRunning,
+  todoSupersedes,
+} from "./shared/todos.ts";
+export type {
+  TodoFound,
+  TodoItemLike,
+  TodoLifecycle,
+  TodoMessageLike,
+  TodoPhase,
+  TodoSnapshotLike,
+  TodoView,
+} from "./shared/todos.ts";
+
 // --- The chat wire types (§9.2) ------------------------------------------
 import type { ChatBlock, ChatFrame } from "./schema/chat.ts";
 
@@ -110,6 +130,8 @@ export type {
   SubagentStatus,
   SubagentVerdict,
   Swarm,
+  TodoItem,
+  TodoSnapshot,
   ToolRender,
   ToolStatus,
 } from "./schema/chat.ts";

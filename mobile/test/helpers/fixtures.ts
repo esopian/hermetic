@@ -47,6 +47,30 @@ export const tool = (over: Partial<ToolBlock> = {}): ToolBlock => ({
   ...over,
 });
 
+type TodoStatus = "done" | "active" | "pending" | "cancelled";
+
+/** A finished `todo_list` call leaving `items` (`[id, content, status, parent?]`) at `revision`. */
+export const todoTool = (
+  items: readonly (readonly [string, string, TodoStatus, string?])[],
+  revision: number | null = 1,
+  over: Partial<ToolBlock> = {},
+): ToolBlock =>
+  tool({
+    tool_id: `todo-${revision ?? "x"}`,
+    name: "todo_list",
+    status: "ok",
+    todos: {
+      todos: items.map(([id, content, status, parent]) => ({
+        id,
+        content,
+        status,
+        ...(parent ? { parent } : {}),
+      })),
+      revision,
+    },
+    ...over,
+  });
+
 export const approval = (over: Partial<ApprovalBlock> = {}): ApprovalBlock => ({
   kind: "approval",
   tool: "terminal",

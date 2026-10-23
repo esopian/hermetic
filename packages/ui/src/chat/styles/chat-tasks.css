@@ -1,0 +1,385 @@
+/* Hermes's task list (§9.2 Task list): the strip pinned under the thread
+   header, the sheet over the transcript, the rail row's bottom bar and the
+   transcript's todo step. Existing tokens only; zero radius. */
+
+.tl-pin {
+  flex: none;
+  position: relative;
+}
+.tl-strip {
+  all: unset;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  height: 44px;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg2);
+  cursor: pointer;
+}
+.tl-strip:hover,
+.tl-strip[aria-expanded="true"],
+.tl-strip.folded:hover {
+  background: var(--sel);
+}
+.tl-strip:focus-visible,
+.tl-line:focus-visible,
+.tl-hide:focus-visible,
+.tl-link:focus-visible,
+.ch-activity-todo:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: -2px;
+}
+/* The ring is the whole folded strip's, which is what the line's button opens.
+   Its own rule: an engine without `:has` drops it and keeps the line's ring. */
+@supports selector(:has(*)) {
+  .tl-strip.folded:has(.tl-line:focus-visible) {
+    outline: 2px solid var(--acc);
+    outline-offset: -2px;
+  }
+  .tl-strip.folded .tl-line:focus-visible {
+    outline: none;
+  }
+}
+.tl-strip .kicker {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg3);
+}
+.tl-frac {
+  font-size: 13px;
+}
+.tl-mid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.tl-now {
+  font-size: 12.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tl-now.idle,
+.tl-parent {
+  color: var(--text-muted);
+}
+.tl-sum {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.tl-caret {
+  margin-left: 6px;
+}
+
+/* Segmented bars: the strip's and the rail's share their cells. */
+.tl-bar,
+.tl-rail-bar {
+  display: flex;
+  gap: 2px;
+}
+.tl-bar i,
+.tl-rail-bar i {
+  flex: 1;
+  height: 5px;
+  background: var(--line2);
+}
+.tl-bar i.done,
+.tl-rail-bar i.done {
+  background: var(--ok);
+}
+.tl-bar i.active,
+.tl-rail-bar i.active {
+  background: var(--fg2);
+}
+.tl-bar.live i.active,
+.tl-rail-bar.live i.active {
+  background: var(--acc);
+  animation: hpulse 1.2s infinite;
+}
+
+/* Paused and finished fold to one line over the bar, at the full strip's
+   height so the thread never moves when the state changes. The line's button
+   is stretched over the whole strip (bar included); Hide sits above it. */
+.tl-strip.folded {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: stretch;
+  gap: 4px;
+  padding: 0 20px;
+}
+.tl-fold {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  height: 24px;
+}
+.tl-line,
+.tl-link {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+.tl-line {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--fg2);
+}
+.tl-line::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+.tl-mark {
+  flex: none;
+  align-self: center;
+  width: 8px;
+  height: 8px;
+  background: var(--fg3);
+}
+.tl-strip.finished .tl-mark {
+  background: var(--ok);
+}
+.tl-fold .tl-frac {
+  flex: none;
+  font-weight: 700;
+  color: var(--fg);
+}
+.tl-fold .tl-now {
+  flex: 1;
+  min-width: 0;
+  color: var(--fg);
+}
+.tl-meta {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.tl-note {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tl-fold .tl-caret {
+  flex: none;
+  margin-left: 0;
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: 1;
+  color: var(--fg2);
+}
+.tl-strip .tl-ok {
+  color: var(--text-ok, var(--ok));
+}
+/* Hide is a `.ch-chip`, positioned so it sits above the stretched line button. */
+.tl-hide {
+  position: relative;
+  flex: none;
+}
+
+/* The sheet overlays the top of the thread; the transcript under it does not move. */
+.tl-sheet {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 15;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.35);
+  /* Drops in from under the strip; polish.css drops the motion under reduced motion. */
+  animation: tl-drop var(--motion-enter) var(--ease-ui);
+}
+@keyframes tl-drop {
+  from {
+    transform: translateY(-6px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+.tl-sheet-body {
+  max-height: 46vh;
+  overflow: auto;
+  /* The items' squares (6px into each row) line up with the strip's square. */
+  padding: 12px 14px 8px;
+}
+.tl-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+/* The guide runs under the centre of the parent's 12px square (6px in, plus 6). */
+.tl-tree.tl-sub {
+  margin-left: 12px;
+  padding-left: 10px;
+  border-left: 1px solid var(--line2);
+}
+.tl-item {
+  display: flex;
+  gap: 9px;
+  padding: 4px 6px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+.tl-item.done,
+.tl-item.cancelled {
+  color: var(--text-muted);
+}
+.tl-item.cancelled .tl-text {
+  text-decoration: line-through;
+}
+.tl-item.active {
+  font-weight: 700;
+}
+.tl-sq {
+  flex: none;
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1;
+  border: 2px solid var(--line2);
+}
+.tl-sq.done {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: var(--bg);
+}
+.tl-sq.active {
+  border-color: var(--fg2);
+}
+.tl-sq.active.live {
+  background: var(--acc);
+  border-color: var(--acc);
+  animation: hpulse 1.2s infinite;
+}
+.tl-sq.cancelled {
+  color: var(--fg3);
+}
+.tl-sheet-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  align-items: center;
+  padding: 8px 20px 10px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.tl-sheet-foot > span,
+.tl-link {
+  white-space: nowrap;
+}
+.tl-link {
+  color: var(--fg2);
+  text-decoration: underline;
+}
+.tl-link:hover {
+  color: var(--fg);
+}
+.tl-close {
+  margin-left: auto;
+}
+
+/* The chat's soft skin (always on in the chat) sets the thread's inline gutter
+   to 26px: the header, bands and messages. The strip and the sheet's squares
+   and footer sit on it too. */
+[data-skin="soft"] .tl-strip,
+[data-skin="soft"] .tl-strip.folded {
+  padding-left: 26px;
+  padding-right: 26px;
+}
+[data-skin="soft"] .tl-sheet-body {
+  padding-left: 20px;
+  padding-right: 20px;
+}
+[data-skin="soft"] .tl-sheet-foot {
+  padding-left: 26px;
+  padding-right: 26px;
+}
+
+/* The rail row's bar, on its bottom edge under the text column. Placed on the
+   row's grid from the text column to its end, so it follows every row
+   variant's padding (.in-bucket, .in-section, the soft skin); an
+   absolutely positioned grid child takes that area as its containing block,
+   and its auto rows reach the padding edge. */
+.ch-conv {
+  position: relative;
+}
+.tl-rail {
+  position: absolute;
+  grid-column: 2 / -1;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+.tl-rail-bar {
+  gap: 1px;
+}
+.tl-rail-bar i {
+  height: 3px;
+}
+.tl-rail.paused .tl-rail-bar {
+  opacity: 0.45;
+}
+.tl-rail.finished .tl-rail-bar i {
+  background: var(--ok);
+}
+
+/* A todo call in the transcript: what it changed, never its JSON. Drawn on
+   the run group's step grid: the same glyph column, type and padding as a
+   tool step's summary, `rev N` where a step puts its status. */
+.ch-activity-todo {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: baseline;
+  width: 100%;
+  min-height: 30px;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+.ch-activity-todo:hover {
+  background: var(--bg2);
+}
+.ch-activity-todo-diff {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ch-activity-todo > span:last-child:not(.ch-activity-todo-diff) {
+  margin-left: 12px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--fg3);
+  white-space: nowrap;
+}

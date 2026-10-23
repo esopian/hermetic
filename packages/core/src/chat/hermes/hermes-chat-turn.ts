@@ -22,6 +22,7 @@ import {
 } from "./hermes-chat-types.ts";
 import { createConnectionGate, hermesActivity, hermesRequest } from "./hermes-chat-activity.ts";
 import { chatFailure, contextUsageBlock, mapUsage, toolBlock } from "./hermes-chat-blocks.ts";
+import { todoSeedBlock } from "./hermes-chat-todos.ts";
 import { createTurnResume, reconnectBlock, type TurnPump } from "./hermes-chat-resume.ts";
 import { advertiseServerRequests, type Rpc } from "./hermes-chat-rpc.ts";
 import { turnTrace, type TurnTrace } from "./hermes-chat-devtap.ts";
@@ -186,7 +187,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
     bot: string,
     stored: string,
     signal: AbortSignal | undefined,
-  ): Promise<{ runtime: string; info: Record<string, unknown> | null }> {
+  ): Promise<{ runtime: string; info: Record<string, unknown> | null; seed: ChatBlock | null }> {
     const result = rec(
       await rpc.request(
         "session.resume",
@@ -207,7 +208,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
         CHAT_ERROR_CODES.PROTOCOL,
         `${box.instance}: session.resume named no runtime session`,
       );
-    return { runtime, info: rec(result?.info) };
+    return { runtime, info: rec(result?.info), seed: todoSeedBlock(result?.todo_state) };
   }
 
   async function* turn(
@@ -304,10 +305,11 @@ export function createChatTurn(deps: ChatTurnDeps) {
       let session: string;
       let stored = opts.session ?? null;
       let info: Record<string, unknown> | null;
+      let seed: ChatBlock | null = null;
       if (opts.session) {
         // On a held socket as well as a fresh one: this is the re-attach, and
         // its `info` is what `contextUsageBlock` reads below.
-        ({ runtime: session, info } = await resume(rpc, box, bot, opts.session, opts.signal));
+        ({ runtime: session, info, seed } = await resume(rpc, box, bot, opts.session, opts.signal));
         lease.keep(opts.session, session);
         rpc.tap?.conn("session.resume", { runtime: session, stored: opts.session, info }, "in");
       } else {
@@ -343,6 +345,8 @@ export function createChatTurn(deps: ChatTurnDeps) {
       // tick. Adapter-minted, so `seq: 0`, like the status frames.
       const known = contextUsageBlock(info);
       if (known) yield { type: "block", seq: 0, message, block: known };
+      // The task list the resumed session already holds, so a head shows it now.
+      if (seed) yield { type: "block", seq: 0, message, block: seed };
       // After the session, because the command layer runs against one; before
       // anything that belongs to a model turn. A command answered in full ends
       // the turn here with no prompt submitted; `send`/`skill` come back as
@@ -890,6 +894,11 @@ export function createChatTurn(deps: ChatTurnDeps) {
         yield { type: "block", seq, message, block: activity };
         continue;
       }
+      // A task list that does not parse is no list, and no card either.
+      if (type === "todo.updated") {
+        trace?.drop("internal");
+        continue;
+      }
 
       switch (type) {
         case "message.start": {
@@ -1036,7 +1045,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
           seenContent = true;
           yield* flushReasoning(seq);
           yield* flushMedia(seq);
-          const mapped = toolBlock(payload, type === "tool.start" ? "running" : null);
+          const mapped = toolBlock(payload, type === "tool.start" ? "running" : null, true);
           const tool = mapped.kind === "tool" ? requests.tool(mapped) : mapped;
           // A `delegate_task` call is what its children are matched against.
           delegation.tool(tool);

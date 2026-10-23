@@ -34,6 +34,8 @@ import { observeSubagent, reapplySubagents, takeSubagents } from "./chat-subagen
 import { reuseMessages } from "./chat-message-identity.ts";
 import { mergeAttachments } from "./chat-attachments.ts";
 import { noteBusy } from "./chat-remote-busy.ts";
+import { stashTasks } from "./task-list.ts";
+import type { TodoFound } from "@hermetic/core/shared";
 
 /**
  * How long a `reconnecting` advisory stands before it decays back to `live`.
@@ -93,6 +95,8 @@ interface Cell<T> {
 /** What the observation callbacks close over: the store's refs and its stable callbacks. */
 export interface ObservationDeps {
   records: Cell<Map<string, Conversation>>;
+  /** Task lists from snapshots refused before the listening set was read (`task-list.ts`). */
+  refusedTasks: Cell<Map<string, TodoFound>>;
   alive: Cell<boolean>;
   apiRef: Cell<ChatApi>;
   arrived: Cell<((arrival: ChatArrival) => void) | undefined>;
@@ -111,6 +115,7 @@ const REREAD_WIDTH = 2;
 
 export function useObservation({
   records,
+  refusedTasks,
   alive,
   apiRef,
   arrived,
@@ -139,7 +144,16 @@ export function useObservation({
    */
   const observe = useCallback(
     (conversation: ChatConversationView, event: ChatObserveView) => {
-      if (!permits(conversation.instance)) return;
+      if (!permits(conversation.instance)) {
+        if (event.type === "snapshot" && conversation.session === null)
+          stashTasks(
+            refusedTasks.current,
+            conversation.instance,
+            conversation.bot,
+            event.messages as unknown as ChatMessageView[],
+          );
+        return;
+      }
       const record = get({
         instance: conversation.instance,
         bot: conversation.bot,

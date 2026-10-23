@@ -10,6 +10,7 @@ import { Pressable, View } from "react-native";
 import { groupSummary, type StepTone, stepLabel, stepStatus } from "../../client/chat-activity.ts";
 import { fmtMs, formatPayload } from "../../client/chat-logic.ts";
 import { toolSummary } from "../../client/chat-turns.ts";
+import { isTodoStep } from "../../client/task-list.ts";
 import type { ChatBlock } from "@hermetic/core/chat-client";
 import type { TurnActivity } from "../../client/turn-reducer.ts";
 import { useTheme } from "../../theme/theme.tsx";
@@ -19,6 +20,7 @@ import { Text } from "../../ui/Text.tsx";
 import { CodePane } from "../CodePane.tsx";
 import { Label } from "./SoftCard.tsx";
 import { glyphColor, SubagentLine } from "./Subagent.tsx";
+import { TaskChange } from "./TaskChange.tsx";
 import { ToolResult } from "./Tool.tsx";
 
 function StepDetail({ block }: { block: ChatBlock }) {
@@ -196,9 +198,13 @@ export function ActivityGroup({
             borderLeftColor: t.c.line,
           }}
         >
-          {summary.steps.map((block, i) => (
-            <Step key={`${block.kind}:${i}`} block={block} streaming={streaming} />
-          ))}
+          {summary.steps.map((block, i) =>
+            isTodoStep(block) ? (
+              <TaskChange key={`${block.kind}:${i}`} block={block} nested />
+            ) : (
+              <Step key={`${block.kind}:${i}`} block={block} streaming={streaming} />
+            ),
+          )}
           {summary.kids.map((kid) => (
             <SubagentLine key={kid.subagent_id} block={kid} />
           ))}

@@ -29,6 +29,7 @@ import type { TurnPrompt } from "./chat-conversation-record.ts";
 import type { SubagentControls } from "./chat-subagent-control.ts";
 import type { Destination, RailFilter, RailScope } from "./chat-logic.ts";
 import type { ContextReading } from "./context-usage.ts";
+import type { ConversationTasks } from "./task-list.ts";
 
 /**
  * The cadences this store runs on, and the clock it runs them on, so a test
@@ -189,6 +190,8 @@ export interface Chat {
   activity: TurnActivity;
   /** Active local conversations, including those in background frames. */
   turnActivities: ConversationActivity[];
+  /** Each owned canonical conversation's current task list, for the rail (`task-list.ts`). */
+  taskLists: ConversationTasks[];
   /** The last turn's failure, cleared when the next one starts. */
   turnError: { code: string; message: string } | null;
   /** Requests answered from their own card, which no longer wait on anyone (`chat-requests.ts`). */

@@ -13,7 +13,7 @@ import { FleetContext, type FleetContextValue } from "../../src/fleet/FleetProvi
 import { memoryFile } from "../../src/fleet/store.ts";
 import { InboxStore } from "../../src/inbox/store.ts";
 import { flush } from "../helpers/fakes.ts";
-import { bot, inboxEntry, swarm } from "../helpers/fixtures.ts";
+import { bot, inboxEntry, msg, swarm, todoTool } from "../helpers/fixtures.ts";
 import { renderUi } from "../helpers/render.tsx";
 
 const mockPush = jest.fn();
@@ -31,6 +31,7 @@ async function setup(
   listening: string[],
   pinned: string[] = [],
   primary: string | null = null,
+  chatViews: readonly unknown[] = [],
 ) {
   const roster = new RosterStore(
     {
@@ -44,7 +45,7 @@ async function setup(
   const inbox = new InboxStore(memoryFile(), () => "2026-10-13T12:00:00.000Z");
   const fleetState = { link: null };
   const ctx = {
-    client: { roster, inbox },
+    client: { roster, inbox, chat: { views: () => chatViews, subscribe: () => () => {} } },
     status: "paired",
     primary,
     needsPrimary: false,
@@ -147,4 +148,30 @@ test("pins still win the hero over the primary; the primary's section sorts firs
   expect(screen.getByLabelText("Pinned bot: Scribe")).toBeTruthy();
   const sections = screen.getAllByTestId(/^home-section-/).map((n) => n.props.testID);
   expect(sections).toEqual(["home-section-corvid", "home-section-atlas"]);
+});
+
+test("a Bot Chat's task list tags its row, boxed beside the name, and never the hero", async () => {
+  const list = todoTool([
+    ["1", "Read the policy", "done"],
+    ["2", "Draft the change", "active"],
+    ["3", "Apply it", "pending"],
+  ]);
+  const view = (instance: string, bot: string, sending: boolean) => ({
+    target: { instance, bot, session: null },
+    messages: [msg({ blocks: [list] })],
+    live: null,
+    sending,
+    activity: sending ? "streaming" : "idle",
+    remote: null,
+  });
+  await setup(SWARMS, ["atlas", "corvid"], [], null, [
+    view("atlas", "scribe", true),
+    view("corvid", "wren", false),
+    view("atlas", "ops", true),
+  ]);
+  // Running: the fraction, said with the row. Paused: the same fraction, said paused.
+  expect(screen.getByLabelText("Scribe, tasks 1 of 3")).toBeTruthy();
+  expect(screen.getByLabelText("Wren, tasks 1 of 3, paused")).toBeTruthy();
+  expect(screen.getAllByTestId("row-tasks")).toHaveLength(2);
+  expect(screen.getByLabelText("Default bot: Ops")).toBeTruthy();
 });

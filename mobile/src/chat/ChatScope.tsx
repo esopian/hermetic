@@ -7,7 +7,8 @@
  */
 import { createContext, useContext } from "react";
 import type { RespondInput } from "../client/conversation-store.ts";
-import type { ChatMessage } from "@hermetic/core/chat-client";
+import type { ChatBlock, ChatMessage } from "@hermetic/core/chat-client";
+import type { TodoSnapshotLike } from "@hermetic/core/shared";
 import type { RespondResult } from "../client/chat-types.ts";
 import type { TurnPrompt } from "../client/chat-recovery.ts";
 import type { PhoneFiles } from "../gateway/files.ts";
@@ -43,6 +44,15 @@ export interface ChatScopeValue {
    * the card finds it through the fleet itself; `null` draws it read-only.
    */
   files?: PhoneFiles | null;
+  /**
+   * The task list's side of the transcript: the list each todo call changed
+   * from (`previousLists`), and opening the Tasks sheet, flashing what
+   * `step` changed when a Tasks row was tapped.
+   */
+  tasks?: {
+    prevOf: ReadonlyMap<string, TodoSnapshotLike | null>;
+    open: (step?: ChatBlock) => void;
+  };
 }
 
 export const ChatScope = createContext<ChatScopeValue | null>(null);
