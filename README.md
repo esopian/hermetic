@@ -6,20 +6,43 @@ hermetic manages a fleet of Hermes agents on AWS. Every agent is sealed — no p
 
 ## Install
 
-hermetic is a macOS desktop app. Download `macos-arm64-Hermetic.dmg` from the [latest release](https://github.com/esopian/hermetic/releases/latest), open it, and drag `Hermetic.app` into `/Applications`.
+hermetic is a desktop app with a bundled CLI. It runs on macOS and Linux; only Apple silicon Macs have a prebuilt installer so far.
 
-- **macOS on Apple silicon (arm64) only.** There is no Intel or Linux build.
+| Platform | How |
+|---|---|
+| macOS, Apple silicon | Prebuilt app — see [macOS](#macos) below. |
+| Linux | Run from source — see [Linux and Intel Macs](#linux-and-intel-macs) below. No packaged build yet. |
+| Windows | Not natively. WSL2 takes the Linux path and should work, but is untested. |
+| macOS, Intel | Run from source — same steps as Linux. No packaged build yet. |
+
+### macOS
+
+Download `macos-arm64-Hermetic.dmg` from the [latest release](https://github.com/esopian/hermetic/releases/latest), open it, and drag `Hermetic.app` into `/Applications`.
+
 - **Signed and notarised.** Releases from v0.3.1 on are signed with a Developer ID and notarised by Apple, so the app opens normally. v0.3.0 and earlier were ad-hoc signed only: macOS calls them "damaged" and offers only "Move to Trash" until the quarantine flag is cleared with `xattr -dr com.apple.quarantine /Applications/Hermetic.app`.
 - **It updates itself** from the same release page — the app checks on launch and every six hours, downloads a patch when the gap is one release and the whole archive otherwise, and applies it on the next restart. You never download a second DMG. The check is unauthenticated, so it only works once `esopian/hermetic` is a public repository; while the repository is private, update yourself by downloading the newer DMG.
 - **The `hermetic` CLI comes from the app.** There is no separate download: the app bundles the binary and its menu's **Install Command Line Tool…** item writes a shim at `/usr/local/bin/hermetic` pointing at it. Run it once and `hermetic` is on your PATH, kept current by the app's own updates.
 
+### Linux and Intel Macs
+
+The app and CLI run on Linux and Intel Macs from a checkout; there is just no package yet. You need [Bun](https://bun.sh) (the version in `.bun-version`) and `git`:
+
+```
+git clone https://github.com/esopian/hermetic.git && cd hermetic
+bun run setup          # installs dependencies and the pinned Hutch, which builds the desktop app
+bun run dev            # builds and opens the app
+bun run cli -- --help  # the hermetic CLI, from the same checkout
+```
+
+`bun run setup` reports a missing `uvx` as a failure; that only matters for `bun run check`, not for running the app. A source run does not update itself: `git pull` and rerun `bun run dev`. [CONTRIBUTING.md](CONTRIBUTING.md) has the details.
+
 ## Quick start
 
-1. Open `Hermetic.app`. A home that has never run `init` opens the init wizard; an initialized one opens the dashboard.
+1. Open `Hermetic.app` (from source, `bun run dev`). A home that has never run `init` opens the init wizard; an initialized one opens the dashboard.
 2. Work through the wizard: pick an AWS profile, pass the connection check, create or attach to the foundation, watch it run.
 3. Create your first agent from the dashboard (or `hermetic agent create <name>` once the CLI shim is installed).
 
-Nothing here needs Bun or a checkout — that is only for working on hermetic itself.
+On macOS nothing here needs Bun or a checkout — that is only for working on hermetic itself, or for running it on Linux or an Intel Mac.
 
 ## Prerequisites
 
@@ -63,6 +86,15 @@ hermetic teardown --yes --confirm-account-id 123456789012 \
 ```
 
 The twelve-digit account id is a required typed confirmation, not `--yes` alone. From the dashboard, the same flow lives in Settings (`,` shortcut, or the header's `SETTINGS →` button) under **DANGER** — review the plan, type the account id and the word `teardown`, watch it run. Details: [`docs/operations.md`](docs/operations.md#teardown).
+
+## Roadmap
+
+Planned, not yet built. Contributions are welcome; open an issue to discuss an approach first.
+
+- **Windows support** for the desktop client and the CLI ([#128](https://github.com/esopian/hermetic/issues/128)).
+- **Automatic builds for Linux, Intel Macs and Windows**, published with each release alongside the Apple silicon app ([#128](https://github.com/esopian/hermetic/issues/128)).
+- **Cloud providers beyond AWS**, by moving the AWS-specific code behind a provider adapter ([#129](https://github.com/esopian/hermetic/issues/129)).
+- **A self-hosted Headscale controller** as an alternative to Tailscale's hosted control plane for the tailnet ([#130](https://github.com/esopian/hermetic/issues/130)).
 
 ## Developing
 

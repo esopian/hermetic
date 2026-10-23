@@ -53,6 +53,14 @@ export const IGNORED_ADVISORIES: string[] = [
   // bundle. No patched release exists (1.4.0 is the latest on npm).
   // Owner: mobile. Review by 2026-12-01, or when node-forge ships a fix.
   "GHSA-86w9-cpqp-85rv",
+  // GHSA-mrhx-c7xc-m3w5 — zod < 4.6.6 (unbounded issue accumulation on large
+  // arrays exhausts memory). Granted for mobile/ only, where zod@3.25.76 comes
+  // in through @expo/cli (dev-server and build tooling on the developer's
+  // machine, parsing local config, not attacker input). No patched 3.x exists
+  // and @expo/cli up to 58.x still pins ^3.25.76. The root tree is fixed by
+  // zod ^4.6.7 in core, cli and app.
+  // Owner: mobile. Review by 2026-12-01, or when @expo/cli moves to zod 4.
+  "GHSA-mrhx-c7xc-m3w5",
 ];
 
 /**

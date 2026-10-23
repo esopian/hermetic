@@ -1,17 +1,21 @@
 ---
 slug: docs/start/install
 title: Install
-description: Install the Hermetic desktop app and the hermetic CLI on a Mac.
+description: Install the Hermetic desktop app and the hermetic CLI on a Mac, or run it from source on Linux or an Intel Mac.
 sidebar:
   order: 1
 ---
 
-hermetic ships as a macOS desktop app. The `hermetic` CLI is bundled inside it. {/* design.md §3.6; README.md "Install" */}
+hermetic is a desktop app with the `hermetic` CLI bundled inside it. It runs on macOS and Linux. The prebuilt, signed app is for Macs with Apple silicon; on Linux or an Intel Mac you run it from source. {/* design.md §3.6; README.md "Install" */}
 
 ## Requirements
 
-- A Mac with Apple silicon. There is no Intel or Linux build. {/* design.md §3.6 (macos-arm64 artifacts only); README.md "Install" */}
+- A Mac with Apple silicon for the prebuilt app, or Linux or an Intel Mac to run from source. On Windows, use WSL2 and follow the Linux steps (untested). {/* design.md §3.6 (macos-arm64 artifacts only); README.md "Install" */}
 - For a real fleet: an AWS account and a Tailscale tailnet. [Your first fleet](/docs/start/first-fleet/) lists exactly what each needs. {/* README.md "Prerequisites" */}
+
+## Linux and Intel Macs
+
+There is no package for these yet, but the app and the CLI run on Linux and Intel Macs from a checkout of the repository. The README's [Linux and Intel Macs section](https://github.com/esopian/hermetic#linux-and-intel-macs) has the commands. The rest of this page is about the Mac app. {/* README.md "Install" › "Linux and Intel Macs" */}
 
 ## Install the app
 
