@@ -312,9 +312,9 @@ describe("foundation.status", () => {
     expect(FoundationStatus.safeParse(status).success).toBe(true);
   });
 
-  test("a new renderer is reported as drift even when the stored hashes agree", async () => {
+  test("a new renderer is an update, not drift, when the stored hashes agree", async () => {
     const backend = seedFixtureFoundation(new MemoryBackend());
-    const seeded = await seedOne(backend, "old-render");
+    const seeded = { ...(await seedOne(backend, "old-render")), hermes_version: BUILD_VERSIONS.hermes };
     backend.agents.set(seeded.name, {
       ...seeded,
       config_hash: "old",
@@ -322,22 +322,16 @@ describe("foundation.status", () => {
     });
     const hermetic = core(backend);
     const status = await hermetic.foundation.status();
-    expect(status.agents.find((agent) => agent.name === seeded.name)?.config).toBe("drifted");
-    expect(status.skew?.severity).toBe("drifted");
+    expect(status.agents.find((agent) => agent.name === seeded.name)?.config).toBe("update");
+    expect(status.skew?.severity).toBe("update");
+    expect(status.skew?.fix).toBe("hermetic foundation update");
+    expect(status.skew?.agents_affected).toBe(1);
+    // Folded into the flag the Update button gates on.
+    expect(status.update_available).toBe(true);
+    expect(status.build_order).toBe("unknown");
     expect((await hermetic.plan.rollout({ agents: [seeded.name] })).steps[0]?.description).toContain(
       "apply",
     );
-
-    backend.agents.set(seeded.name, {
-      ...backend.agents.get(seeded.name)!,
-      apply_request: {
-        id: "old-apply",
-        config_hash: "old",
-        issued_at: backend.now().toISOString(),
-        issued_by: "test",
-      },
-    });
-    expect((await hermetic.foundation.status()).skew?.severity).toBe("drifted");
 
     const rendered = testContext(backend).renderFor(
       seeded,
@@ -350,6 +344,59 @@ describe("foundation.status", () => {
       applied_config_hash: rendered,
     });
     expect((await hermetic.foundation.status()).agents[0]?.config).toBe("current");
+  });
+
+  test("an agent held on another Hermes pin is never offered an update it cannot take", async () => {
+    const backend = seedFixtureFoundation(new MemoryBackend());
+    const seeded = await seedOne(backend, "held");
+    expect(seeded.hermes_version).not.toBe(BUILD_VERSIONS.hermes);
+    backend.agents.set(seeded.name, { ...seeded, config_hash: "old", applied_config_hash: "old" });
+    const hermetic = core(backend);
+    const held = await hermetic.foundation.status();
+    // Every render pins this build's Hermes, so it never matches; the update
+    // would defer it, so offering one would be a pill nothing clears.
+    expect(held.agents[0]?.config).toBe("current");
+    expect(held.update_available).toBe(false);
+    expect(held.skew?.severity).not.toBe("update");
+
+    // A box that did not apply what its row names is still drifted.
+    backend.agents.set(seeded.name, { ...seeded, config_hash: "new", applied_config_hash: "old" });
+    expect((await hermetic.foundation.status()).agents[0]?.config).toBe("drifted");
+  });
+
+  test("only a build not older than the publisher offers a config update", async () => {
+    const backend = seedFixtureFoundation(new MemoryBackend());
+    const seeded = await seedOne(backend, "ordered");
+    backend.agents.set(seeded.name, {
+      ...seeded,
+      hermes_version: BUILD_VERSIONS.hermes,
+      config_hash: "old",
+      applied_config_hash: "old",
+    });
+    backend.fleetItem = {
+      ...backend.fleetItem!,
+      published_by: { hermetic_version: "0.0.0-dev", build_number: 10 },
+    };
+    const at = (build_number: number) =>
+      testHermetic({
+        backend,
+        config: FIXTURE_CONFIG,
+        foundation: FAST,
+        git: () => ({ build_number, commit: "abc1234", dirty: false }),
+      }).foundation.status();
+
+    const newer = await at(11);
+    expect(newer.build_order).toBe("newer");
+    expect(newer.agents[0]?.config).toBe("update");
+    expect(newer.update_available).toBe(true);
+    expect(newer.skew?.severity).toBe("update");
+
+    const older = await at(9);
+    expect(older.build_order).toBe("older");
+    expect(older.agents[0]?.config).toBe("current");
+    // Nothing else is behind, so nothing is on offer.
+    expect(older.update_available).toBe(false);
+    expect(older.skew?.severity).not.toBe("update");
   });
 });
 
@@ -559,6 +606,8 @@ describe("plan.foundation", () => {
       "artifacts",
       "migrate",
       "rollout",
+      // The update ends by converging every agent whose config changed.
+      "config",
     ]);
     expect(plan.summary?.fleet_id).toBe(FIXTURE_CONFIG.fleet_id);
     expect(plan.steps.find((s) => s.id === "stack")!.description).toContain("AgentPolicy");

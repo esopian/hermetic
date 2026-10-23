@@ -239,6 +239,16 @@ const BODIES: Record<string, object> = {
   "routines.delete": { instance: "ember", bot: "default", id: "j-1", confirm: true },
   "routines.run": { instance: "ember", bot: "default", id: "j-1" },
   "routines.history": { instance: "ember", bot: "default", id: "j-1" },
+  "kanban.board": { instance: "ember" },
+  "kanban.task": { instance: "ember", id: "t_0000abcd" },
+  "kanban.log": { instance: "ember", id: "t_0000abcd" },
+  "kanban.create": { instance: "ember", title: "A card" },
+  "kanban.comment": { instance: "ember", id: "t_0000abcd", body: "note" },
+  "kanban.unblock": { instance: "ember", id: "t_0000abcd", answer: "yes" },
+  "kanban.assign": { instance: "ember", id: "t_0000abcd", profile: null },
+  "kanban.move": { instance: "ember", id: "t_0000abcd", status: "todo" },
+  "kanban.archive": { instance: "ember", id: "t_0000abcd" },
+  "kanban.delete": { instance: "ember", id: "t_0000abcd", confirm: true },
 };
 
 function contextFor(state: AppState, ops = new OpRegistry(), log?: AppLog): HandlerContext {

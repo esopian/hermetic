@@ -50,6 +50,7 @@ export {
   NUDGE_LABELS,
   PROCESS_COMMAND_MAX,
   isRoutineProcessEvent,
+  kanbanNoticeWhat,
   processEventSentence,
   shortCommand,
   todoCounts,
@@ -288,6 +289,7 @@ export {
 export {
   FLEET_MANIFEST_KEY,
   autoUpdateHermeticd,
+  autoUpgrade,
   isChromeRef,
   isReleaseObjectKey,
   orderStages,
@@ -548,3 +550,16 @@ export type {
   DevtoolsFieldFate,
   DevtoolsFieldRule,
 } from "./devtools-field-map.ts";
+
+// --- Kanban board vocabulary (§9.2) ---------------------------------------
+export {
+  KANBAN_LANES,
+  KANBAN_LANE_INDEX,
+  KANBAN_NOTICE_RE,
+  KANBAN_STATUSES,
+  KANBAN_TASK_ID_RE,
+  kanbanNeedsYou,
+  kanbanStatusWord,
+  kanbanTone,
+} from "./kanban.ts";
+export type { KanbanLaneId, KanbanStatusName, KanbanTaskLike, KanbanTone } from "./kanban.ts";

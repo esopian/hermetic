@@ -273,6 +273,11 @@ export type ChatConversation = z.infer<typeof ChatConversation>;
  * the box's outbox. A head draws a file card from the block's `share` — the
  * plugin's result, validated — never from the tool's arguments, and falls back
  * to the tool row when `share` is null (a refusal, or a result it cannot read).
+ *
+ * `kanban_task` (`kanban_create`) is the agent filing a card on the box's
+ * kanban board. A head draws a task card keyed on the result's `task_id` (the
+ * result as upstream returned it: an object, or the string when it did not
+ * parse as JSON) and falls back to the tool row while there is no id.
  */
 export const ToolRender = z.enum([
   "diff",
@@ -284,6 +289,7 @@ export const ToolRender = z.enum([
   "file_request",
   "secret_request",
   "file_share",
+  "kanban_task",
 ]);
 export type ToolRender = z.infer<typeof ToolRender>;
 
@@ -603,6 +609,8 @@ export const ProcessEventType = z.enum([
   "model_switch",
   /** The personality overlay was set or cleared (`tui_gateway/agent_callbacks.py`). */
   "personality",
+  /** A kanban card this chat subscribed to moved (`tui_gateway/session_notifications.py`). */
+  "kanban",
 ]);
 export type ProcessEventType = z.infer<typeof ProcessEventType>;
 
@@ -643,6 +651,17 @@ export const ProcessNoticeVariant = z.enum([
 ]);
 export type ProcessNoticeVariant = z.infer<typeof ProcessNoticeVariant>;
 
+/** Which kanban event a `kanban` notice reports (`session_notifications.py` `_KANBAN_EVENT_FORMATTERS`). */
+export const KanbanNoticeKind = z.enum([
+  "completed",
+  "blocked",
+  "gave_up",
+  "crashed",
+  "timed_out",
+  "status",
+]);
+export type KanbanNoticeKind = z.infer<typeof KanbanNoticeKind>;
+
 /** Upstream's todo markers: `[x]` completed, `[>]` in_progress, `[ ]` pending, `[~]` cancelled, `[?]` anything else. */
 export const ProcessTaskStatus = z.enum(["done", "active", "pending", "cancelled", "unknown"]);
 export type ProcessTaskStatus = z.infer<typeof ProcessTaskStatus>;
@@ -680,6 +699,14 @@ const ProcessNotice = z.object({
   body: z.string().nullish(),
   /** A `todo` notice's items, in upstream's order. */
   tasks: z.array(ProcessNoticeTask).nullish(),
+  /** A `kanban` notice's card (`t_…`). */
+  task_id: z.string().nullish(),
+  /** The board slug, when the notice named one (`[board]`). */
+  board: z.string().nullish(),
+  /** The card's assignee profile, when the notice named one (`@who`). */
+  assignee: z.string().nullish(),
+  /** What happened to the card; null when the wording is one this build does not know. */
+  kanban_kind: KanbanNoticeKind.nullish(),
 });
 
 const ProcessDelegationTask = z.object({

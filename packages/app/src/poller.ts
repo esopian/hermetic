@@ -5,7 +5,13 @@
  * incremental sync is what makes this cheap enough to be the only source of
  * live state.
  */
-import type { AgentView, ChatSwarmsResult, Hermetic, Notification } from "@hermetic/core";
+import type {
+  AgentView,
+  ChatSwarmsResult,
+  FoundationStatus,
+  Hermetic,
+  Notification,
+} from "@hermetic/core";
 
 /**
  * The fleet tick. A minute, not seconds: every tick is a real DynamoDB scan
@@ -96,6 +102,12 @@ export interface PollerHooks {
    * only. A read that threw, or a tick that did not read, says nothing.
    */
   onRoster?(swarms: ChatSwarmsResult["swarms"]): void;
+  /**
+   * The `foundation.status` the advisory tick just read, after a successful
+   * read only — the first at launch, then every `ADVISORY_INTERVAL_MS`. What
+   * the fleet's `auto_upgrade` decides on (`auto-upgrade.ts`).
+   */
+  onFoundationStatus?(status: FoundationStatus): void;
 }
 
 /**
@@ -450,7 +462,8 @@ export class FleetPoller {
    * own advisory observers run (§4.9, `observeAdvisories`). Their
    * results are thrown away — `foundation.status` and `volumes.list` write the
    * rows on the way past, and the fleet stream already carries them out through
-   * `pollNotifications`.
+   * `pollNotifications` — except that the status is lent to
+   * `onFoundationStatus`.
    *
    * Placed after the early return on a failed `agents.list`, which is the guard
    * that answers "is there a fleet to scan": a poller only exists once a fleet
@@ -474,7 +487,8 @@ export class FleetPoller {
     try {
       // `hermes: false`: the upstream release check is a GitHub request, it is
       // not one of the fleet advisory conditions, and nothing here would render it.
-      await this.hermetic.foundation.status({}, { hermes: false });
+      const status = await this.hermetic.foundation.status({}, { hermes: false });
+      this.notify((h) => h.onFoundationStatus?.(status));
     } catch {
       /* an advisory is a courtesy; an unreadable foundation never fails a poll */
     }

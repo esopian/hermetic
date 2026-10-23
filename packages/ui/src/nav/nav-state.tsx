@@ -32,6 +32,7 @@ import {
   LEGACY_VOLUMES_HASH,
   fleetLensHash,
   isLandingHash,
+  isWorkHash,
   parseFleetLensHash,
 } from "./fleet-nav.ts";
 import type { FleetLens } from "./fleet-nav.ts";
@@ -239,6 +240,8 @@ export function NavProvider({
   const [chatOpen, setChatOpen] = useState(
     () => isChatHash(currentHash()) || isLandingHash(currentHash()),
   );
+  /** The WORK view (`#work`): a full-page view like Chat, never the landing one. */
+  const [workOpen, setWorkOpen] = useState(() => isWorkHash(currentHash()));
   const [deleteVolume, setDeleteVolume] = useState<VolumeView | null>(null);
   const [foundationTeardownOpen, setFoundationTeardownOpen] = useState(false);
   const [foundationUpdateOpen, setFoundationUpdateOpen] = useState(false);
@@ -267,6 +270,7 @@ export function NavProvider({
     // view, so `n` pressed there has to bring the fleet up under the drawer
     // rather than open one nothing draws.
     setChatOpen(false);
+    setWorkOpen(false);
     setSelected(null);
     setTeardownOpen(false);
     setPopoverOpen(false);
@@ -331,6 +335,7 @@ export function NavProvider({
    */
   const setView = useCallback((v: View) => {
     setChatOpen(v === "chat");
+    setWorkOpen(v === "work");
     setSettingsOpen(v === "settings");
     if (v !== "settings") setProvidersNew(false);
   }, []);
@@ -338,6 +343,7 @@ export function NavProvider({
   const openOtherLens = useCallback((lens: Exclude<FleetLens, "agents">) => {
     setSettingsOpen(false);
     setChatOpen(false);
+    setWorkOpen(false);
     // The drawer belongs to the agents lens; see the hash writer below.
     setSelected(null);
     setTeardownOpen(false);
@@ -352,12 +358,13 @@ export function NavProvider({
 
   // Read through a ref: Escape reaches this from a window listener that `App`
   // registers once, so the callback has to stay stable and still see live state.
-  const views = useRef({ settingsOpen, chatOpen });
-  views.current = { settingsOpen, chatOpen };
+  const views = useRef({ settingsOpen, chatOpen, workOpen });
+  views.current = { settingsOpen, chatOpen, workOpen };
   const closeView = useCallback(() => {
     const v = views.current;
     if (v.settingsOpen) setSettingsOpen(false);
     else if (v.chatOpen) setChatOpen(false);
+    else if (v.workOpen) setWorkOpen(false);
   }, []);
 
   const [agentLogSource, setAgentLogSource] = useState<"console" | null>(null);
@@ -375,6 +382,7 @@ export function NavProvider({
     (name: string) => {
       setSettingsOpen(false);
       setChatOpen(false);
+      setWorkOpen(false);
       setFleetLens("agents");
       select(name);
     },
@@ -417,6 +425,7 @@ export function NavProvider({
       setSettingsOpen(false);
       setFleetLens("agents");
       setChatOpen(false);
+      setWorkOpen(false);
     } else if (previous) {
       setSelected(null);
       setTeardownOpen(false);
@@ -442,6 +451,7 @@ export function NavProvider({
       const lens = parseFleetLensHash(window.location.hash);
       if (lens !== null) setFleetLens(lens);
       setChatOpen(isChatHash(window.location.hash));
+      setWorkOpen(isWorkHash(window.location.hash));
       /*
        * The agent drawer, on the same rule and for the same reason: a hash that
        * names an agent opens it, on the tab it names, and only a fleet hash
@@ -496,9 +506,13 @@ export function NavProvider({
         ? isChatHash(window.location.hash)
           ? window.location.hash
           : "#chat"
-        : selected
-          ? agentHash(selected, agentTab, agentSession)
-          : fleetLensHash(fleetLens);
+        : workOpen
+          ? isWorkHash(window.location.hash)
+            ? window.location.hash
+            : "#work"
+          : selected
+            ? agentHash(selected, agentTab, agentSession)
+            : fleetLensHash(fleetLens);
     if (window.location.hash === wants) return;
     // A hash naming nothing this page knows (a cold start on `#foo`, an
     // in-page anchor) is replaced rather than pushed over, as the empty hash
@@ -508,6 +522,7 @@ export function NavProvider({
     const current = window.location.hash;
     const known =
       isChatHash(current) ||
+      isWorkHash(current) ||
       parseSettingsHash(current) !== null ||
       parseAgentHash(current) !== null ||
       // Not `parseFleetLensHash`, which reads any unknown hash as the agents lens.
@@ -519,7 +534,7 @@ export function NavProvider({
     } else {
       history.replaceState(null, "", `${window.location.pathname}${window.location.search}${wants}`);
     }
-  }, [settingsOpen, settingsSection, fleetLens, chatOpen, selected, agentTab, agentSession]);
+  }, [settingsOpen, settingsSection, fleetLens, chatOpen, workOpen, selected, agentTab, agentSession]);
 
   /**
    * §4.8: a fleet switch replaces every agent on the board, so anything on
@@ -559,7 +574,7 @@ export function NavProvider({
     }
   }, [initialized, bound]);
 
-  const view: View = settingsOpen ? "settings" : chatOpen ? "chat" : "fleet";
+  const view: View = settingsOpen ? "settings" : chatOpen ? "chat" : workOpen ? "work" : "fleet";
 
   const value = useMemo<Nav>(
     () => ({

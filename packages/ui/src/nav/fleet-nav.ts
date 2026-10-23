@@ -65,5 +65,11 @@ export function parseFleetLensHash(hash: string): FleetLens | null {
   const raw = hash.startsWith("#") ? hash.slice(1) : hash;
   if (raw === "settings" || raw.startsWith("settings/")) return null;
   if (raw === "chat" || raw.startsWith("chat/")) return null;
+  if (isWorkHash(hash)) return null;
   return "agents";
+}
+
+/** The fleet-wide kanban board (§9.2): `#work`, and anything under it. */
+export function isWorkHash(hash: string): boolean {
+  return hash === "#work" || hash.startsWith("#work/");
 }

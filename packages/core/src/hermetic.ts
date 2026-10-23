@@ -21,7 +21,7 @@ import { createArtifactsPush } from "./release/push-op.ts";
 import { createPublisher } from "./release/publisher.ts";
 import { LOCK_TTL_MS } from "./fleet/fleet-lock.ts";
 import { gitBuildInfo, type GitBuildInfo } from "./release/git.ts";
-import type { Plan, PlanRolloutInput } from "./schema/index.ts";
+import type { BuildIdentity, Plan, PlanRolloutInput } from "./schema/index.ts";
 import { PlanRolloutInput as PlanRolloutInputSchema, runTargetFor } from "./schema/index.ts";
 import { HEARTBEAT_INTERVAL_MS, UNREACHABLE_INTERVALS } from "./agents/state.ts";
 import { probeLocalTailscale, verifyTailscaleOauthClient } from "./fleet/preflight.ts";
@@ -51,6 +51,7 @@ import { MemoryChatFenceStore } from "./chat/chat-fence.ts";
 import { MemoryChatSettingsStore } from "./chat/chat-settings.ts";
 import { createDevtools } from "./chat/devtools.ts";
 import { createBotMode } from "./chat/bot-mode.ts";
+import { createKanban } from "./chat/kanban.ts";
 import {
   MemoryNotificationStore,
   createNotifications,
@@ -66,7 +67,7 @@ import { createFiles } from "./files/files.ts";
 import { createFoundation } from "./fleet/foundation/index.ts";
 import { createFixtureChatStack } from "./backend/fixture/fixture-chat-stack.ts";
 import { MemoryFiles } from "./backend/fixture/memory-files.ts";
-import { FOUNDATION_VERSION } from "./version.ts";
+import { FOUNDATION_VERSION, HERMETIC_VERSION } from "./version.ts";
 import { foundationTemplateSha256 } from "./aws/cfn-template.ts";
 import type { FetchLike } from "./aws/tailscale.ts";
 import { agentParamPath, sharedSecretPath } from "./backend/constants.ts";
@@ -135,6 +136,19 @@ export function createHermetic(deps: HermeticDeps) {
    * mode; fixture mode and tests keep the null.
    */
   const localBuild = deps.localBuild ?? (() => null);
+  /** The same checkout reader `foundation` gets below, asked once (`CoreContext.buildIdentity`). */
+  const readGit = deps.git ?? ((): GitBuildInfo | null => gitBuildInfo({ cwd: findRepoRoot() }));
+  let identity: BuildIdentity | null = null;
+  const buildIdentity = (): BuildIdentity => {
+    if (identity === null) {
+      const buildNumber = readGit()?.build_number;
+      identity = {
+        hermetic_version: HERMETIC_VERSION,
+        ...(buildNumber === undefined ? {} : { build_number: buildNumber }),
+      };
+    }
+    return identity;
+  };
   const verifyTailscaleOauth =
     deps.verifyTailscaleOauth ?? ((s: string) => verifyTailscaleOauthClient(s));
   /** §3.6: this build's mirrors and release publisher (`release/publisher.ts`). */
@@ -188,6 +202,7 @@ export function createHermetic(deps: HermeticDeps) {
     hermeticdVersion,
     hermesVersion,
     localBuild,
+    buildIdentity,
     notifications: notificationDeps,
     publishDeps,
     get devtap() {
@@ -293,16 +308,12 @@ export function createHermetic(deps: HermeticDeps) {
     const parsed = PlanRolloutInputSchema.parse(input);
     await guardAccount();
     const config = requireConfig();
-    return await rollout.plan(
-      parsed,
-      (agent, fleet) => renderFor(agent, fleet.region, fleet.tailnet).config_hash,
-      {
-        account_id: config.account_id,
-        region: config.region,
-        fleet_id: config.fleet_id,
-        stack_id: null,
-      },
-    );
+    return await rollout.plan(parsed, (agent, fleet) => renderFor(agent, fleet.region, fleet.tailnet), {
+      account_id: config.account_id,
+      region: config.region,
+      fleet_id: config.fleet_id,
+      stack_id: null,
+    });
   }
 
   /**
@@ -396,10 +407,18 @@ export function createHermetic(deps: HermeticDeps) {
    */
   const foundation = createFoundation({
     ctx,
-    ...(deps.git !== undefined
-      ? { git: deps.git }
-      : // The checkout the release would be built from, not the shell's.
-        { git: (): GitBuildInfo | null => gitBuildInfo({ cwd: findRepoRoot() }) }),
+    // The checkout the release would be built from, not the shell's.
+    git: readGit,
+    // The config phase converges as `plan rollout`'s apply does, with its timings.
+    config: {
+      applyPending,
+      ...(deps.rollout?.convergeTimeoutMs === undefined
+        ? {}
+        : { convergeTimeoutMs: deps.rollout.convergeTimeoutMs }),
+      ...(deps.rollout?.convergePollMs === undefined
+        ? {}
+        : { convergePollMs: deps.rollout.convergePollMs }),
+    },
     ...(deps.foundation ?? {}),
   });
   const plans = createPlans({ ctx });
@@ -463,6 +482,9 @@ export function createHermetic(deps: HermeticDeps) {
     ctx,
     rolloutWaitMs: deps.foundation?.rolloutWaitMs,
     rolloutPollMs: deps.foundation?.rolloutPollMs,
+    applyPending,
+    convergeTimeoutMs: deps.rollout?.convergeTimeoutMs,
+    convergePollMs: deps.rollout?.convergePollMs,
   });
 
   /**
@@ -501,6 +523,14 @@ export function createHermetic(deps: HermeticDeps) {
   const botMode = createBotMode({
     guardFleet,
     getAgent,
+    instanceListening,
+    hermes: hermesChat,
+    chatSettings,
+  });
+  const kanban = createKanban({
+    guardFleet,
+    getAgent,
+    listAgents: () => backend.store.agents.scan(),
     instanceListening,
     hermes: hermesChat,
     chatSettings,
@@ -580,6 +610,7 @@ export function createHermetic(deps: HermeticDeps) {
 
   const hermetic = {
     ...botMode,
+    ...kanban,
     init: initWithHelpers,
     config: { show: configShow },
     /**

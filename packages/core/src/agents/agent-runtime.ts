@@ -70,6 +70,58 @@ export interface AgentRuntimeDeps {
 
 export type AgentRuntime = ReturnType<typeof createAgentRuntime>;
 
+/**
+ * The config this build renders for an agent row. Pure and module-level, so the
+ * fixture can seed a fleet already on this build's render (`memory-fixture.ts`).
+ *
+ * No fleet identifier goes in. The render is what lands on the box, and the
+ * only thing that ever wanted the fleet was `TailscaleServe.hostname` — which
+ * is not emitted (`schema/manifest.ts`), because a field nothing reads has no
+ * business in `config_hash`, where it would re-render and restart every agent
+ * whenever it changed.
+ */
+export function renderAgentRow(agent: Agent, region: string, tailnet: string) {
+  return renderAgentConfig({
+    tailnet,
+    name: agent.name,
+    size: agent.size,
+    instance_type: agent.instance_type,
+    provider: agent.provider,
+    secrets_mode: agent.secrets_mode,
+    hermes_version: agent.hermes_version,
+    // The row pins a version, not a ref: there is no `hermes_ref` column, so
+    // this build's ref is the only one available. It is the right answer for
+    // an agent on the current pin and the wrong one for a row deliberately
+    // held back — the apply's version cross-check is what catches that rather
+    // than letting the box install a version nobody asked for.
+    //
+    // It is also why `upgrade --hermes` mirrors this ref and never has an
+    // unknown one to refuse (§3.6): there is one ref in the whole render.
+    // TODO(evan): give the agent row a `hermes_ref` so an older pin renders.
+    hermes_ref: BUILD_VERSIONS.hermes_ref,
+    // Same story for the browser build: one pin per checkout (§7.3).
+    chrome_ref: BUILD_VERSIONS.chrome_ref,
+    hermes: agent.hermes,
+    // The fleet's answers as they stood when this agent was created, pinned
+    // on the row so a later `settings set` cannot re-render every agent
+    // (`resolveCreateDefaults`). Absent on older rows, which then render the
+    // catalog default they were always rendering.
+    seed: agent.seed,
+    hermes_hold: agent.hermes_hold,
+    /**
+     * The slot hermeticd reads this agent's provider key from (§8.3). Taken
+     * from the row rather than derived from the profile, because the row is
+     * what the *running* configuration was bound to — a profile that has been
+     * rotated since must not move a manifest nobody has applied yet.
+     */
+    provider_key_ref: credentialSlotOf(agent),
+    // Pinned on the row (at create, or by `agent set --memory`), like `seed`:
+    // a fleet default changed since must not re-render this agent.
+    ...(agent.memory ? { memory: { provider: agent.memory.provider } } : {}),
+    region,
+  });
+}
+
 export function createAgentRuntime(deps: AgentRuntimeDeps) {
   const { backend } = deps;
 
@@ -542,54 +594,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps) {
     );
   }
 
-  /**
-   * No fleet identifier goes in. The render is what lands on the box, and the
-   * only thing that ever wanted the fleet was `TailscaleServe.hostname` — which
-   * is not emitted (`schema/manifest.ts`), because a field nothing reads has no
-   * business in `config_hash`, where it would re-render and restart every agent
-   * whenever it changed.
-   */
-  function renderFor(agent: Agent, region: string, tailnet: string) {
-    return renderAgentConfig({
-      tailnet,
-      name: agent.name,
-      size: agent.size,
-      instance_type: agent.instance_type,
-      provider: agent.provider,
-      secrets_mode: agent.secrets_mode,
-      hermes_version: agent.hermes_version,
-      // The row pins a version, not a ref: there is no `hermes_ref` column, so
-      // this build's ref is the only one available. It is the right answer for
-      // an agent on the current pin and the wrong one for a row deliberately
-      // held back — the apply's version cross-check is what catches that rather
-      // than letting the box install a version nobody asked for.
-      //
-      // It is also why `upgrade --hermes` mirrors this ref and never has an
-      // unknown one to refuse (§3.6): there is one ref in the whole render.
-      // TODO(evan): give the agent row a `hermes_ref` so an older pin renders.
-      hermes_ref: BUILD_VERSIONS.hermes_ref,
-      // Same story for the browser build: one pin per checkout (§7.3).
-      chrome_ref: BUILD_VERSIONS.chrome_ref,
-      hermes: agent.hermes,
-      // The fleet's answers as they stood when this agent was created, pinned
-      // on the row so a later `settings set` cannot re-render every agent
-      // (`resolveCreateDefaults`). Absent on older rows, which then render the
-      // catalog default they were always rendering.
-      seed: agent.seed,
-      hermes_hold: agent.hermes_hold,
-      /**
-       * The slot hermeticd reads this agent's provider key from (§8.3). Taken
-       * from the row rather than derived from the profile, because the row is
-       * what the *running* configuration was bound to — a profile that has been
-       * rotated since must not move a manifest nobody has applied yet.
-       */
-      provider_key_ref: credentialSlotOf(agent),
-      // Pinned on the row (at create, or by `agent set --memory`), like `seed`:
-      // a fleet default changed since must not re-render this agent.
-      ...(agent.memory ? { memory: { provider: agent.memory.provider } } : {}),
-      region,
-    });
-  }
+  const renderFor = renderAgentRow;
 
   /**
    * Refuse to render a configuration the fleet's *published* hermeticd could not

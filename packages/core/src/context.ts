@@ -33,7 +33,7 @@ import type { AgentRuntime } from "./agents/agent-runtime.ts";
 import type { NotificationDeps } from "./chat/notifications.ts";
 import type { PublishDeps } from "./release/artifacts.ts";
 import type { Backend } from "./backend/types.ts";
-import type { LocalConfig } from "./schema/index.ts";
+import type { BuildIdentity, LocalConfig } from "./schema/index.ts";
 import type { DevTap } from "./chat/devtap.ts";
 
 export interface CoreContext {
@@ -52,6 +52,13 @@ export interface CoreContext {
    * stage on the drift.
    */
   localBuild: () => string | null;
+  /**
+   * This build, as `compareBuild` (`fleet/build-order.ts`) orders it against
+   * `_fleet.published_by`: `HERMETIC_VERSION` plus the checkout's build number
+   * when there is one. Read once per process — it may spawn `git`, and
+   * `foundation.status` asks on every read.
+   */
+  buildIdentity: () => BuildIdentity;
 
   /* clock and identity */
   nowIso: AgentRuntime["nowIso"];

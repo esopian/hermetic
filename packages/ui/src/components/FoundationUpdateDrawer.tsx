@@ -16,6 +16,7 @@ import { fmtClock } from "../logic/format.ts";
 import { useFleet } from "../state/state.tsx";
 import {
   closeBlocked as closeBlockedRule,
+  configChangeView,
   continueGate,
   hermeticdLine,
   reattach,
@@ -45,6 +46,8 @@ const PHASES = foundationPhases();
 const LABELS: Readonly<Record<string, string>> = {
   preflight: "Guard the account and take the _fleet lock",
   artifacts: "Push the release and rewrite the fleet manifest",
+  // The shared table's `config` is teardown's; here it is the converge.
+  config: "Converge every agent whose config changed",
   done: "Done",
 };
 
@@ -209,6 +212,8 @@ export function FoundationUpdateDrawer({ meta, onClose }: { meta: Meta | null; o
     planLoading ? "loading" : planError !== null ? "error" : "ready",
   );
   const stepCount = plan?.steps.length ?? 0;
+  const configChanges = plan?.config_changes ?? [];
+  const converged = configChanges.filter((c) => c.deferred === null).length;
   const destructiveCount = plan?.steps.filter((s) => s.destructive).length ?? 0;
 
   // Closing mid-op would discard the progress view; the op id is in
@@ -300,6 +305,46 @@ export function FoundationUpdateDrawer({ meta, onClose }: { meta: Meta | null; o
                 </ol>
               )}
             </div>
+
+            {/*
+              What the update's last step converges, per agent: paths and
+              field names only, never content (core keeps it that way).
+            */}
+            {configChanges.length > 0 ? (
+              <div className="td-section">
+                <div className="kicker">
+                  Config · {configChanges.length} agent{configChanges.length === 1 ? "" : "s"}
+                </div>
+                {converged > 0 ? (
+                  <div className="fu-note mono">
+                    restarts Hermes on the {converged === 1 ? "box" : `${converged} boxes`} it converges
+                  </div>
+                ) : null}
+                <ul className="fu-steps fu-config">
+                  {configChanges.map((c) => {
+                    const v = configChangeView(c);
+                    return (
+                      <li key={c.name} className="fu-step">
+                        <details>
+                          <summary>
+                            <span className="fu-chev mono" aria-hidden="true" />
+                            <span className="fu-step-title mono">{c.name}</span>
+                            <span className="fu-build mono">{v.hashes}</span>
+                            {c.deferred === null ? null : <span className="fu-tag mono">deferred</span>}
+                          </summary>
+                          <ul className="fu-step-details mono">
+                            {v.details.length === 0 ? <li>no file or manifest change</li> : null}
+                            {v.details.map((d) => (
+                              <li key={d}>{d}</li>
+                            ))}
+                          </ul>
+                        </details>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ) : null}
 
             {plan && plan.warnings.length > 0 ? (
               <div className="td-section">

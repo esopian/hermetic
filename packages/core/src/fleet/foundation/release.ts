@@ -14,7 +14,7 @@ import {
   releaseFiles,
   writeFleetManifest,
 } from "../../release/artifacts.ts";
-import { ustarEntry } from "../../release/tar.ts";
+import { configManifestOf } from "../../release/tar.ts";
 import type { OpEvent } from "../../schema/index.ts";
 import { PHASE, foundationHelpers, type FoundationCtx } from "./shared.ts";
 import { evt } from "../../events.ts";
@@ -365,27 +365,3 @@ function refsOfConfig(bytes: Uint8Array | null): { hermes: string | null; chrome
 
 /** Just the field the browser keep set needs, from a config that has one. */
 const ConfigChromeRef = z.object({ chrome_ref: z.string().min(1).optional() });
-
-/**
- * `manifest.json` out of a config tarball, parsed as JSON and not yet
- * validated, or `null` when the object is absent or is not one.
- */
-function configManifestOf(bytes: Uint8Array | null): unknown {
-  if (bytes === null) return null;
-  let manifest: Uint8Array | null;
-  try {
-    // Copied rather than passed through: `getObject` hands back a view over
-    // whatever buffer the SDK read into, and `gunzipSync` wants its own.
-    manifest = ustarEntry(Bun.gunzipSync(new Uint8Array(bytes)), "manifest.json");
-  } catch {
-    return null;
-  }
-  if (manifest === null) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(new TextDecoder().decode(manifest));
-  } catch {
-    return null;
-  }
-  return parsed;
-}

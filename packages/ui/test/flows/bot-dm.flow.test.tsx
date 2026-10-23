@@ -54,12 +54,13 @@ test("Marshall's DM is a Messaged marker that opens the exchange with NickQABot'
 
 test("NickQABot's delivery from Marshall is Marshall speaking, not You", async () => {
   await open("auditor");
-  const marker = await screen.findByRole(
-    "button",
-    { name: /Message from Marshall/ },
-    { timeout: 4_000 },
-  );
-  const article = marker.closest("article")!;
+  // NickQABot's own DM to Marshall earlier in the thread has a "Message from
+  // Marshall" reply notice too, outside any article; pin the delivery's own.
+  const body = await screen.findByText(/Evan has asked for another targeted re-QA/, undefined, {
+    timeout: 4_000,
+  });
+  const article = body.closest("article")!;
+  expect(within(article).getByRole("button", { name: /Message from Marshall/ })).toBeTruthy();
   expect(article.querySelector(".ch-msg-who")?.textContent).toBe("Marshall");
   expect(article.classList.contains("me")).toBe(false);
 });

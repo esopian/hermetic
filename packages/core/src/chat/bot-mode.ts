@@ -8,7 +8,7 @@ import { HermeticError } from "../errors.ts";
 import { validateName } from "../shared/naming.ts";
 import { botHandle } from "../shared/bot-handles.ts";
 import { redactText } from "./chat-redact.ts";
-import { MemoryChatSettingsStore, maskFor } from "./chat-settings.ts";
+import { MemoryChatSettingsStore, maskFor, type ChatSettingsStore } from "./chat-settings.ts";
 import { isoOrNull, record, records, str } from "./hermes/hermes-chat-wire.ts";
 import { botProfileOf, createBotOverRpc } from "./hermes/hermes-bot-create.ts";
 
@@ -134,7 +134,7 @@ const ENDPOINT_REFUSALS = new Set<string>(["NOT_FOUND", "FORBIDDEN", "CONFLICT"]
  * rethrown and `capabilities` fails rather than reporting on a box it never
  * reached.
  */
-const ENDPOINT_UNKNOWNS = new Set<string>(["CHAT_PROTOCOL"]);
+export const ENDPOINT_UNKNOWNS = new Set<string>(["CHAT_PROTOCOL"]);
 
 /**
  * Upstream's wire spelling of `EventConflictError` — one `event_id` reused with
@@ -253,50 +253,42 @@ function probeProfile(roster: unknown): string {
   return names.sort()[0] ?? IMPLICIT_PROFILE;
 }
 
-export function createBotMode(
-  deps: Pick<ChatDeps, "guardFleet" | "getAgent" | "instanceListening" | "hermes" | "chatSettings">,
-) {
-  const settings = deps.chatSettings ?? new MemoryChatSettingsStore();
-  async function box(instance: string) {
-    validateName(instance);
-    const { fleet } = await deps.guardFleet();
-    const watched = () => deps.instanceListening?.list(fleet.fleet_id).includes(instance);
-    if (!watched())
-      throw new HermeticError(
-        "VALIDATION",
-        `${instance}: listen to this instance before using Bot Mode`,
-      );
-    const agent = await deps.getAgent(instance);
-    if (!watched()) throw new HermeticError("VALIDATION", `${instance}: instance is no longer watched`);
-    return {
-      instance,
-      fleet_id: fleet.fleet_id,
-      baseUrl: agentDashboardUrl(agent, fleet.tailnet, cloudName(fleet.fleet_id, instance)),
-    };
-  }
-  async function rpc(
-    instance: string,
-    method: string,
-    params: Record<string, unknown>,
-    opts: ChatOptions = {},
-  ) {
-    const address = await box(instance);
-    if (!deps.hermes.botModeRpc) return unsupported("Bot Mode RPC is unavailable on this gateway");
-    return deps.hermes.botModeRpc(address, method, params, opts);
-  }
-  async function rest(
-    instance: string,
-    method: string,
-    path: string,
-    body?: unknown,
-    opts: ChatOptions = {},
-  ) {
-    const address = await box(instance);
-    if (!deps.hermes.botModeRest)
-      return unsupported("Bot Mode dashboard API is unavailable on this gateway");
-    return deps.hermes.botModeRest(address, method, path, body, opts);
-  }
-  function operation<I extends z.ZodType, O>(
+/** The deps every dashboard surface (Bot Mode, kanban) resolves a box with. */
+export type DashboardDeps = Pick<ChatDeps, "guardFleet" | "getAgent" | "instanceListening">;
+
+/**
+ * Where one instance's dashboard answers, behind the fleet guard. Bot Mode
+ * requires the instance to be watched (`watched: true`, the default); the
+ * kanban board is a fleet-wide view and does not.
+ */
+export async function dashboardBox(deps: DashboardDeps, instance: string, watched = true) {
+  validateName(instance);
+  const { fleet } = await deps.guardFleet();
+  const isWatched = () => !watched || deps.instanceListening?.list(fleet.fleet_id).includes(instance);
+  if (!isWatched())
+    throw new HermeticError("VALIDATION", `${instance}: listen to this instance before using Bot Mode`);
+  const agent = await deps.getAgent(instance);
+  if (!isWatched()) throw new HermeticError("VALIDATION", `${instance}: instance is no longer watched`);
+  return dashboardAddress(fleet, agent);
+}
+
+/** One agent row's dashboard address in `fleet`. */
+export const dashboardAddress = (
+  fleet: { fleet_id: string; tailnet: string },
+  agent: Parameters<typeof agentDashboardUrl>[0],
+) => ({
+  instance: agent.name,
+  fleet_id: fleet.fleet_id,
+  baseUrl: agentDashboardUrl(agent, fleet.tailnet, cloudName(fleet.fleet_id, agent.name)),
+});
+
+/**
+ * A validated, abort-aware, redacting dashboard operation: input parsed with
+ * `schema`, the result masked when this laptop's `redact` is on, and every
+ * failure a redacted `HermeticError`.
+ */
+export function createOperation(settings: ChatSettingsStore) {
+  return function operation<I extends z.ZodType, O>(
     schema: I,
     work: (input: z.infer<I>, opts: ChatOptions) => Promise<O>,
   ) {
@@ -328,7 +320,37 @@ export function createBotMode(
         );
       }
     };
+  };
+}
+
+export function createBotMode(
+  deps: Pick<ChatDeps, "guardFleet" | "getAgent" | "instanceListening" | "hermes" | "chatSettings">,
+) {
+  const settings = deps.chatSettings ?? new MemoryChatSettingsStore();
+  const box = (instance: string) => dashboardBox(deps, instance);
+  async function rpc(
+    instance: string,
+    method: string,
+    params: Record<string, unknown>,
+    opts: ChatOptions = {},
+  ) {
+    const address = await box(instance);
+    if (!deps.hermes.botModeRpc) return unsupported("Bot Mode RPC is unavailable on this gateway");
+    return deps.hermes.botModeRpc(address, method, params, opts);
   }
+  async function rest(
+    instance: string,
+    method: string,
+    path: string,
+    body?: unknown,
+    opts: ChatOptions = {},
+  ) {
+    const address = await box(instance);
+    if (!deps.hermes.botModeRest)
+      return unsupported("Bot Mode dashboard API is unavailable on this gateway");
+    return deps.hermes.botModeRest(address, method, path, body, opts);
+  }
+  const operation = createOperation(settings);
   /**
    * One instance's last probe sweep, keyed by fleet and instance so a fleet
    * switch cannot serve another fleet's gateway answers.

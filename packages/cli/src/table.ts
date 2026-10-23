@@ -27,6 +27,7 @@ import {
   agentDashboardUrl,
   agentDesktopUrl,
   autoUpdateHermeticd,
+  autoUpgrade,
   groupByDisposition,
   resolveFilesSettings,
   splitHermesSettings,
@@ -733,6 +734,13 @@ export function renderSettings(result: SettingsResult): string {
       autoUpdateHermeticd(settings)
         ? "on (new releases roll out when pushed)"
         : "off (boxes update nightly)",
+    ],
+    // §6.6: off unless the fleet opted in; only the desktop app acts on it.
+    [
+      "auto-upgrade",
+      autoUpgrade(settings)
+        ? "on (the desktop app updates the fleet when it is newer)"
+        : "off (fleet updates are started by hand)",
     ],
     // The effective files settings, defaults included, for the same reason.
     ...filesRows(settings),

@@ -184,6 +184,14 @@ export const FoundationStatus = z.object({
    * one.
    */
   tool_outdated: z.boolean(),
+  /**
+   * This build against the one that last published to the fleet
+   * (`_fleet.published_by`, `compareBuild`): `newer` may offer the agents a
+   * config update and run `auto_upgrade`; `older` is told so and offers
+   * nothing; `same` and `unknown` offer a config update but never auto-run it.
+   * Optional on the wire because an older server does not send it.
+   */
+  build_order: z.enum(["newer", "same", "older", "unknown"]).optional(),
   /** `_fleet.lock` while it is live: an update is running right now. */
   in_progress: Lock.nullable(),
   /**
@@ -246,5 +254,5 @@ export type FoundationUpdateInput = z.infer<typeof FoundationUpdateInput>;
  * shape of the op from the op.
  */
 export function foundationPhases(): string[] {
-  return ["preflight", "archive", "stack", "artifacts", "migrate", "rollout", "done"];
+  return ["preflight", "archive", "stack", "artifacts", "migrate", "rollout", "config", "done"];
 }

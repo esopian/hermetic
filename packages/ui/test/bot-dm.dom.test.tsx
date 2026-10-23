@@ -295,26 +295,70 @@ describe("the receiver's delivery row", () => {
   });
 });
 
-describe("the DM reply card", () => {
-  const reply = (to_profile: string) => eventOf({ dm: { to_profile, reply: REPLY, warnings: [] } });
-  const renderReply = (to_profile: string) =>
+describe("the DM reply notice", () => {
+  const reply = (to_profile: string, body = REPLY) =>
+    eventOf({ dm: { to_profile, reply: body, warnings: [] } });
+  const renderReply = (to_profile: string, body?: string) =>
     render(
       <BotDmContext.Provider value={{ teammates: TEAM, open: () => {} }}>
-        <ProcessEventBlock block={reply(to_profile)} />
+        <ProcessEventBlock block={reply(to_profile, body)} />
       </BotDmContext.Provider>,
     );
 
-  test("names the replier by its roster title, not its profile id", () => {
+  test("names the replier by its roster title", () => {
     const { container } = renderReply("auditor");
-    expect(container.querySelector(".ch-ev-dm-head")?.textContent).toContain("NickQABot → ");
-    expect(container.querySelector(".ch-ev-dm-head")?.textContent).not.toContain("auditor");
-    expect(container.querySelector(".ch-ev-dm-who .ch-msg-who")?.textContent).toBe("NickQABot");
+    expect(container.querySelector(".ch-dm-mark.from")?.textContent).toBe("Message from NickQABot");
+    expect(container.textContent).not.toContain("auditor");
+  });
+
+  test("with no exchange to open, shows the body as plain text behind a fold", () => {
+    const body = "Re-QA: **pass**.\n\nSecond paragraph.";
+    const { container } = renderReply("auditor", body);
+    const fold = container.querySelector("details.ch-dm-reply")!;
+    expect(fold.querySelector("summary")?.textContent).toBe("show message");
+    // Verbatim text, newlines kept: no markdown rendered.
+    expect(fold.querySelector(".ch-dm-reply-body")?.textContent).toBe(body);
+    expect(fold.querySelector("strong, p")).toBeNull();
+  });
+
+  test("with no body and no exchange, draws no notice", () => {
+    const { container } = renderReply("auditor", "");
+    expect(container.querySelector(".ch-dm-mark.from")).toBeNull();
+    expect(container.textContent).toBe("");
   });
 
   test("falls back to the profile id for a bot not on the roster", () => {
     const { container } = renderReply("stranger");
-    expect(container.querySelector(".ch-ev-dm-head")?.textContent).toContain("stranger → ");
-    expect(container.querySelector(".ch-ev-dm-who .ch-msg-who")?.textContent).toBe("stranger");
+    expect(container.querySelector(".ch-dm-mark.from")?.textContent).toBe("Message from stranger");
+  });
+
+  test("in the sender's thread, opens the exchange the reply lives in", async () => {
+    server = fakeServer({
+      "chat.history": { instance: "atlas", bot: "auditor", session: null, messages: [] },
+    });
+    const notice = {
+      id: "e1",
+      session: "s",
+      role: "system",
+      at: AT,
+      blocks: [
+        {
+          kind: "process_event",
+          event: "completion",
+          outcome: "ok",
+          process_id: "proc_a41c",
+          exit_code: 0,
+          dm: { to_profile: "auditor", reply: REPLY, warnings: [] },
+          raw: `[IMPORTANT: Background process proc_a41c completed normally (exit code 0).\nOutput:\n${REPLY}]`,
+        },
+      ],
+    } as ChatMessageView;
+    const { container } = renderThread("scribe", [bot("m1", [dmCall(QUEUED)]), notice]);
+    expect(container.textContent).not.toContain(REPLY);
+    expect(container.textContent).not.toContain("proc_a41c");
+    fireEvent.click(screen.getByRole("button", { name: /Message from NickQABot/ }));
+    const dialog = screen.getByRole("dialog", { name: "Marshall ⇄ NickQABot" });
+    await waitFor(() => expect(dialog.textContent).toContain(REPLY));
   });
 });
 

@@ -194,6 +194,34 @@ export const PlanSummary = z.object({
 });
 export type PlanSummary = z.infer<typeof PlanSummary>;
 
+/**
+ * What converging one agent would change on its box (§6.5): the bundle the box
+ * last applied (`config/<name>/<from>.tgz`) against the one this build renders.
+ * Paths and field names only, never content — a rendered file can carry
+ * secrets' slot names and an operator's prompts, and the plan is printed.
+ */
+export const ConfigChange = z.object({
+  name: z.string(),
+  /** The box's `applied_config_hash`, or `null` when it has reported none. */
+  from: z.string().nullable(),
+  /** The hash this build renders (with any staged provider change applied). */
+  to: z.string(),
+  /** `null` when it will be converged; otherwise why it will not be. */
+  deferred: z.string().nullable(),
+  /** §8.3: the staged provider change that ships with it, in one line, or `null`. */
+  pending: z.string().nullable(),
+  /**
+   * Rendered file paths added, removed or changed (content, mode or owner),
+   * sorted. `null` when the applied bundle could not be read — see `note`.
+   */
+  files: z.array(z.string()).nullable(),
+  /** Manifest-level fields that differ: `commands`, `packages`, `units`, `requires`, … */
+  manifest: z.array(z.string()),
+  /** e.g. `applied bundle unavailable`; `null` when there is nothing to add. */
+  note: z.string().nullable(),
+});
+export type ConfigChange = z.infer<typeof ConfigChange>;
+
 /** `plan.destroy(name)` → this; `apply(plan)` executes it. Core never asks "are you sure". */
 export const Plan = z.object({
   kind: PlanKind,
@@ -209,6 +237,13 @@ export const Plan = z.object({
    * *disagrees*; it cannot refuse one that was never there.
    */
   summary: PlanSummary.optional(),
+  /**
+   * Per agent, what a config converge would change — on a `rollout` plan, and
+   * on a `foundation` plan, whose update ends by converging every changed
+   * agent. Unchanged agents are left out of a `foundation` plan's list and kept
+   * (as `already current`) on a `rollout` plan's, which names every agent.
+   */
+  config_changes: z.array(ConfigChange).optional(),
   /**
    * What this plan would do to the fleet's hermeticd release — only on a
    * `foundation` plan, and only when the manifest could be read.

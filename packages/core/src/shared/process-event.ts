@@ -22,7 +22,41 @@ export interface ProcessEventLike {
   watch?: { pattern: string; suppressed?: number } | null;
   delegation?: { total: number; succeeded: number } | null;
   dm?: { to_profile: string; reply: string } | null;
-  notice?: { variant?: string | null; subject?: string | null; detail?: string | null } | null;
+  notice?: {
+    variant?: string | null;
+    subject?: string | null;
+    detail?: string | null;
+    task_id?: string | null;
+    kanban_kind?: string | null;
+  } | null;
+}
+
+/**
+ * What a `kanban` notice says happened to the card, in upstream's words
+ * (`done — <title>`, `blocked: <reason>`, `→ review`). An unknown kind is its
+ * suffix verbatim.
+ */
+export function kanbanNoticeWhat(notice: {
+  kanban_kind?: string | null;
+  detail?: string | null;
+}): string {
+  const detail = notice.detail ?? "";
+  switch (notice.kanban_kind) {
+    case "completed":
+      return `done — ${detail}`;
+    case "blocked":
+      return detail ? `blocked: ${detail}` : "blocked";
+    case "gave_up":
+      return "gave up after repeated spawn failures";
+    case "crashed":
+      return "worker crashed; dispatcher will retry";
+    case "timed_out":
+      return `timed out${detail ? ` (${detail})` : ""}; will retry`;
+    case "status":
+      return `→ ${detail}`;
+    default:
+      return detail;
+  }
 }
 
 /** The fixed label for each `nudge` variant (`ProcessNoticeVariant`), never free text. */
@@ -174,6 +208,8 @@ export function processEventSentence(event: ProcessEventLike): string {
       return notice?.subject ? `model → ${notice.subject}` : "model changed";
     case "personality":
       return notice?.variant === "cleared" ? "personality cleared" : "personality set";
+    case "kanban":
+      return `Kanban ${notice?.task_id ?? "task"} ${notice ? kanbanNoticeWhat(notice) : ""}`.trimEnd();
     default:
       return firstLine(event.message ?? "") || "background notice";
   }

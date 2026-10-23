@@ -207,6 +207,7 @@ export function testContext(backend: Backend, overrides: Partial<CoreContext> = 
     hermeticdVersion: FIXTURE_HERMETICD_VERSION,
     hermesVersion: BUILD_VERSIONS.hermes,
     localBuild: () => null,
+    buildIdentity: () => ({ hermetic_version: "0.0.0-dev" }),
     notifications: {
       store: new MemoryNotificationStore(),
       fleet: () => config?.fleet_id ?? null,

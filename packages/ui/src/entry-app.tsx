@@ -51,6 +51,8 @@ import "./chat/styles/chat-subagent.css";
 import "./chat/styles/chat-tasks.css";
 // An agent's file and secret requests: loud, square, never softened.
 import "./chat/styles/chat-file-request.css";
+// A kanban card the agent filed: the task widget's frame and lane track.
+import "./chat/styles/chat-kanban.css";
 // Bot-to-bot DM markers and the exchange panel.
 import "./chat/styles/bot-dm.css";
 // GFM tables, thematic breaks, task boxes and math, scoped to `.ch-msg-body`.
@@ -72,6 +74,7 @@ import "./styles/shell.css";
 import "./styles/settings.css";
 // The foundation update drawer's review stage.
 import "./styles/foundation.css";
+import "./styles/work.css";
 
 async function boot(): Promise<Root> {
   await installRpcTransport();

@@ -2,7 +2,7 @@
  * `foundation.update` (§6.6): the phases in the order that is the safety
  * property —
  *
- *   preflight → archive → stack → artifacts → migrate → rollout → done
+ *   preflight → archive → stack → artifacts → migrate → rollout → config → done
  *
  * — with the stamp, the stack step and the migration glue beside the sequence
  * that calls them. `release.ts` and `rollout.ts` hold the two phases long
@@ -25,6 +25,8 @@ import { backfillNetworkMode, migrationsBetween } from "../foundation-migrations
 import { ARTIFACTS_VERSION, HERMETIC_VERSION } from "../../version.ts";
 import { PHASE, foundationHelpers, type FoundationCtx } from "./shared.ts";
 import { checkAbort } from "../../abort.ts";
+import { configUpdate } from "../config-update.ts";
+import { compareBuild } from "../build-order.ts";
 import { evt } from "../../events.ts";
 import type { createChangeSet } from "./change-set.ts";
 import type { createRelease } from "./release.ts";
@@ -137,6 +139,9 @@ export function createUpdate(
      * anybody else write `_fleet` while I was gone".
      */
     const at = expectationOf(current);
+    // §6.6: who published before this run's stamp rewrites it, for the config
+    // phase's older-build check.
+    const publishedBefore = current.published_by;
     let released = false;
     /**
      * §4.4: push the expiry out once the lock is a third of its life old, and
@@ -294,6 +299,21 @@ export function createUpdate(
       );
       current = await release(current, owner);
       released = true;
+
+      // ── config ────────────────────────────────────────────────────────────
+      /**
+       * Every agent whose config this build renders differently converges onto
+       * it. After the release of the `_fleet` lock, not inside it: converging
+       * takes each agent's lock, which `assertFleetUnlocked` refuses while the
+       * fleet's is held — by anyone, this op included. A failure here is a
+       * warning; the foundation is already stamped.
+       */
+      if (deps.config !== undefined) {
+        yield* configUpdate(
+          { ctx: core, ...deps.config },
+          { phase: "config", progress: PHASE.config, publishedBefore, signal: opts.signal },
+        );
+      }
       yield evt(
         "done",
         1,
@@ -371,6 +391,12 @@ export function createUpdate(
       min_hermetic_version: hermeticdVersion,
       // The artifacts phase above pushed this build's bundle, whatever else moved.
       artifacts_version: ARTIFACTS_VERSION,
+      // Never moved backwards (`compareBuild`): an older build's record would
+      // let its next push read as `same` and converge its older config.
+      published_by:
+        compareBuild(core.buildIdentity(), fleet.published_by) === "older"
+          ? fleet.published_by
+          : core.buildIdentity(),
       foundation_updated_at: nowIso(),
       foundation_updated_by: await core.actor(),
       lock: { owner, expires: new Date(now().getTime() + lockTtlMs).toISOString() },

@@ -53,7 +53,16 @@ import { checkAbort } from "../abort.ts";
 import { evt } from "../events.ts";
 import type { CoreContext } from "../context.ts";
 
-import type { Agent, FleetItem, OpEvent, Plan, PlanRolloutInput } from "../schema/index.ts";
+import type {
+  Agent,
+  AgentConfig,
+  ConfigChange,
+  FleetItem,
+  OpEvent,
+  Plan,
+  PlanRolloutInput,
+} from "../schema/index.ts";
+import { diffAppliedConfig } from "./config-diff.ts";
 import { configVerdict } from "../fleet/skew.ts";
 import {
   CONVERGE_POLL_MS,
@@ -97,7 +106,15 @@ export interface RolloutTarget {
    * and the plan is where an operator finds that out.
    */
   readonly pending: string | null;
+  /** The manifest `to` names, for the plan's per-agent diff. */
+  readonly manifest: AgentConfig;
 }
+
+/** What one agent's render is, as far as a rollout plan asks: its hash and its manifest. */
+export type RenderOf = (
+  agent: Agent,
+  fleet: FleetItem,
+) => { config_hash: string; manifest: AgentConfig };
 
 export function createRollout(deps: RolloutDeps) {
   const { ctx } = deps;
@@ -129,7 +146,7 @@ export function createRollout(deps: RolloutDeps) {
   async function targets(
     input: PlanRolloutInput,
     fleet: FleetItem,
-    hashFor: (agent: Agent, fleet: FleetItem) => string,
+    renderOf: RenderOf,
   ): Promise<RolloutTarget[]> {
     const all = await agents.scan();
     const wanted = input.agents === undefined ? null : new Set(input.agents);
@@ -151,7 +168,7 @@ export function createRollout(deps: RolloutDeps) {
        * another, which is the plan being wrong about the only number it exists
        * to state.
        */
-      const to = hashFor(pendingApplied(agent), fleet);
+      const { config_hash: to, manifest } = renderOf(pendingApplied(agent), fleet);
       const from = agent.applied_config_hash ?? null;
       return {
         name: agent.name,
@@ -159,6 +176,7 @@ export function createRollout(deps: RolloutDeps) {
         to,
         deferred: deferralFor(agent, to),
         pending: describePending(agent),
+        manifest,
       };
     });
   }
@@ -171,7 +189,10 @@ export function createRollout(deps: RolloutDeps) {
   function deferralFor(agent: Agent, to: string): string | null {
     const down = convergeDeferral(agent);
     if (down !== null) return down;
-    if (agent.lock) return "locked by another operator";
+    // A lapsed TTL lock (§4.4) holds nothing; `acquireLock` would take it over.
+    if (agent.lock && Date.parse(agent.lock.expires) > ctx.backend.clock.now().getTime()) {
+      return "locked by another operator";
+    }
     /**
      * A staged provider change is work even when the hashes already agree: the
      * credential has not been copied, the binding has not moved, and the
@@ -192,18 +213,48 @@ export function createRollout(deps: RolloutDeps) {
    */
   async function plan(
     input: PlanRolloutInput,
-    hashFor: (agent: Agent, fleet: FleetItem) => string,
+    renderOf: RenderOf,
     summary: Plan["summary"],
   ): Promise<Plan> {
     const { fleet } = await ctx.guardFleet();
-    const list = await targets(input, fleet, hashFor);
+    const list = await targets(input, fleet, renderOf);
     const converging = list.filter((t) => t.deferred === null);
+    /**
+     * What each converge would change on its box, read off the bundle it last
+     * applied. An agent already current reads nothing: there is nothing to show.
+     * A tombstone has no box to change, so it has no entry at all.
+     */
+    const config_changes: ConfigChange[] = await Promise.all(
+      list
+        .filter((t) => t.deferred !== "destroyed")
+        .map(async (t) => {
+          const diff =
+            t.deferred === "already current"
+              ? { files: [], manifest: [], note: null }
+              : await diffAppliedConfig(ctx.backend.artifacts, t.name, t.from, t.manifest);
+          return {
+            name: t.name,
+            from: t.from,
+            to: t.to,
+            deferred: t.deferred,
+            pending: t.pending,
+            files: diff.files,
+            manifest: diff.manifest,
+            note: diff.note,
+          };
+        }),
+    );
+    const changed = new Map(config_changes.map((c) => [c.name, c.files]));
+    const fileCount = (name: string): string => {
+      const files = changed.get(name);
+      return files === null || files === undefined ? "" : `, ${String(files.length)} file(s) changed`;
+    };
 
     const steps = list.map((t) => ({
       id: t.name,
       description:
         t.deferred === null
-          ? `${t.name}: apply ${t.to}${t.from === null ? "" : ` (was ${t.from})`}` +
+          ? `${t.name}: apply ${t.to}${t.from === null ? "" : ` (was ${t.from})`}${fileCount(t.name)}` +
             (t.pending === null ? "" : `, and ${t.pending}`)
           : `${t.name}: skipped — ${t.deferred}${t.pending === null ? "" : ` (${t.pending} stays staged)`}`,
       // A converge writes configuration; it destroys nothing and cannot lose a
@@ -242,6 +293,7 @@ export function createRollout(deps: RolloutDeps) {
       steps,
       warnings,
       ...(summary ? { summary } : {}),
+      config_changes,
     };
   }
 

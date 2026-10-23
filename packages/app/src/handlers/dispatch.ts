@@ -21,6 +21,7 @@ import { devtoolsHandlers } from "./devtools.ts";
 import { filesHandlers } from "./files.ts";
 import { fixtureHandlers } from "./fixture.ts";
 import { fleetHandlers } from "./fleet.ts";
+import { kanbanHandlers } from "./kanban.ts";
 import { initHandlers } from "./init.ts";
 import { lifecycleHandlers } from "./lifecycle.ts";
 import { metaHandlers } from "./meta.ts";
@@ -64,6 +65,7 @@ export const HANDLERS: Readonly<Record<string, Handler>> = Object.freeze(
     ...filesHandlers,
     ...fixtureHandlers,
     ...fleetHandlers,
+    ...kanbanHandlers,
     ...initHandlers,
     ...lifecycleHandlers,
     ...metaHandlers,

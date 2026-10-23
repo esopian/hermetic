@@ -46,4 +46,4 @@ export const FOUNDATION_VERSION = 17;
  * behind this number is an available update (§6.6), so every dashboard on a
  * newer build prompts its fleet to push the new bundle.
  */
-export const ARTIFACTS_VERSION = 7;
+export const ARTIFACTS_VERSION = 9;

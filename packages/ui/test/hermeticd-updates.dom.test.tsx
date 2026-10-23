@@ -226,3 +226,52 @@ describe("Foundation · auto-update hermeticd", () => {
     expect(group().getAttribute("title")).toBe("a foundation update is running");
   });
 });
+
+/**
+ * §6.6's `auto_upgrade` beside it: the same instant-save On/Off, but absent
+ * reads as Off (core's `autoUpgrade`), and the helper line says what On does.
+ */
+describe("Foundation · auto-upgrade fleet", () => {
+  const upgrade = () => screen.getByRole("group", { name: "Auto-upgrade fleet" });
+  const upButton = (name: "On" | "Off") =>
+    within(upgrade()).getByRole("button", { name }) as HTMLButtonElement;
+  const row = () => document.querySelector('[data-field="auto_upgrade"]') as HTMLElement;
+
+  test("absent reads as Off, and the helper line says what On would do", async () => {
+    server = fakeServer(NETWORK);
+    render(<Harness m={meta(settings(7))} />);
+    await settled();
+
+    expect(upButton("Off").getAttribute("aria-pressed")).toBe("true");
+    expect(upButton("On").getAttribute("aria-pressed")).toBe("false");
+    expect(row().textContent).toContain("restarts Hermes");
+    expect(row().querySelector("[title]")?.getAttribute("title")).toContain(
+      "never runs a foundation update",
+    );
+  });
+
+  test("On sends only auto_upgrade and the held version, then shows On", async () => {
+    const saved = settings(8);
+    (saved.settings as { auto_upgrade?: boolean }).auto_upgrade = true;
+    server = fakeServer({ ...NETWORK, "settings.set": saved });
+    const user = userEvent.setup();
+    render(<Harness m={meta(settings(7))} />);
+
+    await user.click(upButton("On"));
+    await waitFor(() => expect(server?.to("settings.set").length).toBe(1));
+    const sent = server.to("settings.set")[0]?.params as Record<string, unknown>;
+    expect(sent).toMatchObject({ auto_upgrade: true, expected_version: 7 });
+    expect(Object.keys(sent).sort()).toEqual(["auto_upgrade", "expected_version", "target"]);
+    await waitFor(() => expect(upButton("On").getAttribute("aria-pressed")).toBe("true"));
+    expect(row().textContent).toContain("Restarts Hermes on agents");
+    // The hermeticd switch beside it is untouched.
+    expect(pressed("On")).toBe("true");
+  });
+
+  test("a running foundation update holds it too", async () => {
+    server = fakeServer(NETWORK);
+    render(<Harness m={meta(settings(7), foundation(true))} />);
+    await settled();
+    expect(upButton("On").disabled).toBe(true);
+  });
+});

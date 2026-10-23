@@ -26,6 +26,44 @@ export interface FoundationGateStatus {
    * pre-v10 fleet gives.
    */
   stale_bedrock_grants?: readonly string[] | undefined;
+  /**
+   * This build against the one that last published to the fleet. Optional:
+   * an older server does not send it, and absence offers what it always did.
+   */
+  build_order?: "newer" | "same" | "older" | "unknown" | undefined;
+}
+
+/** The message every head gives a build older than the fleet's last publisher. */
+export const OLDER_BUILD =
+  "this hermetic build is older than the one that last updated the fleet — upgrade hermetic";
+
+/**
+ * Whether the fleet *itself* is behind this build: stack, template, release or
+ * artifacts bundle. Core's own `foundationUpdate` condition (`status.ts`),
+ * because `update_available` also folds in agents whose config this build
+ * renders newer — which the same Update applies, but which leaves the stack the
+ * snapshot policy runs on exactly where it was.
+ */
+export function foundationBehind(f: {
+  fleet: {
+    foundation_version: number;
+    template_sha256: string | null;
+    hermeticd_version: string;
+    artifacts_version?: number | undefined;
+  };
+  available: {
+    foundation_version: number;
+    template_sha256: string;
+    hermeticd_version: string;
+    artifacts_version?: number | undefined;
+  };
+}): boolean {
+  return (
+    f.fleet.foundation_version < f.available.foundation_version ||
+    f.fleet.template_sha256 !== f.available.template_sha256 ||
+    f.fleet.hermeticd_version !== f.available.hermeticd_version ||
+    (f.fleet.artifacts_version ?? 0) < (f.available.artifacts_version ?? 0)
+  );
 }
 
 /**
@@ -204,6 +242,9 @@ export function continueGate(input: {
       reason: "this hermetic build is older than the fleet's foundation; upgrade hermetic",
     };
   }
+  // Settings offers no update to an older build; the pill opens this drawer
+  // without asking, so it is refused here too.
+  if (f.build_order === "older") return { allowed: false, reason: OLDER_BUILD };
   // The grant is the second reason to update, and it is independent of the
   // version: a fleet on the current foundation can still name a Bedrock model
   // its instance role may not invoke, or record no grant at all. Refusing here
@@ -424,4 +465,35 @@ export function hermeticdLine(
     return { from, to, ...builds, note: "· cannot tell whether the binary changed", warn: false };
   }
   return { from, to, ...builds, note: null, warn: false };
+}
+
+/** `Plan["config_changes"][number]`, narrowed structurally like the rest. */
+export interface ConfigChangeView {
+  name: string;
+  from: string | null;
+  to: string;
+  deferred: string | null;
+  pending: string | null;
+  files: readonly string[] | null;
+  manifest: readonly string[];
+  note: string | null;
+}
+
+/**
+ * One agent's row in the drawer's config list: the two hashes short, and the
+ * lines folded under it — why it waits, the staged provider change it ships,
+ * then what it changes. `files` is `null` when the applied bundle could not be
+ * read, and `note` says so; an empty list is a genuine "no file changed".
+ */
+export function configChangeView(c: ConfigChangeView): { hashes: string; details: string[] } {
+  return {
+    hashes: `${c.from === null ? "—" : c.from.slice(0, 12)} → ${c.to.slice(0, 12)}`,
+    details: [
+      ...(c.deferred === null ? [] : [`deferred: ${c.deferred}`]),
+      ...(c.pending === null ? [] : [`staged: ${c.pending}`]),
+      ...(c.files ?? []),
+      ...(c.manifest.length === 0 ? [] : [`manifest: ${c.manifest.join(", ")}`]),
+      ...(c.note === null ? [] : [c.note]),
+    ],
+  };
 }

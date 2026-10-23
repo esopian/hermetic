@@ -9,7 +9,13 @@ import type { ReactNode } from "react";
 import { networkStatus } from "../../api/index.ts";
 import type { FoundationStatus, Meta, NetworkReport, SettingsResult } from "../../api/index.ts";
 import { otherFleetsNeedingUpdate } from "../../nav/fleet-switch.ts";
-import { bedrockGrantLine, grantNeedsUpdate, hermesLine } from "../../logic/foundation-logic.ts";
+import {
+  OLDER_BUILD,
+  bedrockGrantLine,
+  foundationBehind,
+  grantNeedsUpdate,
+  hermesLine,
+} from "../../logic/foundation-logic.ts";
 import { networkFactRows, networkModeLine, renetworkAvailable } from "../../logic/network-logic.ts";
 import { configLabel, fleetBand } from "../../logic/skew-logic.ts";
 import { NetworkDrawer } from "../NetworkDrawer.tsx";
@@ -134,6 +140,15 @@ function statusCallout(foundation: FoundationStatus, grantStale: boolean): React
       </Callout>
     );
   }
+  // Below `blocked`, which says the same with more force: the update this build
+  // would run is not one to offer, so no callout below may suggest it.
+  if (foundation.build_order === "older" && !foundation.tool_outdated) {
+    return (
+      <Callout tone="info">
+        <span className="mono">{OLDER_BUILD}</span>
+      </Callout>
+    );
+  }
   const band = fleetBand(foundation);
   if (band) {
     return (
@@ -209,14 +224,19 @@ export function FoundationPanel({
    * such nor leaves the button disabled.
    */
   const grantStale = grantNeedsUpdate(foundation.stale_bedrock_grants);
-  const actionable = foundation.update_available || grantStale;
+  // An older build than the fleet's last publisher has nothing to offer it:
+  // its config is the one the newer build already replaced.
+  const older = foundation.build_order === "older";
+  const actionable = !older && (foundation.update_available || grantStale);
   const verdict = foundation.tool_outdated
     ? "this hermetic build is older than the fleet's foundation — upgrade hermetic"
-    : foundation.update_available
-      ? "an update is available"
-      : grantStale
-        ? "the foundation is current, but its Bedrock grant is not"
-        : "up to date";
+    : older
+      ? OLDER_BUILD
+      : foundation.update_available
+        ? "an update is available"
+        : grantStale
+          ? "the foundation is current, but its Bedrock grant is not"
+          : "up to date";
   const renetwork = renetworkAvailable({
     report: network ?? null,
     updateInProgress: inProgress !== null,
@@ -255,7 +275,8 @@ export function FoundationPanel({
             {
               k: "Available",
               v: `v${foundation.available.foundation_version}`,
-              tone: foundation.update_available ? "warn" : undefined,
+              // The fleet's own versions only: a config update leaves them equal.
+              tone: foundationBehind(foundation) ? "warn" : undefined,
             },
             { k: "Ubuntu release", v: foundation.fleet.ubuntu_release },
             { k: "hermeticd", v: foundation.fleet.hermeticd_version },
@@ -506,7 +527,9 @@ export function FoundationSection({
         */}
         <SnapshotsBlock
           disabledReason={meta?.foundation?.in_progress ? "a foundation update is running" : null}
-          behind={meta?.foundation?.update_available === true}
+          // Not `update_available`, which also counts agents whose config this
+          // build renders newer: that converge leaves the stack untouched.
+          behind={meta?.foundation ? foundationBehind(meta.foundation) : false}
         />
         <HermeticdUpdates
           settings={settings}
