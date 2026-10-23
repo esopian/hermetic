@@ -187,7 +187,12 @@ export function createChatTurn(deps: ChatTurnDeps) {
     bot: string,
     stored: string,
     signal: AbortSignal | undefined,
-  ): Promise<{ runtime: string; info: Record<string, unknown> | null; seed: ChatBlock | null; tip: string | null }> {
+  ): Promise<{
+    runtime: string;
+    info: Record<string, unknown> | null;
+    seed: ChatBlock | null;
+    tip: string | null;
+  }> {
     const result = rec(
       await rpc.request(
         "session.resume",
@@ -316,7 +321,12 @@ export function createChatTurn(deps: ChatTurnDeps) {
       if (opts.session) {
         // On a held socket as well as a fresh one: this is the re-attach, and
         // its `info` is what `contextUsageBlock` reads below.
-        ({ runtime: session, info, seed, tip } = await resume(rpc, box, bot, opts.session, opts.signal));
+        ({
+          runtime: session,
+          info,
+          seed,
+          tip,
+        } = await resume(rpc, box, bot, opts.session, opts.signal));
         lease.keep(opts.session, session);
         rpc.tap?.conn("session.resume", { runtime: session, stored: opts.session, info }, "in");
       } else {
