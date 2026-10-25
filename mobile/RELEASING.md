@@ -32,7 +32,7 @@ Git commit and EAS build UUID together. Never reuse a build number for a store u
 1. Confirm the app record uses bundle ID `com.hermetic.mobile`. Create the record if it does not
    exist. Copy its numeric Apple ID into `submit.production.ios.ascAppId` in `eas.json`; it is public
    metadata. It is intentionally not invented in this repo. Noninteractive submission needs it.
-2. Create the internal TestFlight group **Hermetic Internal**, matching `submit.production.ios.groups`.
+2. Create the internal TestFlight group **Alpha Users**, matching `submit.production.ios.groups`.
    Add the intended App Store Connect testers. External testers need a separate group and Apple's
    Beta App Review; don't invite them implicitly.
 3. Configure EAS Submit credentials interactively or provide an App Store Connect API key through
@@ -59,7 +59,7 @@ Git commit and EAS build UUID together. Never reuse a build number for a store u
 
    This uploads the candidate to App Store Connect/TestFlight, not to the public App Store. Do not
    use `--latest`, which can select an unrelated build. Wait for Apple's processing, resolve any
-   compliance questions, and confirm the build is available to **Hermetic Internal**.
+   compliance questions, and confirm the build is available to **Alpha Users**.
 5. Paste the candidate's `RELEASE_NOTES.md` “What to test” into that build's TestFlight **What to Test**
    field. EAS Submit uploads the binary; this repo does not claim to upload beta notes automatically.
    Have a tester install through TestFlight and repeat first launch, pairing and push checks.
