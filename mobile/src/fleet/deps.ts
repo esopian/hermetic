@@ -1,5 +1,5 @@
 /**
- * The app's `FleetDeps`: the real platform (keychain, document files, the
+ * The app's `FleetSwitchDeps`: the real platform (keychain, document files, the
  * global `fetch` and `WebSocket`, expo-notifications, background refresh,
  * React Native's `AppState`), or — only in a development build made with
  * `EXPO_PUBLIC_HERMETIC_FIXTURE=1` — the fixture kit's doubles in their place.
@@ -17,9 +17,10 @@ import { AppState, Platform } from "react-native";
 import { createPhoneFiles } from "../gateway/files.ts";
 import { createSocketOpener, type WebSocketCtor } from "../gateway/socket.ts";
 import { registerBackgroundRefresh, unregisterBackgroundRefresh } from "./background.ts";
-import type { AppStateLike, FleetDeps } from "./FleetProvider.tsx";
+import type { AppStateLike } from "./FleetProvider.tsx";
+import type { FleetSwitchDeps } from "./FleetSwitch.tsx";
 import { expoNotifier } from "./notifications.ts";
-import { documentFile, FLEET_VIEW_FILE, INBOX_FILE, secureKv } from "./persist.ts";
+import { fleetFiles, secureKv } from "./persist.ts";
 import { hermeticdRegistrar } from "./push.ts";
 import { prefixedKv } from "./store.ts";
 
@@ -58,7 +59,7 @@ export function appFleetDeps(
   flag: string | undefined = process.env.EXPO_PUBLIC_HERMETIC_FIXTURE,
   load: () => FixtureModule | null = () => fixtureModule,
   dev: boolean = __DEV__,
-): FleetDeps {
+): FleetSwitchDeps {
   const kit = fixtureSelected(flag, dev)
     ? (load()?.fixtureKit(flag, undefined, { seed: true }) ?? null)
     : null;
@@ -69,8 +70,7 @@ export function appFleetDeps(
   if (kit) {
     return {
       secure: prefixedKv(secureKv, kit.storagePrefix),
-      viewCache: documentFile(`${kit.storagePrefix}${FLEET_VIEW_FILE}`),
-      inboxFile: documentFile(`${kit.storagePrefix}${INBOX_FILE}`),
+      fleetFiles: fleetFiles(kit.storagePrefix),
       fetch: kit.fetch,
       openSocket,
       chat: kit.chat,
@@ -85,6 +85,7 @@ export function appFleetDeps(
       operatorTailnet,
       fixture: {
         link: kit.link,
+        links: kit.links,
         tailscale: kit.tailscale,
         demoPrompts: kit.demoPrompts,
         drive: kit.drive,
@@ -96,8 +97,7 @@ export function appFleetDeps(
   const fetchFn = (input: RequestInfo | URL, init?: RequestInit) => fetch(input, init);
   return {
     secure: secureKv,
-    viewCache: documentFile(FLEET_VIEW_FILE),
-    inboxFile: documentFile(INBOX_FILE),
+    fleetFiles: fleetFiles(),
     fetch: fetchFn,
     openSocket,
     files: (host) => createPhoneFiles({ fetch: fetchFn, host }),

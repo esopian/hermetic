@@ -156,6 +156,23 @@ describe("cards", () => {
     expect(screen.getByText("exit 2")).toBeTruthy();
   });
 
+  test("process event dm reply: head, body folded until tapped; empty renders nothing", async () => {
+    const dm = (reply: string): ChatBlock => ({
+      kind: "process_event",
+      event: "completion",
+      outcome: "ok",
+      dm: { to_profile: "atlas", reply, warnings: [] },
+      raw: "",
+    });
+    await draw(dm("all done"));
+    expect(screen.getByText("Message from atlas")).toBeTruthy();
+    expect(screen.queryByText("all done")).toBeNull();
+    await fireEvent.press(screen.getByRole("button"));
+    expect(screen.getByText("all done")).toBeTruthy();
+    await draw(dm(""));
+    expect(screen.queryByText("Message from atlas")).toBeNull();
+  });
+
   test("subagent: a one-liner that opens the child", async () => {
     const openSubagent = jest.fn();
     await renderUi(

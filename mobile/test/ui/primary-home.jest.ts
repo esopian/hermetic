@@ -29,14 +29,14 @@ test("no primary, or one not listened to: homeRows unchanged", () => {
   expect(primaryHomeRows(unlistened, "corvid")).toEqual(homeRows(unlistened));
 });
 
-test("the hero is every bot of the primary, its default first", () => {
+test("the hero is each instance's default, the primary's first; the rest sit below", () => {
   const layout = primaryHomeRows(input(), "corvid");
   expect(layout.heroPinned).toBe(false);
-  expect(keys(layout.hero)).toEqual(["corvid/pilot", "corvid/wren", "corvid/finch"]);
-  // atlas's only bot was its default: it gets a section back.
-  const atlas = layout.sections.find((s) => s.instance === "atlas");
-  expect(keys(atlas?.rows ?? [])).toEqual(["atlas/ops"]);
-  expect(layout.sections.some((s) => s.instance === "corvid")).toBe(false);
+  expect(keys(layout.hero)).toEqual(["corvid/pilot", "atlas/ops"]);
+  expect(layout.sections[0]?.instance).toBe("corvid");
+  expect(keys(layout.sections[0]?.rows ?? [])).toEqual(["corvid/wren", "corvid/finch"]);
+  // atlas's only bot is in the hero: no section of its own.
+  expect(layout.sections.some((s) => s.instance === "atlas")).toBe(false);
   // A down box keeps its header section.
   expect(layout.sections.find((s) => s.instance === "heron")?.reachable).toBe(false);
 });
@@ -52,4 +52,10 @@ test("pins win the hero; the primary's section still sorts first", () => {
   expect(layout.heroPinned).toBe(true);
   expect(keys(layout.hero)).toEqual(["atlas/ops"]);
   expect(layout.sections[0]?.instance).toBe("corvid");
+});
+
+test("with pins in the hero, each instance's default heads its section", () => {
+  const layout = primaryHomeRows(input({ pinned: ["corvid/wren"] }), "corvid");
+  const corvid = layout.sections.find((s) => s.instance === "corvid");
+  expect(keys(corvid?.rows ?? [])[0]).toBe("corvid/pilot");
 });

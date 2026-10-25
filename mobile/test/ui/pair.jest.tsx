@@ -53,7 +53,7 @@ describe("PairConfirm", () => {
     await renderUi(
       <PairConfirm
         link={paired()}
-        replacing={false}
+        adding={false}
         busy={false}
         onConfirm={onConfirm}
         onCancel={onCancel}
@@ -83,7 +83,7 @@ describe("PairConfirm", () => {
     await renderUi(
       <PairConfirm
         link={paired(withPrefs)}
-        replacing={false}
+        adding={false}
         busy={false}
         onConfirm={jest.fn()}
         onCancel={jest.fn()}
@@ -97,7 +97,7 @@ describe("PairConfirm", () => {
     await renderUi(
       <PairConfirm
         link={paired()}
-        replacing={false}
+        adding={false}
         busy={false}
         onConfirm={jest.fn()}
         onCancel={jest.fn()}
@@ -106,20 +106,20 @@ describe("PairConfirm", () => {
     expect(screen.queryByText("Avatar style")).toBeNull();
   });
 
-  test("replacing says it will ask again", async () => {
+  test("adding says the fleet goes beside the current one", async () => {
     await renderUi(
-      <PairConfirm link={paired()} replacing busy={false} onConfirm={jest.fn()} onCancel={jest.fn()} />,
+      <PairConfirm link={paired()} adding busy={false} onConfirm={jest.fn()} onCancel={jest.fn()} />,
     );
-    expect(screen.getByText(/replaces the current pairing/)).toBeTruthy();
-    expect(screen.getByLabelText("Replace…")).toBeTruthy();
+    expect(screen.getByText(/adds the fleet beside/)).toBeTruthy();
+    expect(screen.getByLabelText("Add fleet")).toBeTruthy();
   });
 
-  test("a code for another tailnet says so and confirms as Switch tailnet", async () => {
+  test("a code for another tailnet says so and confirms as Add fleet…", async () => {
     const onConfirm = jest.fn();
     await renderUi(
       <PairConfirm
         link={paired()}
-        replacing
+        adding
         currentTailnet="old-net.ts.net"
         busy={false}
         onConfirm={onConfirm}
@@ -129,16 +129,16 @@ describe("PairConfirm", () => {
     expect(
       screen.getByText("This code is for a different tailnet: old-net.ts.net → hermetic.ts.net"),
     ).toBeTruthy();
-    await fireEvent.press(screen.getByLabelText("Switch tailnet"));
+    await fireEvent.press(screen.getByLabelText("Add fleet…"));
     expect(onConfirm).toHaveBeenCalledTimes(1);
-    expect(screen.queryByLabelText("Replace…")).toBeNull();
+    expect(screen.queryByLabelText("Add fleet")).toBeNull();
   });
 
   test("without its actions the card draws no buttons; the pinned row carries them", async () => {
     const onConfirm = jest.fn();
     const props = {
       link: paired(),
-      replacing: true,
+      adding: true,
       currentTailnet: "old-net.ts.net",
       busy: false,
       onConfirm,
@@ -146,11 +146,11 @@ describe("PairConfirm", () => {
     };
     await renderUi(<PairConfirm {...props} actions={false} />);
     expect(screen.getByTestId("pair-tailnet-change")).toBeTruthy();
-    expect(screen.queryByLabelText("Switch tailnet")).toBeNull();
+    expect(screen.queryByLabelText("Add fleet…")).toBeNull();
     expect(screen.queryByLabelText("Cancel")).toBeNull();
     await renderUi(<PairConfirmActions {...props} />);
     expect(screen.getByLabelText("Cancel")).toBeTruthy();
-    await fireEvent.press(screen.getByLabelText("Switch tailnet"));
+    await fireEvent.press(screen.getByLabelText("Add fleet…"));
     expect(onConfirm).toHaveBeenCalledTimes(1);
   });
 
@@ -158,7 +158,7 @@ describe("PairConfirm", () => {
     await renderUi(
       <PairConfirm
         link={paired()}
-        replacing
+        adding
         currentTailnet="Hermetic.ts.net"
         busy={false}
         onConfirm={jest.fn()}
@@ -166,7 +166,7 @@ describe("PairConfirm", () => {
       />,
     );
     expect(screen.queryByTestId("pair-tailnet-change")).toBeNull();
-    expect(screen.getByLabelText("Replace…")).toBeTruthy();
+    expect(screen.getByLabelText("Add fleet")).toBeTruthy();
   });
 
   test("a hostile alias is shown cleaned", async () => {
@@ -177,7 +177,7 @@ describe("PairConfirm", () => {
     await renderUi(
       <PairConfirm
         link={read.link}
-        replacing={false}
+        adding={false}
         busy={false}
         onConfirm={jest.fn()}
         onCancel={jest.fn()}

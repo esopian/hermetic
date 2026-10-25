@@ -11,6 +11,7 @@
  * `controllable`). Pure TypeScript.
  */
 import type { ChatBlock, SubagentBlock } from "@hermetic/core/chat-client";
+import { isKanbanTaskTool } from "@hermetic/core/shared";
 import { isRequestTool } from "./file-request-logic.ts";
 import { isDmTool } from "./message-agent.ts";
 import { isShareTool } from "./share-logic.ts";
@@ -85,12 +86,14 @@ export function sections(blocks: readonly ChatBlock[], todosApart = false): Sect
   for (const block of blocks) {
     if (isTodoNotice(block)) continue;
     // A file or secret request is a card the operator answers, a shared file
-    // is a card with Save, and a bot-to-bot DM is a line between the prose:
+    // is a card with Save, a filed kanban card is its live card, and a
+    // bot-to-bot DM is a line between the prose:
     // none is a step folded into "Tools complete". Each stands alone and
     // closes the run.
     if (
       isRequestTool(block) ||
       isShareTool(block) ||
+      isKanbanTaskTool(block) ||
       isDmTool(block) ||
       (todosApart && isTodoStep(block))
     ) {

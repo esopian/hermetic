@@ -77,7 +77,12 @@ describe("DemoSheet", () => {
 });
 
 describe("conversationMenu", () => {
-  const actions = { sessions: jest.fn(), browser: jest.fn(), markRead: jest.fn() };
+  const actions = {
+    sessions: jest.fn(),
+    routines: jest.fn(),
+    browser: jest.fn(),
+    markRead: jest.fn(),
+  };
 
   test("offers Demo prompts… only when the build has a list, and opens it", () => {
     let seen: string[] = [];
@@ -89,11 +94,18 @@ describe("conversationMenu", () => {
         pick = cb;
       });
     conversationMenu("scribe", "#fff", actions);
-    expect(seen).toEqual(["Sessions", "Agent browser", "Mark read", "Cancel"]);
+    expect(seen).toEqual(["Sessions", "Routines", "Agent browser", "Mark read", "Cancel"]);
     const demo = jest.fn();
     conversationMenu("scribe", "#fff", { ...actions, demo });
-    expect(seen).toEqual(["Sessions", "Agent browser", "Mark read", "Demo prompts…", "Cancel"]);
-    (pick as unknown as (i: number) => void)(3);
+    expect(seen).toEqual([
+      "Sessions",
+      "Routines",
+      "Agent browser",
+      "Mark read",
+      "Demo prompts…",
+      "Cancel",
+    ]);
+    (pick as unknown as (i: number) => void)(4);
     expect(demo).toHaveBeenCalledTimes(1);
     sheet.mockRestore();
   });

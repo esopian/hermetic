@@ -5,6 +5,7 @@ import {
   fromBottom,
   INSET_SETTLE_MS,
   MOMENTUM_GRACE_MS,
+  OPEN_SETTLE_MS,
   nextFollowing,
   PinController,
   shouldRepin,
@@ -167,6 +168,41 @@ describe("PinController", () => {
     pin.dragEnd(0.4);
     pin.dispose();
     jest.advanceTimersByTime(MOMENTUM_GRACE_MS + INSET_SETTLE_MS);
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+});
+
+describe("PinController: a layout correction while opening", () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  test("an offset moved short of the end with no touch is put back until the thread settles", () => {
+    const scrollTo = jest.fn<void, [number, boolean]>();
+    const pin = new PinController({ scrollTo, onFollowing: jest.fn() });
+    pin.onViewport(600);
+    pin.onContentSize(3000);
+    expect(scrollTo).toHaveBeenLastCalledWith(2400, false);
+    scrollTo.mockClear();
+    // The list keeps its anchor (a last row taller than the screen) steady while it measures.
+    pin.onScroll({ offsetY: 1900, contentHeight: 3000, viewportHeight: 600 });
+    expect(scrollTo).toHaveBeenLastCalledWith(2400, false);
+    expect(pin.following).toBe(true);
+    // Settled: the same event is left alone (a reader's non-touch scroll, VoiceOver).
+    jest.advanceTimersByTime(OPEN_SETTLE_MS);
+    scrollTo.mockClear();
+    pin.onScroll({ offsetY: 1900, contentHeight: 3000, viewportHeight: 600 });
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  test("a drag ends the opening phase at once", () => {
+    const scrollTo = jest.fn<void, [number, boolean]>();
+    const pin = new PinController({ scrollTo, onFollowing: jest.fn() });
+    pin.onViewport(600);
+    pin.onContentSize(3000);
+    pin.dragBegin();
+    pin.dragEnd(0);
+    scrollTo.mockClear();
+    pin.onScroll({ offsetY: 1900, contentHeight: 3000, viewportHeight: 600 });
     expect(scrollTo).not.toHaveBeenCalled();
   });
 });

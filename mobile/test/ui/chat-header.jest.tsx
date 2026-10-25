@@ -52,18 +52,24 @@ describe("conversation header", () => {
 
   test("the overflow menu runs the picked action and nothing on cancel", () => {
     const sheet = jest.spyOn(ActionSheetIOS, "showActionSheetWithOptions");
-    const actions = { sessions: jest.fn(), browser: jest.fn(), markRead: jest.fn() };
-    for (const pick of [0, 1, 2, 3]) {
+    const actions = {
+      sessions: jest.fn(),
+      routines: jest.fn(),
+      browser: jest.fn(),
+      markRead: jest.fn(),
+    };
+    for (const pick of [0, 1, 2, 3, 4]) {
       sheet.mockImplementationOnce((_options, callback) => callback(pick));
       conversationMenu("Scribe", "#f1efe9", actions);
     }
     expect(sheet.mock.calls[0]?.[0]).toMatchObject({
       title: "Scribe",
-      options: ["Sessions", "Agent browser", "Mark read", "Cancel"],
-      cancelButtonIndex: 3,
+      options: ["Sessions", "Routines", "Agent browser", "Mark read", "Cancel"],
+      cancelButtonIndex: 4,
       tintColor: "#f1efe9",
     });
     expect(actions.sessions).toHaveBeenCalledTimes(1);
+    expect(actions.routines).toHaveBeenCalledTimes(1);
     expect(actions.browser).toHaveBeenCalledTimes(1);
     expect(actions.markRead).toHaveBeenCalledTimes(1);
     sheet.mockRestore();

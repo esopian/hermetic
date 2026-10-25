@@ -8,14 +8,13 @@ import { type ReactNode, useEffect, useState } from "react";
 import {
   KANBAN_LANE_INDEX,
   KANBAN_LANES,
-  KANBAN_TASK_ID_RE,
   kanbanStatusWord,
   kanbanTone,
+  readKanbanCreateResult,
 } from "@hermetic/core/shared";
 import {
   ApiError,
   type ChatBlockOf,
-  type ChatBlockView,
   type KanbanTaskDetailView,
   kanbanTask,
 } from "../../../api/index.ts";
@@ -29,29 +28,6 @@ import { useProcessEvents } from "./ProcessEvent.tsx";
 export const POLL_MS = 5_000;
 /** How often a card the board would not hand over is retried. */
 export const UNREADABLE_POLL_MS = 30_000;
-
-/**
- * The card a `kanban_create` result names, or null. Upstream's result is JSON;
- * core keeps it parsed (an object), or as the string when it did not parse.
- */
-export function readKanbanCreateResult(block: ChatBlockView): { task_id: string } | null {
-  if (block.kind !== "tool" || block.render !== "kanban_task") return null;
-  let value: unknown = block.result;
-  if (typeof value === "string") {
-    try {
-      value = JSON.parse(value);
-    } catch {
-      return null;
-    }
-  }
-  const id = value && typeof value === "object" ? (value as { task_id?: unknown }).task_id : null;
-  return typeof id === "string" && KANBAN_TASK_ID_RE.test(id) ? { task_id: id } : null;
-}
-
-/** A settled `kanban_create` that named its card: drawn as a card, not a tool step. */
-export function isKanbanTaskTool(block: ChatBlockView | undefined): boolean {
-  return block !== undefined && readKanbanCreateResult(block) !== null;
-}
 
 type Task = KanbanTaskDetailView["task"];
 

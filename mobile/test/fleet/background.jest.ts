@@ -33,8 +33,7 @@ test("unpaired: only the badge", async () => {
   const badges: number[] = [];
   const out = await backgroundRefresh({
     secure: memoryKv(),
-    viewCache: memoryFile(),
-    inboxFile: memoryFile(),
+    fleetFiles: () => ({ viewCache: memoryFile(), inboxFile: memoryFile() }),
     fetch: kit.fetch,
     setBadge: async (n) => {
       badges.push(n);
@@ -60,8 +59,7 @@ test("paired: refreshes the fleet view into the cache, probes Tailscale, sets th
   const calls: string[] = [];
   const out = await backgroundRefresh({
     secure,
-    viewCache,
-    inboxFile,
+    fleetFiles: () => ({ viewCache, inboxFile }),
     fetch: (input, init) => {
       calls.push(String(input));
       return kit.fetch(input, init);
@@ -97,6 +95,26 @@ test("paired: refreshes the fleet view into the cache, probes Tailscale, sets th
   expect(inboxFile.text()).toBe(saved);
 });
 
+test("a locked keychain: nothing is read as unpaired, and the badge is left alone", async () => {
+  const kit = fixtureKit("1", () => NOW) as FixtureKit;
+  const badges: number[] = [];
+  const secure = memoryKv();
+  secure.get = async () => {
+    throw new Error("errSecInteractionNotAllowed");
+  };
+  const out = await backgroundRefresh({
+    secure,
+    fleetFiles: () => ({ viewCache: memoryFile(), inboxFile: memoryFile() }),
+    fetch: kit.fetch,
+    setBadge: async (n) => {
+      badges.push(n);
+    },
+    now: () => NOW,
+  });
+  expect(out.paired).toBe(false);
+  expect(badges).toEqual([]);
+});
+
 async function pairedWake(seed: Record<string, string>) {
   const kit = fixtureKit("1", () => NOW) as FixtureKit;
   const secure = memoryKv(seed);
@@ -110,8 +128,7 @@ async function pairedWake(seed: Record<string, string>) {
   const run = () =>
     backgroundRefresh({
       secure,
-      viewCache,
-      inboxFile: memoryFile(),
+      fleetFiles: () => ({ viewCache, inboxFile: memoryFile() }),
       fetch: kit.fetch,
       setBadge: async () => {},
       push: {

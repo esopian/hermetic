@@ -64,6 +64,38 @@ export function kanbanNeedsYou(t: KanbanTaskLike): boolean {
   return t.status === "blocked" || (t.status === "ready" && !t.assignee);
 }
 
+/**
+ * The Work queue's groups, in order: what needs the operator, what agents are
+ * on, what waits, what is finished. The desktop's queue layout and the phone's
+ * board list both draw these. A status in none of them (`archived`) is left out.
+ */
+export const KANBAN_QUEUE_GROUPS: readonly {
+  label: string;
+  tone: KanbanTone;
+  hint: string;
+  test: (t: KanbanTaskLike) => boolean;
+}[] = [
+  {
+    label: "Needs you",
+    tone: "warn",
+    hint: "a question, a crash, or no assignee",
+    test: kanbanNeedsYou,
+  },
+  {
+    label: "Agents working",
+    tone: "acc",
+    hint: "running, in review or being specified",
+    test: (t) => !kanbanNeedsYou(t) && ["running", "review", "triage"].includes(t.status),
+  },
+  {
+    label: "Queued",
+    tone: "none",
+    hint: "ready, waiting on another card or on time",
+    test: (t) => !kanbanNeedsYou(t) && ["ready", "todo", "scheduled"].includes(t.status),
+  },
+  { label: "Done", tone: "ok", hint: "finished", test: (t) => t.status === "done" },
+];
+
 /** The status word a pill shows; more specific than the lane where the lane hides the reason. */
 export function kanbanStatusWord(t: KanbanTaskLike): string {
   if (t.status === "blocked") return t.block_kind === "gave_up" ? "gave up" : "needs input";
@@ -76,3 +108,32 @@ export const KANBAN_NOTICE_RE =
   /^([✔⏸✖⏱🔄]) (?:\[([^\]\n]+)\] )?(?:@(\S+) )?Kanban (t_[0-9a-f]{8})(.*)$/u;
 
 export const KANBAN_TASK_ID_RE = /^t_[0-9a-f]{8}$/;
+
+/**
+ * The card a `kanban_create` tool block names, or null. Upstream's result is
+ * JSON; core keeps it parsed (an object), or as the string when it did not parse.
+ */
+export function readKanbanCreateResult(block: {
+  kind: string;
+  render?: string | null;
+  result?: unknown;
+}): { task_id: string } | null {
+  if (block.kind !== "tool" || block.render !== "kanban_task") return null;
+  let value: unknown = block.result;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  const id = value && typeof value === "object" ? (value as { task_id?: unknown }).task_id : null;
+  return typeof id === "string" && KANBAN_TASK_ID_RE.test(id) ? { task_id: id } : null;
+}
+
+/** A settled `kanban_create` that named its card: drawn as a card, not a tool step. */
+export function isKanbanTaskTool(
+  block: Parameters<typeof readKanbanCreateResult>[0] | undefined,
+): boolean {
+  return block !== undefined && readKanbanCreateResult(block) !== null;
+}

@@ -18,7 +18,8 @@ export type IconName =
   | "sent"
   | "star"
   | "eye"
-  | "eyeOff";
+  | "eyeOff"
+  | "board";
 
 /** One line-drawn glyph on a 24-unit grid, stroked in `color`. */
 export function Icon({
@@ -75,6 +76,14 @@ export function Icon({
           <Path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" {...stroke} />
           <Circle cx={12} cy={12} r={3} {...stroke} />
           {name === "eyeOff" ? <Line x1={4} y1={20} x2={20} y2={4} {...stroke} /> : null}
+        </>
+      ) : name === "board" ? (
+        // The kanban board as a checklist: three cards, each with its line.
+        <>
+          <Path d="M4 4.5h4v4H4zM4 10h4v4H4zM4 15.5h4v4H4z" {...stroke} />
+          <Line x1={11} y1={6.5} x2={20} y2={6.5} {...stroke} />
+          <Line x1={11} y1={12} x2={20} y2={12} {...stroke} />
+          <Line x1={11} y1={17.5} x2={20} y2={17.5} {...stroke} />
         </>
       ) : name === "star" ? (
         <Path

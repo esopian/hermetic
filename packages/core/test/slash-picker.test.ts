@@ -1,5 +1,5 @@
 /**
- * The composer's slash-command picker rules (`chat/chat-slash.ts`): when the
+ * The composer's slash-command picker rules (`shared/slash.ts`): when the
  * list opens, what it lists and in what order, and what accepting a row does.
  */
 import { describe, expect, test } from "bun:test";
@@ -9,10 +9,10 @@ import {
   offered,
   slashQuery,
   takesArgument,
-} from "../src/chat/chat-slash.ts";
-import type { ChatCommandView } from "../src/api/types.ts";
+} from "../src/shared/slash.ts";
+import type { ChatCommand } from "../src/schema/index.ts";
 
-const command = (name: string, extra: Partial<ChatCommandView> = {}): ChatCommandView => ({
+const command = (name: string, extra: Partial<ChatCommand> = {}): ChatCommand => ({
   name,
   description: `${name} does a thing`,
   category: "Session",

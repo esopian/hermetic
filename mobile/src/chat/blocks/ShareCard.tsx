@@ -3,27 +3,36 @@
  * `share_file`, or a `MEDIA:` line naming the box's outbox.
  *
  * One card per share: the type tag, the name, the size, a short sha256, how
- * long the box keeps it, and Save. An image is fetched from the box at once
- * and shown above the row, only when its bytes match the box's digest and the
- * share's own sha256. Save brings the file onto the phone (digest-checked) and
- * opens the system share sheet for it (`save-box-file.ts`).
+ * long the box keeps it, and Save. What shows above the row follows the box's
+ * sniffed type (`shareView`), as on the desktop: an image is fetched at once;
+ * a text file opens in a code pane behind "Preview"; audio and video are
+ * fetched only on "Play" (up to 25 MiB over the tailnet is not spent on a
+ * scroll), written to the cache directory and played by the system player.
+ * Every read must match the box's digest and the share's own sha256. Save
+ * brings the file onto the phone (digest-checked) and opens the system share
+ * sheet for it (`save-box-file.ts`).
  *
  * A share the box refused never gets a card: the call is a tool error, and the
  * box's words are what the operator reads.
  */
 import type { AttachmentBlock, ToolBlock as ToolBlockType } from "@hermetic/core/chat-client";
-import { FILES_TTL, isImageMime, isShareId } from "@hermetic/core/shared";
-import { useState } from "react";
+import { contentPurposeAllows, contentPurposeBytes, FILES_TTL } from "@hermetic/core/shared";
+import { useEvent } from "expo";
+import { useVideoPlayer, VideoView } from "expo-video";
+import { useEffect, useState } from "react";
 import { View } from "react-native";
 import { fmtBytes } from "../../client/chat-logic.ts";
 import { resultText, subjectOf } from "../../client/chat-turns.ts";
-import { reasonOf } from "../../client/errors.ts";
+import { errorCode, reasonOf } from "../../client/errors.ts";
+import { type ShareView, sharePurpose, shareToggleLabel, shareView } from "../../client/share-logic.ts";
+import type { PhoneFiles } from "../../gateway/files.ts";
 import { useTheme } from "../../theme/theme.tsx";
 import { Button } from "../../ui/Button.tsx";
 import { haptic } from "../../ui/haptics.ts";
 import { Text } from "../../ui/Text.tsx";
+import { CodePane } from "../CodePane.tsx";
 import { Picture } from "./Picture.tsx";
-import { saveBoxFile } from "./save-box-file.ts";
+import { cacheName, saveBoxFile, writeCacheFile } from "./save-box-file.ts";
 import { typeTag } from "./Simple.tsx";
 import { ToolBlock } from "./Tool.tsx";
 import { useBoxFiles } from "./use-box-file.ts";
@@ -47,13 +56,116 @@ type SaveState =
   | { phase: "saved" }
   | { phase: "error"; code: string; message: string };
 
+/** A text or media share opened behind its toggle. */
+type Opened =
+  | { state: "loading" }
+  | { state: "text"; text: string }
+  | { state: "media"; uri: string }
+  | { state: "gone" }
+  | { state: "failed"; code: string };
+
+/** Read an opened share's bytes (capped for its purpose, digest-checked): text, or a cache-file URI to play. */
+function useOpenedShare(
+  files: PhoneFiles | null,
+  share: ShareFacts,
+  view: ShareView | null,
+  open: boolean,
+): Opened | null {
+  const key = open && view && view !== "image" ? `${share.id}\n${view}` : null;
+  const [got, setGot] = useState<{ key: string; value: Opened } | null>(null);
+  const { id, name, sha256 } = share;
+  useEffect(() => {
+    if (!key || !view) return;
+    const purpose = sharePurpose(view);
+    if (!files) {
+      setGot({ key, value: { state: "failed", code: "UNSUPPORTED" } });
+      return;
+    }
+    const controller = new AbortController();
+    const settle = (value: Opened) => {
+      if (!controller.signal.aborted) setGot({ key, value });
+    };
+    settle({ state: "loading" });
+    files
+      .content(id, { signal: controller.signal, maxBytes: contentPurposeBytes(purpose) })
+      .then((c) => {
+        if (sha256 && c.sha256 !== sha256.toLowerCase()) {
+          settle({ state: "failed", code: "FILE_DIGEST_MISMATCH" });
+        } else if (!contentPurposeAllows(purpose, c.mime)) {
+          settle({ state: "failed", code: "FILE_TYPE_REJECTED" });
+        } else if (view === "text") {
+          settle({ state: "text", text: new TextDecoder().decode(c.bytes) });
+        } else {
+          settle({
+            state: "media",
+            uri: writeCacheFile(cacheName(id, name), c.bytes),
+          });
+        }
+      })
+      .catch((e: unknown) => {
+        const code = errorCode(e) ?? "UNKNOWN";
+        settle(code === "FILE_NOT_FOUND" ? { state: "gone" } : { state: "failed", code });
+      });
+    return () => controller.abort();
+  }, [key, view, files, id, name, sha256]);
+  if (!key) return null;
+  return got?.key === key ? got.value : { state: "loading" };
+}
+
+/** The system player for a cached audio or video file, with its own controls. */
+function SharePlayer({
+  uri,
+  video,
+  name,
+  onError,
+}: {
+  uri: string;
+  video: boolean;
+  name: string;
+  onError: () => void;
+}) {
+  const t = useTheme();
+  const player = useVideoPlayer(uri);
+  const { status } = useEvent(player, "statusChange", { status: player.status });
+  useEffect(() => {
+    if (status === "error") onError();
+  }, [status, onError]);
+  return (
+    <VideoView
+      testID="share-player"
+      player={player}
+      nativeControls
+      contentFit="contain"
+      accessibilityLabel={name}
+      // Audio needs only the control bar's height; video gets a frame.
+      style={{ width: "100%", height: video ? 200 : 96, backgroundColor: t.c.bg3 }}
+    />
+  );
+}
+
+/** The one-line note an opened share shows instead of its contents. */
+function openedNote(opened: Opened | null, playable: boolean, undecodable: boolean): string | null {
+  const verb = playable ? "play" : "preview";
+  if (undecodable) return "this app cannot play this file — Save instead";
+  if (opened?.state === "loading") return playable ? "loading…" : "loading preview…";
+  if (opened?.state !== "failed") return null;
+  if (opened.code === "FILE_TOO_LARGE") return `too large to ${verb} here — Save instead`;
+  return `${playable ? "playback" : "preview"} unavailable`;
+}
+
 export function ShareCard({ share }: { share: ShareFacts }) {
   const t = useTheme();
   const files = useBoxFiles();
   const [save, setSave] = useState<SaveState>({ phase: "idle" });
+  const [open, setOpen] = useState(false);
+  const [undecodable, setUndecodable] = useState(false);
   const mime = typeof share.mime === "string" ? share.mime : "";
-  const image = isImageMime(mime) && isShareId(share.id);
-  const gone = save.phase === "error" && save.code === "FILE_NOT_FOUND";
+  const view = shareView(mime, share.id);
+  const playable = view === "audio" || view === "video";
+  const opened = useOpenedShare(files, share, view, open);
+  const toggle = shareToggleLabel(view, open);
+  const note = open ? openedNote(opened, playable, undecodable) : null;
+  const gone = opened?.state === "gone" || (save.phase === "error" && save.code === "FILE_NOT_FOUND");
   const sha = share.sha256 ? `sha ${share.sha256.slice(0, 4)}…` : null;
   const meta = [
     share.bytes > 0 || sha !== null ? fmtBytes(share.bytes) : null,
@@ -89,7 +201,7 @@ export function ShareCard({ share }: { share: ShareFacts }) {
         marginVertical: t.space.xs,
       }}
     >
-      {image && !gone ? (
+      {view === "image" && !gone ? (
         <Picture source={{ kind: "box", id: share.id }} alt={share.name} sha256={share.sha256} />
       ) : null}
       <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.md }}>
@@ -116,6 +228,19 @@ export function ShareCard({ share }: { share: ShareFacts }) {
             {meta}
           </Text>
         </View>
+        {toggle ? (
+          <Button
+            label={toggle}
+            variant="secondary"
+            compact
+            disabled={!files || gone}
+            accessibilityLabel={`${toggle} ${share.name}`}
+            onPress={() => {
+              setUndecodable(false);
+              setOpen((was) => !was);
+            }}
+          />
+        ) : null}
         <Button
           label={busy ? "Saving…" : "Save"}
           variant="secondary"
@@ -126,6 +251,20 @@ export function ShareCard({ share }: { share: ShareFacts }) {
           onPress={onSave}
         />
       </View>
+      {opened?.state === "text" ? <CodePane text={opened.text} lang={share.name} /> : null}
+      {opened?.state === "media" && !undecodable ? (
+        <SharePlayer
+          uri={opened.uri}
+          video={view === "video"}
+          name={share.name}
+          onError={() => setUndecodable(true)}
+        />
+      ) : null}
+      {note && !gone ? (
+        <Text mono variant="caption" tone="fg3" accessibilityRole="text">
+          {note}
+        </Text>
+      ) : null}
       {save.phase === "saved" ? (
         <Text mono variant="caption" tone="ok" accessibilityRole="text">
           {`✓ ready to save · ${share.name}`}

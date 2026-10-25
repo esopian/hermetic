@@ -32,6 +32,15 @@ describe("markdown (byte-identical copy of the desktop parser)", () => {
     expect(link).toMatchObject({ href: "https://example.com" });
   });
 
+  test("a bare URL links, without the sentence's trailing period", () => {
+    const spans = parseInline("see https://x.y/z.");
+    expect(spans.find((s) => s.type === "link")).toMatchObject({
+      href: "https://x.y/z",
+      text: "https://x.y/z",
+    });
+    expect(spans[spans.length - 1]).toMatchObject({ type: "text", text: "." });
+  });
+
   test("an unterminated fence still yields a code block (streaming)", () => {
     const nodes = parseMarkdown("```py\nprint(1)");
     expect(nodes[0]).toMatchObject({ type: "code", lang: "py" });

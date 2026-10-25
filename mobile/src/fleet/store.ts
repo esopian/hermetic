@@ -116,6 +116,8 @@ export function rosterPrefsStorage(kv: KvStorage): RosterPrefsStorage {
 }
 
 export const FLEET_KEY_PREFIX = "hermetic.fleet.v2";
+/** One paired fleet's record, beside the others (`fleets.ts` keeps the list). */
+export const fleetRecordKey = (fleetId: string): string => `${FLEET_KEY_PREFIX}.${fleetId}`;
 /** Under SecureStore's ~2 KB value cap with room for multi-byte characters. */
 export const SECURE_CHUNK = 1_800;
 const MAX_CHUNKS = 8;
@@ -208,6 +210,11 @@ interface Persisted {
 
 export interface FleetStoreDeps {
   secure: KvStorage;
+  /**
+   * Where this fleet's record lives (`fleetRecordKey`): `FLEET_KEY_PREFIX`, the
+   * one-fleet key, when absent; `null` before any pairing (nothing to load).
+   */
+  recordKey?: string | null;
   viewCache: TextFile;
   fetch: FetchLike;
   /** ISO-8601 now. */
@@ -259,9 +266,17 @@ export class FleetStore {
     };
   }
 
-  /** Restore the pairing and the cached view. `false` when there is no pairing. */
+  /**
+   * Restore the pairing and the cached view. `false` when there is no pairing.
+   * A keychain read that fails throws instead: iOS refuses reads while a
+   * background launch runs on a locked phone, and that is not "unpaired".
+   */
   async load(): Promise<boolean> {
-    const raw = await loadChunked(this.deps.secure, FLEET_KEY_PREFIX).catch(() => null);
+    if (this.deps.recordKey === null) {
+      this.set(EMPTY);
+      return false;
+    }
+    const raw = await loadChunked(this.deps.secure, this.key());
     const stored = parsePersisted(raw);
     const proposal = stored ? readPairingLink(stored.link, this.opts()) : null;
     if (!stored || !proposal?.ok) {
@@ -326,7 +341,7 @@ export class FleetStore {
     this.gen += 1;
     this.viewFresh = false;
     this.set(EMPTY);
-    await removeChunked(this.deps.secure, FLEET_KEY_PREFIX).catch(() => {});
+    await removeChunked(this.deps.secure, this.key()).catch(() => {});
     await this.deps.viewCache.remove().catch(() => {});
   }
 
@@ -538,7 +553,11 @@ export class FleetStore {
       listening: listening === "all" ? "all" : [...listening].sort(),
       primary: this.state.primary,
     };
-    await saveChunked(this.deps.secure, FLEET_KEY_PREFIX, JSON.stringify(record));
+    await saveChunked(this.deps.secure, this.key(), JSON.stringify(record));
+  }
+
+  private key(): string {
+    return this.deps.recordKey ?? FLEET_KEY_PREFIX;
   }
 
   private opts(): { operatorTailnet?: string | null } {

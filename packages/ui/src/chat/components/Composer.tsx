@@ -38,7 +38,7 @@ import type { MentionBot } from "../chat-mentions.ts";
 import { useFleetIfAvailable } from "../../state/state.tsx";
 import { MentionList, useMentionPicker } from "./MentionPicker.tsx";
 import { SlashList, useSlashPicker } from "./SlashPicker.tsx";
-import { slashQuery } from "../chat-slash.ts";
+import { slashQuery } from "@hermetic/core/shared";
 import { useSlashCatalog } from "../use-slash-catalog.ts";
 import { composerHint, destinationNotice, originClass, sendLabel } from "../chat-logic.ts";
 import { RedactedText } from "./RedactedText.tsx";

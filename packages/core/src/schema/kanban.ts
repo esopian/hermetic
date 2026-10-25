@@ -127,6 +127,63 @@ export const KanbanTaskDetail = z.object({
 });
 export type KanbanTaskDetail = z.infer<typeof KanbanTaskDetail>;
 
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  v !== null && typeof v === "object" && !Array.isArray(v);
+const recordOf = (v: unknown): Record<string, unknown> => (isRecord(v) ? v : {});
+const recordsOf = (v: unknown): Record<string, unknown>[] =>
+  Array.isArray(v) ? v.filter(isRecord) : [];
+const textOf = (v: unknown): string | null => (typeof v === "string" && v.length > 0 ? v : null);
+/** Every row of `v` that parses as `schema`; a row an older or newer backend shaped differently is dropped. */
+const rowsOf = <T extends z.ZodType>(schema: T, v: unknown): z.infer<T>[] =>
+  recordsOf(v).flatMap((r) => {
+    const parsed = schema.safeParse(r);
+    return parsed.success ? [parsed.data] : [];
+  });
+
+/**
+ * A dashboard `GET /tasks/<id>` answer as a `KanbanTaskDetail`, read the same
+ * way by core and the phone; null when the answer carries no task.
+ */
+export function parseKanbanTaskDetail(instance: string, raw: unknown): KanbanTaskDetail | null {
+  const r = recordOf(raw);
+  const task = KanbanTask.safeParse(r.task);
+  if (!task.success) return null;
+  const links = recordOf(r.links);
+  const resolved = recordsOf(r.link_tasks);
+  // Older backends send ids only; the id stands in for the title.
+  const link = (id: string): KanbanLinkTask => {
+    const row = resolved.find((x) => x.id === id);
+    return { id, title: textOf(row?.title) ?? id, status: textOf(row?.status) ?? "unknown" };
+  };
+  const ids = (v: unknown) => (Array.isArray(v) ? v.flatMap((id) => textOf(id) ?? []) : []);
+  return {
+    instance,
+    task: task.data,
+    comments: rowsOf(KanbanComment, r.comments),
+    events: rowsOf(KanbanEvent, r.events),
+    runs: rowsOf(KanbanRun, r.runs),
+    links: { parents: ids(links.parents).map(link), children: ids(links.children).map(link) },
+    stale_since: null,
+  };
+}
+
+/**
+ * A dashboard `GET /board` answer's columns, flattened (the column name is the
+ * status), read the same way by core and the phone; null when the answer has
+ * no columns. A column this build has no lane for fails the status enum, and
+ * its cards are dropped.
+ */
+export function parseKanbanBoardTasks(raw: unknown): KanbanTask[] | null {
+  const columns = recordOf(raw).columns;
+  if (!Array.isArray(columns)) return null;
+  return recordsOf(columns).flatMap((c) =>
+    rowsOf(
+      KanbanTask,
+      recordsOf(c.tasks).map((t) => ({ ...t, status: c.name })),
+    ),
+  );
+}
+
 export const KanbanLog = z.object({
   instance: z.string(),
   task_id: z.string(),

@@ -261,8 +261,9 @@ describe("homeRows: sections", () => {
     expect(layout.hero.map((r) => r.key)).toEqual(["atlas/ops"]);
     const down = layout.sections.find((s) => s.instance === "corvid")!;
     expect(down.rows.map((r) => [r.key, r.badge, r.reachable])).toEqual([
-      ["corvid/wren", "!", false],
+      // The default heads the section, ahead even of a needs-you mark.
       ["corvid/pilot", "2", false],
+      ["corvid/wren", "!", false],
     ]);
     expect(down).toMatchObject({ needs: true, unread: 2 });
   });

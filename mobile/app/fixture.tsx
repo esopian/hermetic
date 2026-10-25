@@ -12,7 +12,7 @@
  */
 import { router, useLocalSearchParams } from "expo-router";
 import { useEffect, useRef } from "react";
-import { View } from "react-native";
+import { Linking, View } from "react-native";
 import type { HermeticClient } from "../src/client/client.ts";
 import { type FixtureDriveActions, useFleetContext } from "../src/fleet/FleetProvider.tsx";
 import { pairPrefsPatch, readPairingLink } from "../src/fleet/pairing.ts";
@@ -87,9 +87,19 @@ export default function FixtureDrive() {
         const read = readPairingLink(fixture.link, { operatorTailnet });
         if (!read.ok) throw new Error(read.error.title);
         clients.markStale();
-        await pair(read.link);
+        const kept = await pair(read.link);
         const patch = pairPrefsPatch(read.link);
         if (Object.keys(patch).length > 0) updatePrefs(patch);
+        if (kept === "switched") {
+          // A new fleet remounts the app under this drive: run the same link
+          // again once it has, when the pairing is this fleet's own.
+          const query = new URLSearchParams();
+          for (const [k, v] of Object.entries(params))
+            for (const one of Array.isArray(v) ? v : [v]) if (one !== undefined) query.append(k, one);
+          setTimeout(() => void Linking.openURL(`hermetic://fixture?${query}`), 500);
+          return "restart";
+        }
+        return undefined;
       },
       setPrimary,
       // The fleet store, not the roster: a pairing in the same link has just
@@ -105,10 +115,15 @@ export default function FixtureDrive() {
       setTheme: (preference) => t.setPreference(preference),
       warn: (message) => console.warn(`fixture drive: ${message}`),
     };
-    void drive(params, actions).then(leave, (e: unknown) => {
-      actions.warn(e instanceof Error ? e.message : String(e));
-      leave("/");
-    });
+    void drive(params, actions).then(
+      (to) => {
+        if (to) leave(to);
+      },
+      (e: unknown) => {
+        actions.warn(e instanceof Error ? e.message : String(e));
+        leave("/");
+      },
+    );
   }, [
     drive,
     status,

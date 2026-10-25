@@ -11,14 +11,16 @@ everything from `mobile/` with bun. Run `bun install` at the repo root first: Me
 - Routes live in `mobile/app/` (expo-router). Non-route code lives in `mobile/src/`.
 - The phone talks to the fleet directly, with no laptop bridge: `src/gateway/` is the transport over
   `@hermetic/core/chat-client` (the same Hermes adapter the desktop uses), `src/fleet/` holds the
-  paired fleet (link, listening, primary instance) and `FleetProvider.tsx`, the `GET /fleet`, push-registration and files (`src/gateway/files.ts`) calls to hermeticd,
+  paired fleets (`fleets.ts`: the list and the one in front; `store.ts`: one fleet's link, listening
+  and primary instance), `FleetSwitch.tsx` (remounts `FleetProvider.tsx` per active fleet) and `FleetProvider.tsx`, the `GET /fleet`, push-registration and files (`src/gateway/files.ts`) calls to hermeticd,
   `src/fixture/` is fixture mode, and `src/inbox/store.ts` is the phone-local inbox store (unread,
   failure and alert events; it has no screen).
 - Screens (`mobile/README.md`, "Screens"): after pairing, `/primary` picks the one primary instance
   before anything is listened to; then one home with no tab bar and no inbox screen (gear →
-  Settings, search → the Search screen, `+` → the New chat sheet, whose "New bot…" row opens
-  `/new-bot`; then a hero row of the bots pinned on this phone, or the primary instance's bots when
-  none is pinned; then the other bots in one quiet section per instance, the primary's first,
+  Settings (whose Fleet row opens the `/fleets` switcher sheet), the board button → the `/board` kanban
+  list (the desktop Work queue, no lane matrix), search → the Search screen, `+` → the
+  New chat sheet, whose "New bot…" row opens `/new-bot`; then a hero row of the bots pinned on this
+  phone, or each listened instance's default bot (the primary's first) when none is pinned; then the other bots in one quiet section per instance, the primary's first,
   carrying their unread and needs-you marks). The primary is an instance; there is no single
   "primary bot". The conversation has a slim bar (back, avatar and name, one overflow menu) and a
   composer with an attach button. The look is the desktop's: square, zero radius, borders as
@@ -33,7 +35,7 @@ everything from `mobile/` with bun. Run `bun install` at the repo root first: Me
   `@hermetic/core/chat-client-fixture` only from `src/fixture/`. Never a relative path into
   `packages/`, and never the bare `@hermetic/core` door. Anything the phone needs that is not behind
   those doors is a change to core, not a copy here; the one deliberate copy is
-  `src/chat/markdown.ts`, byte-identical to `packages/ui/src/chat/chat-markdown.ts`.
+  `src/client/markdown.ts`, byte-identical to `packages/ui/src/chat/chat-markdown.ts`.
 - `ios/` and `android/` are generated (continuous native generation) and git-ignored; configure
   native behaviour in `app.config.ts`.
 - Done means `bun run check` exits 0 and `bun run export:ios` builds.
@@ -73,10 +75,11 @@ Re-probe on foreground and after a failed request.
 
 All of it sits in Settings, behind the home's gear. Agent list with status, per-agent detail (status, version, host, health from `/fleet` and
 `/healthz`), which instances it listens to and which is primary (phone-local), noVNC, Tailscale
-status, push on and off, sign out. Beyond Settings it can create a bot on a listened instance (the
+status, push on and off, sign out of a fleet. Several fleets can be paired; one is in front at a
+time (the `/fleets` sheet switches, Slack-style), and push, the badge and the inbox follow it. Beyond Settings it can create a bot on a listened instance (the
 gateway's `profiles.create`/`profiles.configure` via core's `createBotOverRpc`, with the session
 token it already holds) and attach files to a message (hermeticd's existing `/files/…` routes).
-Nothing else: no fleet switching, volumes, runs, creating or destroying an instance, and no laptop
+Nothing else: no volumes, runs, creating or destroying an instance, and no laptop
 inbox. Do not add a path that gives the phone an AWS credential or a secret; a durable secret
 request is answered on the desktop, the phone sends only "just this once".
 

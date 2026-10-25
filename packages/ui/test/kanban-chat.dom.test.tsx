@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "./dom.ts";
 import type { ChatBlockOf } from "../src/api/index.ts";
 import { Block } from "../src/chat/components/blocks/index.tsx";
-import { readKanbanCreateResult } from "../src/chat/components/blocks/KanbanTask.tsx";
+import { readKanbanCreateResult } from "@hermetic/core/shared";
 import { ProcessEventContext, ProcessEventRow } from "../src/chat/components/blocks/ProcessEvent.tsx";
 import { OpenKanbanTaskContext } from "../src/work/open-task.ts";
 import { at, eventOf } from "./process-event-fixtures.ts";

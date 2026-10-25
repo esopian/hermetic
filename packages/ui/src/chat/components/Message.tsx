@@ -17,6 +17,7 @@
  * is actually lost; throwing away the visible half would only make that harder
  * to believe.
  */
+import { isKanbanTaskTool } from "@hermetic/core/shared";
 import { memo, use } from "react";
 import type { TurnActivity } from "../chat-activity.ts";
 import { botLabel } from "../chat-presentation.ts";
@@ -35,7 +36,6 @@ import type { MessageRow } from "../chat-logic.ts";
 import { Block } from "./blocks/index.tsx";
 import { isRequestTool, untrustedBefore } from "../file-request-logic.ts";
 import { isShareTool, shareIdOf } from "./blocks/ShareCard.tsx";
-import { isKanbanTaskTool } from "./blocks/KanbanTask.tsx";
 import { dmBotName, dmSender, messageAgentCall } from "../bot-dm.ts";
 import { DmSentMarker, useBotDm } from "./BotDm.tsx";
 import { Face, OperatorFace } from "./Face.tsx";

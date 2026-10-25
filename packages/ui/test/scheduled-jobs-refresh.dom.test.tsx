@@ -16,7 +16,7 @@ import { cleanup, fireEvent, flipPageHidden, render, screen, setPageHidden, wait
 import type { ChatBlockView, ChatMessageView } from "../src/api/index.ts";
 import { resetBotCapabilityMemo } from "../src/chat/bot-capabilities.ts";
 import { ROUTINES_POLL_MS, ScheduledJobs } from "../src/chat/components/ScheduledJobs.tsx";
-import { finishedCronCalls } from "../src/chat/cron-tools.ts";
+import { finishedCronCalls } from "@hermetic/core/shared";
 import { fakeClock, settle } from "./fake-clock.ts";
 import { fakeServer } from "./fake-transport.ts";
 import type { FakeServer } from "./fake-transport.ts";
