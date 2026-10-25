@@ -91,6 +91,15 @@ export const INSET_SETTLE_MS = 60;
  */
 export const MOMENTUM_GRACE_MS = 150;
 
+/**
+ * How long the content must hold still before a newly opened thread counts as
+ * settled. Until then the list's own layout corrections may move the offset
+ * without a content-size change (FlashList keeps its anchor row steady while
+ * it measures, and the anchor is the last row when that row is taller than the
+ * screen), so a scroll event short of the end re-pins (`PinController.opening`).
+ */
+export const OPEN_SETTLE_MS = 1_000;
+
 /** Timers, injectable for tests; the default is the global pair. */
 export interface PinTimers {
   set(fn: () => void, ms: number): unknown;
@@ -137,6 +146,9 @@ export class PinController {
   /** Inside our own `scrollTo`, so `guard` lets it through. */
   private pinning = false;
   private insetTimer: unknown = null;
+  /** A newly opened thread has not held still yet (`OPEN_SETTLE_MS`), and no touch has moved it. */
+  private opening = true;
+  private openTimer: unknown = null;
   private graceTimer: unknown = null;
   private disposed = false;
 
@@ -237,6 +249,12 @@ export class PinController {
     // pin, a layout pass or the list opening at the bottom raise scroll
     // events too, at offsets the content has already outgrown.
     const reader = this.touch.dragging || this.touch.momentum;
+    // Opening: an offset short of the end that no touch caused is a layout
+    // correction, not the reader; put the end back.
+    if (this.opening && this.following && !reader && gap > AT_BOTTOM_SLACK) {
+      this.pinToEnd(false);
+      return;
+    }
     if (next !== this.following && (next || reader)) this.setFollowing(next);
   }
 
@@ -244,6 +262,13 @@ export class PinController {
     this.size.content = height;
     this.reported = true;
     this.repinIfFree();
+    if (this.opening && !this.disposed) {
+      if (this.openTimer !== null) this.timers.clear(this.openTimer);
+      this.openTimer = this.timers.set(() => {
+        this.openTimer = null;
+        this.opening = false;
+      }, OPEN_SETTLE_MS);
+    }
   }
 
   /** The viewport's height; once the content is known, a change moves the end, so a follower re-pins. */
@@ -264,6 +289,8 @@ export class PinController {
   }
 
   dragBegin(): void {
+    // The reader has the list now: what they do with it is theirs.
+    this.opening = false;
     this.cancelGrace();
     this.touch.dragging = true;
   }
@@ -310,6 +337,8 @@ export class PinController {
     this.cancelGrace();
     if (this.insetTimer !== null) this.timers.clear(this.insetTimer);
     this.insetTimer = null;
+    if (this.openTimer !== null) this.timers.clear(this.openTimer);
+    this.openTimer = null;
   }
 
   private cancelGrace(): void {
