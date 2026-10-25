@@ -39,10 +39,9 @@ export interface DestroyedAudit {
 }
 
 /**
- * `agents.destroyed`, read once as soon as `enabled` (the fleet is
- * initialized), so the toolbar's `<n> DESTROYED` has its number before the
- * lens is ever opened; again on every entry to the lens (`lensUp` turning
- * true) and on every `refresh`. No poll: tombstones change only when a destroy
+ * `agents.destroyed`, read only while the lens is up (`lensUp`, on an
+ * initialized fleet): on every entry to it and on every `refresh` while it is
+ * up. Nothing reads it ahead of time; the toolbar's link has no count. No poll: tombstones change only when a destroy
  * finishes, and the shell calls `refresh` when one does. A failed read keeps
  * the last good list on screen and says so, the way the volume inventory does.
  */
@@ -57,18 +56,10 @@ export function useDestroyedAudit(enabled: boolean, lensUp = false): DestroyedAu
     setError(null);
     setEpoch((n) => n + 1);
   }, []);
-  // Entering the lens is a read; leaving it is not. Derived during render (the
-  // previous value kept in state), so a mount already on the lens reads once.
-  const [wasUp, setWasUp] = useState(lensUp);
-  if (lensUp !== wasUp) {
-    setWasUp(lensUp);
-    if (lensUp) setEpoch((n) => n + 1);
-  }
-
   useEffect(() => {
     // `epoch` is read so a refresh re-runs the effect; it carries no value.
     void epoch;
-    if (!enabled) return;
+    if (!enabled || !lensUp) return;
     let live = true;
     setLoading(true);
     listDestroyed()
@@ -86,7 +77,7 @@ export function useDestroyedAudit(enabled: boolean, lensUp = false): DestroyedAu
     return () => {
       live = false;
     };
-  }, [enabled, epoch]);
+  }, [enabled, lensUp, epoch]);
 
   const hasRead = tombstones !== null || error !== null;
   return useMemo(
