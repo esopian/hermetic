@@ -61,6 +61,15 @@ export const IGNORED_ADVISORIES: string[] = [
   // zod ^4.6.7 in core, cli and app.
   // Owner: mobile. Review by 2026-12-01, or when @expo/cli moves to zod 4.
   "GHSA-mrhx-c7xc-m3w5",
+  // GHSA-xjj6-f33q-929c — undici < 7.30.1 / < 8.12.2 (DoS on excessive
+  // content-encodings). Tree: site/ only, via wrangler -> miniflare (exact pin
+  // undici@7.29.1, still pinned in the latest miniflare) for the local preview,
+  // and astro -> unifont (undici ^8) fetching font files at build time. Dev and
+  // build tooling against known hosts; nothing here ships in the app or serves
+  // traffic. Bun applies neither nested nor version-keyed overrides, and a
+  // top-level one would put unifont on a major it does not accept.
+  // Owner: site. Review by 2026-12-01, or when miniflare moves past 7.29.1.
+  "GHSA-xjj6-f33q-929c",
 ];
 
 /**

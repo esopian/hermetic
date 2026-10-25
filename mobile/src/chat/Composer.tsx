@@ -62,6 +62,7 @@ import { Kicker } from "../ui/Kicker.tsx";
 import { multilineTint } from "../ui/tint.ts";
 import { Text } from "../ui/Text.tsx";
 import { AttachTray } from "./AttachTray.tsx";
+import { type SlashSource, SlashPicker } from "./SlashPicker.tsx";
 
 export type ComposerMode = "disabled" | "send" | "queue" | "stop" | "stopping";
 
@@ -263,6 +264,8 @@ export interface ComposerProps {
    * line saying so).
    */
   canAttach?: boolean | "no-service";
+  /** The slash-command catalog; without it the composer offers no command list. */
+  slash?: SlashSource;
 }
 
 export type AttachKind = "library" | "camera" | "file";
@@ -508,6 +511,16 @@ function ComposerImpl(props: ComposerProps) {
         onRemove={(id) => props.onRemoveAttachment?.(id)}
         onRetry={(id) => props.onRetryAttachment?.(id)}
       />
+      {props.slash && editable ? (
+        <SlashPicker
+          text={draft}
+          source={props.slash}
+          onPick={(text) => {
+            onDraft(text);
+            input.current?.focus();
+          }}
+        />
+      ) : null}
       {/* The input is always the first child of this row, in every mode, so
           switching modes never remounts it (focus and the keyboard stay). */}
       <View

@@ -3,9 +3,14 @@
  * track, the assignee tag and the CLI echo. Colour by meaning comes from
  * `kanbanTone` (`@hermetic/core/shared`), never chosen here.
  */
-import { KANBAN_LANES, KANBAN_LANE_INDEX, kanbanStatusWord, kanbanTone } from "@hermetic/core/shared";
+import {
+  KANBAN_LANES,
+  KANBAN_LANE_INDEX,
+  kanbanStatusWord,
+  kanbanTone,
+  relative,
+} from "@hermetic/core/shared";
 import type { KanbanTaskLike } from "@hermetic/core/shared";
-import { relative } from "../chat/routine-schedule.ts";
 
 /** `5 min. ago` for an upstream timestamp in seconds; `—` when there is none. */
 export function ago(sec: number | null | undefined): string {

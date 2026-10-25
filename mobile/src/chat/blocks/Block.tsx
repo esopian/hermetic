@@ -3,6 +3,7 @@
  * `blocks/index.tsx`): a kind this build has never heard of reaches
  * `UnknownBlock` and is drawn as name and payload, never as nothing.
  */
+import { isKanbanTaskTool } from "@hermetic/core/shared";
 import { memo } from "react";
 import { blockKind } from "../../client/chat-logic.ts";
 import type { ClosedRequest } from "../../client/chat-requests.ts";
@@ -16,6 +17,7 @@ import { ActivityGroup } from "./Activity.tsx";
 import { ApprovalCard } from "./Approval.tsx";
 import { DmLine } from "./DmLine.tsx";
 import { FileRequestBlock } from "./FileRequest.tsx";
+import { KanbanCard, KanbanNotice } from "./KanbanCard.tsx";
 import { QuestionCard } from "./Question.tsx";
 import { ShareAttachment, ShareToolBlock } from "./ShareCard.tsx";
 import {
@@ -82,6 +84,8 @@ function BlockImpl({
       // A file or secret request is a card the operator answers, not a tool row.
       if (isRequestTool(block)) return <FileRequestBlock block={block} now={now} session={session} />;
       if (block.kind !== "tool") return null;
+      // A filed kanban card is drawn live from the board, not as a tool row.
+      if (isKanbanTaskTool(block)) return <KanbanCard block={block} />;
       // A file the agent shared is a card with Save, not a tool row.
       if (isShareTool(block)) return <ShareToolBlock block={block} />;
       // A bot-to-bot DM is one line between the prose.
@@ -123,7 +127,12 @@ function BlockImpl({
     case "hermetic":
       return block.kind === "hermetic" ? <HermeticBlock block={block} /> : null;
     case "process_event":
-      return block.kind === "process_event" ? <ProcessEventBlock block={block} /> : null;
+      if (block.kind !== "process_event") return null;
+      return block.event === "kanban" ? (
+        <KanbanNotice block={block} />
+      ) : (
+        <ProcessEventBlock block={block} />
+      );
     case "subagent":
       return block.kind === "subagent" ? <SubagentLine block={block} /> : null;
     default:

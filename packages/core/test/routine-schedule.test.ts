@@ -11,7 +11,7 @@ import {
   weekGrid,
   withKind,
   zoned,
-} from "../src/chat/routine-schedule.ts";
+} from "../src/shared/routine-schedule.ts";
 
 const LA = "America/Los_Angeles";
 /** Wednesday 2026-10-21, 22:40 in Los Angeles. */

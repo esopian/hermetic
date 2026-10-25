@@ -109,18 +109,21 @@ export interface ConversationMenu {
   sessions(): void;
   browser(): void;
   markRead(): void;
+  /** The bot's scheduled jobs (Hermes cron). */
+  routines(): void;
   /** Fixture builds only: open the demo prompts sheet. Absent, the entry is not offered. */
   demo?: (() => void) | undefined;
 }
 
 /**
- * The overflow menu: Sessions, Agent browser, Mark read, (in a fixture build)
+ * The overflow menu: Sessions, Routines, Agent browser, Mark read, (in a fixture build)
  * Demo prompts…, Cancel. `tint` colours its buttons.
  */
 export function conversationMenu(title: string, tint: string, actions: ConversationMenu): void {
   haptic.light();
   const items: [string, () => void][] = [
     ["Sessions", actions.sessions],
+    ["Routines", actions.routines],
     ["Agent browser", actions.browser],
     ["Mark read", actions.markRead],
     ...(actions.demo ? ([["Demo prompts…", actions.demo]] as [string, () => void][]) : []),

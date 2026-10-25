@@ -11,6 +11,7 @@ import { redactText } from "./chat-redact.ts";
 import { MemoryChatSettingsStore, maskFor, type ChatSettingsStore } from "./chat-settings.ts";
 import { isoOrNull, record, records, str } from "./hermes/hermes-chat-wire.ts";
 import { botProfileOf, createBotOverRpc } from "./hermes/hermes-bot-create.ts";
+import { routineCalls } from "./routine-wire.ts";
 
 /**
  * The adapter's one local read: every string in the Bot Mode schemas is
@@ -794,172 +795,15 @@ export function createBotMode(
       return { accepted: true as const };
     }),
   };
-  const path = (p: { bot: string; id?: string }, suffix = "") =>
-    `/api/cron/jobs${p.id ? `/${encodeURIComponent(p.id)}` : ""}${suffix}?profile=${encodeURIComponent(p.bot)}`;
-  /**
-   * The schedule as a string the gateway accepts back, so an edit round-trips:
-   * a cron job's expression rather than its display (upstream keeps "every
-   * monday 9am" as the display of `0 9 * * 1`), an interval in minutes and a
-   * one-shot's run time.
-   */
-  function scheduleText(r: Record<string, unknown>): string {
-    if (typeof r.schedule === "string") return r.schedule;
-    const s = record(r.schedule);
-    if (s.kind === "cron" && typeof s.expr === "string") return s.expr;
-    if (s.kind === "interval" && typeof s.minutes === "number") return `every ${s.minutes}m`;
-    if (s.kind === "once" && typeof s.run_at === "string") return s.run_at;
-    return text(s.display, text(s.value, text(s.expr, JSON.stringify(s))));
-  }
-  const contextFrom = (v: unknown) =>
-    (Array.isArray(v) ? v : typeof v === "string" ? [v] : []).filter(
-      (x): x is string => typeof x === "string",
-    );
-  function routine(p: { instance: string; bot: string }, v: unknown): S.BotRoutine {
-    const r = record(v),
-      repeat = record(r.repeat);
-    return S.BotRoutine.parse({
-      ...p,
-      id: text(r.id),
-      name: text(r.name, "Scheduled job").replace(/^\[bot:[^\]]+\]\s*/, ""),
-      prompt: text(r.prompt),
-      schedule: scheduleText(r),
-      deliver:
-        r.deliver === "bot-chat" ? "bot" : r.deliver === "local" || !r.deliver ? "local" : "other",
-      paused: r.enabled === false || r.state === "paused",
-      // Both are timestamps, read by whoever renders them as one, so a value
-      // that is not a time is dropped rather than passed through: a head that
-      // formats "soon" as a date prints garbage, and null already means "the
-      // gateway did not say". Seconds, milliseconds and date strings all pass.
-      next_run_at: isoOrNull(r.next_run_at),
-      last_run_at: isoOrNull(r.last_run_at),
-      last_status:
-        typeof r.last_status === "string"
-          ? r.last_status
-          : typeof r.state === "string"
-            ? r.state
-            : null,
-      repeat: {
-        times: typeof repeat.times === "number" && repeat.times > 0 ? repeat.times : null,
-        completed: typeof repeat.completed === "number" ? repeat.completed : 0,
-      },
-      continuity: contextFrom(r.context_from).some((ref) => ref.toLowerCase() === "self"),
-    });
-  }
-  /** An IANA zone the gateway configured, or null when Hermes runs on the box's own clock. */
-  function zoneOrNull(v: unknown): string | null {
-    if (typeof v !== "string" || !v.trim()) return null;
-    try {
-      new Intl.DateTimeFormat("en-US", { timeZone: v.trim() });
-      return v.trim();
-    } catch {
-      return null;
-    }
-  }
+  const calls = (instance: string, o: ChatOptions) =>
+    routineCalls((method, path, body) => rest(instance, method, path, body, o));
   const routines = {
-    list: operation(S.RoutinesListInput, async (p, o) => {
-      const [r, config] = await Promise.all([
-        rest(p.instance, "GET", path(p), undefined, o),
-        // The profile's `timezone` is the clock its schedules run on. A failed
-        // read is not a failed list: the jobs are still right, only their zone
-        // is unknown.
-        rest(p.instance, "GET", `/api/config?profile=${encodeURIComponent(p.bot)}`, undefined, o).catch(
-          () => null,
-        ),
-      ]);
-      const jobs = Array.isArray(r) ? r : record(r).jobs;
-      if (!Array.isArray(jobs)) return unsupported("Gateway returned no routine registry");
-      return {
-        jobs: records(jobs).map((v) => routine(p, v)),
-        timezone: zoneOrNull(record(config).timezone),
-      };
-    }),
-    create: operation(S.RoutineCreateInput, async (p, o) => {
-      const job = await rest(
-        p.instance,
-        "POST",
-        path(p),
-        {
-          name: p.name,
-          prompt: p.prompt,
-          schedule: p.schedule,
-          deliver: p.deliver === "bot" ? "bot-chat" : "local",
-          ...(p.continuity ? { context_from: ["self"] } : {}),
-        },
-        o,
-      );
-      if (!p.repeat) return routine(p, job);
-      // Upstream's create body has no run cap (`CronJobCreate`); `update_job`
-      // takes one. A cap that did not land would leave a job running forever
-      // that was asked to stop, so the job goes with it.
-      const id = text(record(job).id);
-      try {
-        return routine(
-          p,
-          await rest(p.instance, "PUT", path({ ...p, id }), { updates: { repeat: p.repeat } }, o),
-        );
-      } catch (e) {
-        const removed = await rest(p.instance, "DELETE", path({ ...p, id }), undefined, o).then(
-          () => true,
-          () => false,
-        );
-        if (removed || !(e instanceof HermeticError)) throw e;
-        throw new HermeticError(e.code, `${e.message}. “${p.name}” was created without its run cap.`);
-      }
-    }),
-    update: operation(S.RoutineUpdateInput, async (p, o) => {
-      const { instance, bot, id, paused, deliver, continuity, ...updates } = p;
-      let r: unknown;
-      // `context_from` may also chain other jobs; continuity adds or drops only "self".
-      const context =
-        continuity === undefined
-          ? undefined
-          : contextFrom(record(await rest(instance, "GET", path(p), undefined, o)).context_from)
-              .filter((ref) => ref.toLowerCase() !== "self")
-              .concat(continuity ? ["self"] : []);
-      if (Object.keys(updates).length || deliver !== undefined || context !== undefined)
-        r = await rest(
-          instance,
-          "PUT",
-          path(p),
-          {
-            updates: {
-              ...updates,
-              ...(deliver ? { deliver: deliver === "bot" ? "bot-chat" : "local" } : {}),
-              ...(context ? { context_from: context } : {}),
-            },
-          },
-          o,
-        );
-      if (paused !== undefined)
-        r = await rest(instance, "POST", path(p, paused ? "/pause" : "/resume"), {}, o);
-      if (r === undefined) r = await rest(instance, "GET", path(p), undefined, o);
-      return routine({ instance, bot }, r);
-    }),
-    delete: operation(S.RoutineDeleteInput, async (p, o) => {
-      const result = record(await rest(p.instance, "DELETE", path(p), undefined, o));
-      if (result.ok !== true) return unsupported("Gateway did not confirm routine removal");
-      return { deleted: true as const };
-    }),
-    run: operation(S.RoutineRunInput, async (p, o) =>
-      routine(p, await rest(p.instance, "POST", path(p, "/trigger"), {}, o)),
-    ),
-    history: operation(S.RoutineHistoryInput, async (p, o) => {
-      const r = record(
-        await rest(p.instance, "GET", `${path(p, "/runs")}&limit=${p.limit ?? 20}`, undefined, o),
-      );
-      return {
-        runs: records(r.runs).map((v) =>
-          S.BotRoutineRun.parse({
-            id: text(v.id),
-            status: text(v.status, text(v.end_reason, "recorded")),
-            started_at: isoOrNull(v.started_at),
-            finished_at: isoOrNull(v.ended_at),
-            text: text(v.preview, text(v.title)),
-            error: typeof v.error === "string" ? v.error : null,
-          }),
-        ),
-      };
-    }),
+    list: operation(S.RoutinesListInput, (p, o) => calls(p.instance, o).list(p)),
+    create: operation(S.RoutineCreateInput, (p, o) => calls(p.instance, o).create(p)),
+    update: operation(S.RoutineUpdateInput, (p, o) => calls(p.instance, o).update(p)),
+    delete: operation(S.RoutineDeleteInput, (p, o) => calls(p.instance, o).delete(p)),
+    run: operation(S.RoutineRunInput, (p, o) => calls(p.instance, o).run(p)),
+    history: operation(S.RoutineHistoryInput, (p, o) => calls(p.instance, o).history(p)),
   };
   return { bots: { capabilities, get, create, update, delete: remove }, rooms, routines };
 }

@@ -7,8 +7,9 @@
  *
  * Nothing pairs on its own. Every way in lands on a confirmation naming the
  * fleet, the tailnet and the agent count, and only a link `readPairingLink`
- * accepts gets that far. Replacing an existing pairing asks once more, and a
- * code for a different tailnet says so (`tailnetChange`). A link's `prefs`
+ * accepts gets that far. Another fleet's code is added beside the paired ones
+ * (the switcher on home brings each to the front), and a code for a different
+ * tailnet says so first (`tailnetChange`). A link's `prefs`
  * (the desktop's avatar style, say) are applied once the pairing is kept,
  * never before, and Settings changes them afterwards like any other choice.
  *
@@ -61,11 +62,13 @@ export default function Pair() {
       setBusy(true);
       setError(null);
       try {
-        await pair(link);
+        const kept = await pair(link);
         const patch = pairPrefsPatch(link);
         if (Object.keys(patch).length > 0) updatePrefs(patch);
         haptic.success();
+        // Another fleet: the app remounts at its entry route, which picks a primary.
         setPending(null);
+        if (kept === "switched") return;
         // Drop whatever is under Pair (a deep link pushes it over home or a
         // conversation), so swipe-back cannot return to it.
         if (router.canDismiss()) router.dismissAll();
@@ -102,24 +105,18 @@ export default function Pair() {
 
   const confirm = useCallback(() => {
     if (!pending) return;
-    if (status !== "paired" || !current) return void submit(pending);
-    // Replacing a working pairing is the one step that loses something: ask again.
+    const change =
+      status === "paired" && current ? tailnetChange(pending, current.payload.tailnet) : null;
+    // Adding a fleet loses nothing; only a tailnet change needs the operator to act.
+    if (!change) return void submit(pending);
     haptic.warning();
-    const same = current.payload.fleet_id === pending.payload.fleet_id;
-    const change = tailnetChange(pending, current.payload.tailnet);
-    const body = same
-      ? `This phone is paired with ${current.label} already. Pairing again refreshes its agent list.`
-      : `This phone is paired with ${current.label}. Pairing with ${pending.label} forgets that fleet.`;
     Alert.alert(
-      change ? "Switch tailnet?" : "Replace the current pairing?",
-      change
-        ? `${body} The Tailscale app must be signed in to ${change.to} for this phone to reach it.`
-        : body,
+      "Another tailnet",
+      `${pending.label} is on ${change.to}. The Tailscale app must be signed in to it for this phone to reach that fleet.`,
       [
-        { text: "Keep current", style: "cancel" },
+        { text: "Cancel", style: "cancel" },
         {
-          text: change ? "Switch tailnet" : "Replace",
-          style: "destructive",
+          text: current?.payload.fleet_id === pending.payload.fleet_id ? "Switch tailnet" : "Add fleet",
           onPress: () => void submit(pending),
         },
       ],
@@ -128,7 +125,7 @@ export default function Pair() {
 
   const confirmProps = (link: PairedLink) => ({
     link,
-    replacing: status === "paired",
+    adding: status === "paired" && current?.payload.fleet_id !== link.payload.fleet_id,
     currentTailnet: status === "paired" ? (current?.payload.tailnet ?? null) : null,
     busy,
     onConfirm: confirm,
@@ -187,12 +184,12 @@ export default function Pair() {
           <View
             style={{
               borderLeftWidth: t.border.control,
-              borderLeftColor: t.c.warn,
+              borderLeftColor: t.c.line2,
               paddingLeft: t.space.md,
             }}
           >
-            <Text variant="bodySmall" tone="warn">
-              {`Paired with ${current.label}. Pairing again replaces it.`}
+            <Text variant="bodySmall" tone="fg2">
+              {`Paired with ${current.label}. Another fleet's code adds it beside this one.`}
             </Text>
           </View>
         ) : null}
@@ -246,6 +243,17 @@ export default function Pair() {
             }}
           />
         ) : null}
+        {fixture?.links?.slice(1).map((other) => (
+          <Button
+            key={other}
+            label="Use fixture fleet: staging"
+            variant="secondary"
+            onPress={() => {
+              haptic.select();
+              propose(other);
+            }}
+          />
+        ))}
         {pending ? (
           // The buttons are pinned below the scroll view; the card scrolls itself into view.
           <View

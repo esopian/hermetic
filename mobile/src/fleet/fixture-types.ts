@@ -29,8 +29,11 @@ export type FixtureDriveParams = Readonly<Record<string, string | readonly strin
  * builds it from the providers; `src/fixture/drive.ts` calls it).
  */
 export interface FixtureDriveActions {
-  /** Pair with the kit's canned link, as the Pair screen's "Use fixture fleet" does. */
-  pair(): Promise<void>;
+  /**
+   * Pair with the kit's canned link, as the Pair screen's "Use fixture fleet"
+   * does. `"restart"`: a new fleet remounted the app, and the link opens again.
+   */
+  pair(): Promise<"restart" | undefined>;
   setPrimary(name: string): Promise<void>;
   listen(name: string): Promise<void>;
   /** Create a Bot Mode bot (`HermeticClient.createBot`). */
@@ -49,8 +52,10 @@ export interface FixtureDriveActions {
  */
 export interface FixtureControls {
   link: string;
+  /** Every canned fleet's link (`main`, then `staging`), for trying the fleet switcher. */
+  links?: readonly string[];
   demoPrompts?: readonly DemoPrompt[];
-  drive?: (params: FixtureDriveParams, actions: FixtureDriveActions) => Promise<string>;
+  drive?: (params: FixtureDriveParams, actions: FixtureDriveActions) => Promise<string | null>;
   /** Canned attachments (an image, then a text file) for the conversation's `?attach=` link. */
   sampleFiles?: () => Promise<PickedFile[]>;
   /** A canned clipboard picture, as the paste control answers it, for the conversation's `?paste=image` link. */

@@ -128,6 +128,7 @@ describe("@hermetic/core/shared is browser-safe", () => {
     // door, and only `style.ts` is reached by a schema (`schema/mobile.ts`, the
     // pairing link's style choice). Nor is `todos.ts`: the heads read the task
     // list through the shared and chat-client doors; no schema computes one.
+    // Nor is `routine-schedule.ts`: the heads' routine pickers read it, no schema.
     const schemaReach = new Set(reachable(join(ROOT, "src/schema/index.ts")));
     for (const path of modules) {
       if (
@@ -136,6 +137,7 @@ describe("@hermetic/core/shared is browser-safe", () => {
         path.endsWith("/shared/sha256.ts") ||
         path.endsWith("/shared/expo-push.ts") ||
         path.endsWith("/shared/todos.ts") ||
+        path.endsWith("/shared/routine-schedule.ts") ||
         (path.includes("/shared/avatar/") && !path.endsWith("/shared/avatar/style.ts"))
       )
         continue;

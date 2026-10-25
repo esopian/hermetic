@@ -2,8 +2,8 @@
  * Home: one open screen. A top bar of square buttons (Settings on the left,
  * Search and New chat on the right), a slim Tailscale strip only when the
  * probe says something is wrong, the hero (every bot pinned on this phone, or
- * with none pinned the primary instance's bots, under a "Primary · <name>"
- * kicker), then one quiet section per listened instance with the rest of its
+ * with none pinned each listened instance's default bot, the primary's first),
+ * then one quiet section per listened instance with the rest of its
  * bots, the primary's first — needs-you, unread, most recent, name
  * (`primaryHomeRows` over `homeRows`). Paired with no primary picked yet, it
  * sends the operator to the picker instead. Unread and needs-you live on the bots
@@ -209,7 +209,7 @@ export default function Home() {
   // The strip explains a failed read only while it is on screen; once dismissed, the error does.
   const banded = (probe === "off" || probe === "unreachable") && dismissed !== probe;
 
-  // Whose bots the hero shows: the pins, or the primary instance's.
+  // Whose bots the hero shows: the pins, or the defaults (only the primary's, when it is alone).
   const heroIsPrimary =
     !layout.heroPinned &&
     !!primary &&
@@ -221,7 +221,6 @@ export default function Home() {
       <HomeHero
         rows={layout.hero}
         starred={layout.heroPinned}
-        primary={heroIsPrimary}
         kicker={heroKicker}
         fleetId={fleetId}
         onPress={(row) => open(row.bot)}
@@ -259,6 +258,7 @@ export default function Home() {
       >
         <IconButton icon="gear" label="Settings" onPress={() => router.push("/settings")} />
         <View style={{ flexDirection: "row", gap: t.space.md }}>
+          <IconButton icon="board" label="Board" onPress={() => router.push("/board")} />
           <IconButton icon="search" label="Search" onPress={() => router.push("/search")} />
           <IconButton icon="plus" label="New chat" onPress={() => router.push("/new-chat")} />
         </View>

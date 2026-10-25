@@ -168,8 +168,11 @@ export function chatRoute(instance: string, name: string): string {
   return `/chat/${encodeURIComponent(instance)}/${encodeURIComponent(name)}`;
 }
 
-/** Take the steps in order (see the module comment) and answer the route to open. */
-export async function applyDrive(ops: DriveOps, actions: FixtureDriveActions): Promise<string> {
+/**
+ * Take the steps in order (see the module comment) and answer the route to
+ * open, or `null` when a first pairing restarts the link (`pair`).
+ */
+export async function applyDrive(ops: DriveOps, actions: FixtureDriveActions): Promise<string | null> {
   for (const line of ops.refused) actions.warn(line);
   const step = async (label: string, run: () => unknown): Promise<boolean> => {
     try {
@@ -180,7 +183,13 @@ export async function applyDrive(ops: DriveOps, actions: FixtureDriveActions): P
       return false;
     }
   };
-  if (ops.pair) await step("pair", () => actions.pair());
+  if (ops.pair) {
+    let restart = false;
+    await step("pair", async () => {
+      restart = (await actions.pair()) === "restart";
+    });
+    if (restart) return null;
+  }
   for (const name of ops.listen) await step(`listen ${name}`, () => actions.listen(name));
   const primary = ops.primary;
   if (primary) await step(`primary ${primary}`, () => actions.setPrimary(primary));
@@ -206,6 +215,9 @@ export async function applyDrive(ops: DriveOps, actions: FixtureDriveActions): P
 }
 
 /** The kit's `drive`: parse, then apply. */
-export function drive(params: FixtureDriveParams, actions: FixtureDriveActions): Promise<string> {
+export function drive(
+  params: FixtureDriveParams,
+  actions: FixtureDriveActions,
+): Promise<string | null> {
   return applyDrive(parseDriveParams(params), actions);
 }

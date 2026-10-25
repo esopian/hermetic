@@ -99,9 +99,12 @@ export function randomId(rand: () => number = Math.random): string {
   return `${s.slice(0, 8)}-${s.slice(8, 12)}-${s.slice(12, 16)}-${s.slice(16, 20)}-${s.slice(20)}`;
 }
 
-/** This phone's stable device id: minted once and kept. */
+/**
+ * This phone's stable device id: minted once and kept. A failed read throws
+ * (a locked phone's background wake), so it never mints a second id.
+ */
 export async function deviceId(kv: KvStorage, mint: () => string = randomId): Promise<string> {
-  const existing = await kv.get(DEVICE_ID_KEY).catch(() => null);
+  const existing = await kv.get(DEVICE_ID_KEY);
   if (existing && /^[A-Za-z0-9_-]{1,64}$/.test(existing)) return existing;
   const id = mint();
   await kv.set(DEVICE_ID_KEY, id).catch(() => {});

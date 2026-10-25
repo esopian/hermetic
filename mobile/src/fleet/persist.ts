@@ -1,7 +1,7 @@
 /**
  * The device-backed persistence the fleet store and the inbox are handed:
- * SecureStore for the pairing (`WHEN_UNLOCKED_THIS_DEVICE_ONLY`: never backed
- * up, never synced) and JSON files in the document directory for caches.
+ * SecureStore for the pairing (`AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY`: never
+ * backed up, never synced) and JSON files in the document directory for caches.
  *
  * The stores themselves take these as seams (`KvStorage`, `TextFile`), so
  * their tests run on Maps; this module is the only one that imports the native
@@ -11,8 +11,14 @@ import { File, Paths } from "expo-file-system";
 import * as SecureStore from "expo-secure-store";
 import type { KvStorage, TextFile } from "./store.ts";
 
+/**
+ * Readable after the first unlock since boot: iOS launches the app in the
+ * background (refresh task, push) while the phone is locked, and a
+ * `WHEN_UNLOCKED` item cannot be read then. SecureStore's update keeps an
+ * item's old class, so only items first written since then have this one.
+ */
 const OPTIONS: SecureStore.SecureStoreOptions = {
-  keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+  keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
 };
 
 /** SecureStore keys allow only `[A-Za-z0-9._-]`. */
@@ -44,6 +50,13 @@ export function documentFile(name: string): TextFile {
   };
 }
 
-/** The fleet view cache and the inbox, by file name. */
-export const FLEET_VIEW_FILE = "hermetic-fleet-view.json";
-export const INBOX_FILE = "hermetic-inbox.json";
+/** One fleet's view cache and inbox (`none` before any pairing), under `prefix`. */
+export function fleetFiles(prefix = ""): (fleetId: string | null) => {
+  viewCache: TextFile;
+  inboxFile: TextFile;
+} {
+  return (fleetId) => ({
+    viewCache: documentFile(`${prefix}hermetic-fleet-view.${fleetId ?? "none"}.json`),
+    inboxFile: documentFile(`${prefix}hermetic-inbox.${fleetId ?? "none"}.json`),
+  });
+}

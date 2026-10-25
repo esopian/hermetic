@@ -4,6 +4,8 @@
  */
 jest.mock("react-native-worklets", () => require("react-native-worklets/lib/module/mock"));
 jest.mock("react-native-reanimated", () => require("react-native-reanimated/mock"));
+// Every sheet with a field avoids the keyboard; a file may still mock it its own way.
+jest.mock("react-native-keyboard-controller", () => require("react-native-keyboard-controller/jest"));
 jest.mock("expo-haptics", () => ({
   selectionAsync: jest.fn(async () => {}),
   notificationAsync: jest.fn(async () => {}),
@@ -49,5 +51,16 @@ jest.mock("react-native-gesture-handler/ReanimatedSwipeable", () => {
     default: forwardRef(({ children }: { children: unknown }, _ref: unknown) => (
       <View>{children}</View>
     )),
+  };
+});
+// The share card's player (`blocks/ShareCard.tsx`): a plain view over a player that never errs.
+jest.mock("expo-video", () => {
+  const { View } = require("react-native");
+  return {
+    useVideoPlayer: jest.fn(() => ({
+      status: "readyToPlay",
+      addListener: jest.fn(() => ({ remove: jest.fn() })),
+    })),
+    VideoView: (props: Record<string, unknown>) => <View {...props} />,
   };
 });

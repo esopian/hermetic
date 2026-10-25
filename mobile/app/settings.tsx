@@ -1,14 +1,15 @@
 /**
- * Settings, behind home's gear: a grouped list of everything admin. Bots (the
- * listened instances), the fleet's agents (each opens its
- * detail and browser), the Tailscale status, notification delivery (push from
- * the boxes, previews, alerts on this phone, quiet hours), appearance (theme
- * and avatar style) and haptics, the paired fleet, re-pairing and signing out, and about. Nothing
+ * Settings, behind home's gear: a grouped list of everything admin. First the
+ * fleet in front (its row opens the Fleets switcher), then Bots (the listened
+ * instances), the fleet's agents (each opens its detail and browser), the
+ * Tailscale status, notification delivery (push from the boxes, previews,
+ * alerts on this phone, quiet hours), appearance (theme and avatar style) and
+ * haptics, re-pairing and signing out, and about. Nothing
  * bridge-shaped: the phone talks to the boxes.
  *
  * `/settings?section=<id>` opens it scrolled to one group, the id being the
- * group's title kebab-cased (`bots`, `agents`, `tailscale`, `notifications`,
- * `appearance`, `fleet`, `this-phone`, `about`, `support`); an unknown id
+ * group's title kebab-cased (`fleet`, `bots`, `agents`, `tailscale`, `notifications`,
+ * `appearance`, `this-phone`, `about`, `support`); an unknown id
  * leaves it at the top.
  */
 import { AVATAR_STYLES, type AvatarStyle } from "@hermetic/core/shared";
@@ -507,14 +508,15 @@ export default function Settings() {
     haptic.warning();
     Alert.alert(
       "Sign out of this fleet?",
-      "This phone forgets the pairing and what it has been told, and asks the agents it listens to to stop pushing to it. To cut a phone off for good, remove it from the tailnet.",
+      "This phone forgets this fleet's pairing and what it has been told, and asks the agents it listens to to stop pushing to it. Any other paired fleet stays. To cut a phone off for good, remove it from the tailnet.",
       [
         { text: "Cancel", style: "cancel" },
         {
           text: "Sign out",
           style: "destructive",
           onPress: () => {
-            void ctx.signOut().then(() => router.replace("/pair"));
+            // The app remounts at its entry route: the next fleet's home, or Pair when none is left.
+            void ctx.signOut();
           },
         },
       ],
@@ -551,6 +553,52 @@ export default function Settings() {
       </View>
       <SectionLayout.Provider value={onSection}>
         <ScrollView ref={scroll} contentContainerStyle={{ paddingBottom: t.space.xxl * 2 }}>
+          <Group
+            title="Fleet"
+            note={
+              fleet.fromBoxes || fleet.error ? (
+                <View style={{ gap: t.space.xs }}>
+                  {fleet.fromBoxes ? (
+                    <Text variant="caption" tone="warn" testID="fleet-view-source">
+                      {fleetViewLine(fleet.error?.code ?? null)}
+                    </Text>
+                  ) : null}
+                  {fleet.error ? <Note tone="warn">{fleet.error.message}</Note> : null}
+                </View>
+              ) : null
+            }
+          >
+            {/* The fleet switcher: every paired fleet, and "Add a fleet". */}
+            <Item
+              label="Fleet"
+              mono
+              testID="settings-fleet"
+              accessibilityLabel={`Fleet: ${link?.label ?? "none"}. Switch or add a fleet`}
+              onPress={() => router.push("/fleets")}
+              value={
+                link
+                  ? link.payload.alias && link.payload.alias !== link.payload.fleet_id
+                    ? `${link.label} · ${link.payload.fleet_id}`
+                    : link.payload.fleet_id
+                  : null
+              }
+            />
+            <Item label="Tailnet" mono value={link?.payload.tailnet} />
+            <Item
+              label="Region"
+              mono
+              value={link ? `${link.payload.region} · ${link.payload.account_id}` : null}
+            />
+            <Item
+              label="Fleet list"
+              value={
+                fleet.refreshed_at
+                  ? `read ${railTime(fleet.refreshed_at, now)}${fleet.stale ? " · from pairing" : ""}`
+                  : "not read yet"
+              }
+            />
+          </Group>
+
           <Group
             title="Bots"
             note={
@@ -711,57 +759,15 @@ export default function Settings() {
           </Group>
 
           <Group
-            title="Fleet"
-            note={
-              fleet.fromBoxes || fleet.error ? (
-                <View style={{ gap: t.space.xs }}>
-                  {fleet.fromBoxes ? (
-                    <Text variant="caption" tone="warn" testID="fleet-view-source">
-                      {fleetViewLine(fleet.error?.code ?? null)}
-                    </Text>
-                  ) : null}
-                  {fleet.error ? <Note tone="warn">{fleet.error.message}</Note> : null}
-                </View>
-              ) : null
-            }
-          >
-            <Item
-              label="Fleet"
-              mono
-              value={
-                link
-                  ? link.payload.alias && link.payload.alias !== link.payload.fleet_id
-                    ? `${link.label} · ${link.payload.fleet_id}`
-                    : link.payload.fleet_id
-                  : null
-              }
-            />
-            <Item label="Tailnet" mono value={link?.payload.tailnet} />
-            <Item
-              label="Region"
-              mono
-              value={link ? `${link.payload.region} · ${link.payload.account_id}` : null}
-            />
-            <Item
-              label="Fleet list"
-              value={
-                fleet.refreshed_at
-                  ? `read ${railTime(fleet.refreshed_at, now)}${fleet.stale ? " · from pairing" : ""}`
-                  : "not read yet"
-              }
-            />
-          </Group>
-
-          <Group
             title="This phone"
             note={
               <Note>
-                Signing out forgets the pairing on this phone. Nothing on the laptop or the boxes
-                changes beyond this phone's push registration.
+                Signing out forgets this fleet's pairing on this phone; other paired fleets stay.
+                Nothing on the laptop or the boxes changes beyond this phone's push registration.
               </Note>
             }
           >
-            <Item label="Re-pair (scan again)" onPress={() => router.push("/pair")} />
+            <Item label="Re-pair or add a fleet" onPress={() => router.push("/pair")} />
             <Item label="Sign out" tone="bad" chevron={false} onPress={signOut} />
           </Group>
 

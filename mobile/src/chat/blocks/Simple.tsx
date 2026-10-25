@@ -270,6 +270,17 @@ const PROCESS_WORD: Record<string, string> = {
 
 /** A background event Hermes woke the bot with: one line, output on tap. */
 export function ProcessEventBlock({ block }: { block: ProcessEventBlockType }) {
+  // A bot-to-bot DM reply: head names the replier, body folded; an empty reply says nothing (desktop parity).
+  if (block.dm) {
+    if (!block.dm.reply) return null;
+    return (
+      <Card verdict="muted" head={`Message from ${block.dm.to_profile}`} collapsible>
+        <Text variant="bodySmall" tone="fg2" selectable>
+          {block.dm.reply}
+        </Text>
+      </Card>
+    );
+  }
   const verdict =
     block.outcome === "ok"
       ? "ok"

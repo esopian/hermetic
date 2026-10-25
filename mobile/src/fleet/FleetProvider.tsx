@@ -38,6 +38,7 @@ import {
   routeFor,
 } from "./alerts.ts";
 import type { FixtureControls } from "./fixture-types.ts";
+import type { FleetEntry } from "./fleets.ts";
 import type { PairedLink } from "./pairing.ts";
 import {
   allBoxes,
@@ -81,6 +82,8 @@ export type {
 export interface FleetDeps {
   /** The keychain (pairing, device id, the phone's own switches). */
   secure: KvStorage;
+  /** This fleet's record key (`FleetStoreDeps.recordKey`). */
+  recordKey?: string | null;
   viewCache: TextFile;
   inboxFile: TextFile;
   fetch: FetchLike;
@@ -120,8 +123,16 @@ export interface FleetContextValue {
   /** The in-app banner currently showing (foreground alerts). */
   banner: Alert | null;
   dismissBanner(): void;
-  /** Keep a confirmed pairing (replacing any before it) and connect. */
-  pair(link: PairedLink): Promise<void>;
+  /**
+   * Keep a confirmed pairing and connect. Another fleet's link is added beside
+   * this one and brought to the front (`"switched"`: the app remounts at its
+   * entry route); this fleet's again refreshes it in place (`"kept"`).
+   */
+  pair(link: PairedLink): Promise<"kept" | "switched">;
+  /** Every paired fleet, in pairing order. */
+  fleets: readonly FleetEntry[];
+  /** Bring another paired fleet to the front (the app remounts at its entry route). */
+  switchFleet(fleetId: string): Promise<void>;
   /**
    * The primary instance (`FleetState.primary`): the one home is built around.
    * `null` before the operator picks one, and while unpaired.
@@ -131,7 +142,10 @@ export interface FleetContextValue {
   needsPrimary: boolean;
   /** Pick the primary instance, listen to it, and read home's bots again. */
   setPrimary(name: string): Promise<void>;
-  /** Unregister push on the listened boxes (best effort), then forget the pairing. */
+  /**
+   * Unregister push on the listened boxes (best effort), then forget this
+   * fleet; the next paired one, if any, comes to the front.
+   */
   signOut(): Promise<void>;
   /** Fleet view, Tailscale and home's bots, again. */
   refresh(): Promise<void>;
@@ -152,16 +166,30 @@ export interface FleetContextValue {
   fixture: (FixtureControls & { setTailscale(s: Exclude<TailscaleStatus, "unknown">): void }) | null;
 }
 
+/** The other paired fleets (`FleetSwitch.tsx`): this provider is the active one's. */
+export interface FleetSwitcher {
+  fleets: readonly FleetEntry[];
+  /** Keep `link`'s fleet beside the others and bring it to the front. */
+  add(link: PairedLink): Promise<void>;
+  switchTo(fleetId: string): Promise<void>;
+  /** Forget a fleet in the list; the next one comes to the front. */
+  remove(fleetId: string): Promise<void>;
+  /** The fleet in front's entry, from a fresh link (same fleet, so nothing remounts). */
+  refresh(link: PairedLink): Promise<void>;
+}
+
 export const FleetContext = createContext<FleetContextValue | null>(null);
 
 export { PREVIEWS_KEY, PUSH_KEY };
 
 export function FleetProvider({
   deps,
+  switcher = null,
   onOpen,
   children,
 }: {
   deps: FleetDeps;
+  switcher?: FleetSwitcher | null;
   /** Navigate to an app path (a tapped notification). */
   onOpen?: (href: string) => void;
   children: ReactNode;
@@ -190,10 +218,13 @@ export function FleetProvider({
   const pendingRoute = useRef<string | null>(null);
   const onOpenRef = useRef(onOpen);
   onOpenRef.current = onOpen;
+  const switcherRef = useRef(switcher);
+  switcherRef.current = switcher;
 
   const { fleet, inbox, pushSync, pushFleet } = useMemo(() => {
     const fleet = new FleetStore({
       secure: deps.secure,
+      ...(deps.recordKey !== undefined ? { recordKey: deps.recordKey } : {}),
       viewCache: deps.viewCache,
       fetch: deps.fetch,
       now: () => nowRef.current(),
@@ -297,13 +328,28 @@ export function FleetProvider({
       // A push for another fleet (or an agent this pairing does not name) opens home.
       open(routeFor(belongingData(content, pushFleet())));
     });
-    void (async () => {
+    let offRetry: (() => void) | null = null;
+    const boot = async () => {
       const [pref, pushPref] = await Promise.all([
         deps.secure.get(PREVIEWS_KEY).catch(() => null),
         deps.secure.get(PUSH_KEY).catch(() => null),
       ]);
       await inbox.load();
-      const paired = await fleet.load();
+      let paired: boolean;
+      try {
+        paired = await fleet.load();
+      } catch {
+        // The keychain is shut (a background launch on a locked phone): stay
+        // "loading" and read again once the app is in front, never "unpaired".
+        if (live && !offRetry)
+          offRetry = deps.appState.subscribe((state) => {
+            if (state !== "active") return;
+            offRetry?.();
+            offRetry = null;
+            void boot();
+          });
+        return;
+      }
       // Filed after the pairing loads: a push is checked against it.
       for (const content of await deps.notifier.presented().catch(() => []))
         ingestPush(inbox, content, nowRef.current(), pushFleet());
@@ -314,9 +360,11 @@ export function FleetProvider({
       setPushWanted(pushPref === "on");
       if (paired) start();
       else setStatus("unpaired");
-    })();
+    };
+    void boot();
     return () => {
       live = false;
+      offRetry?.();
       offTap();
       clientRef.current?.dispose();
       clientRef.current = null;
@@ -427,19 +475,46 @@ export function FleetProvider({
     };
   }, [deps, inbox, pushSync, pushFleet, probeThenRefresh]);
 
+  /**
+   * shortcut: push and the badge follow the active fleet only (the fleet left
+   * behind unregisters, best effort and unawaited); upgrade when notifications
+   * from every paired fleet are wanted.
+   */
+  const leave = useCallback(() => {
+    if (fleet.getState().link) void pushSync.disable(allBoxes(fleet)).catch(() => {});
+  }, [fleet, pushSync]);
+
   const pair = useCallback(
-    async (link: PairedLink) => {
+    async (link: PairedLink): Promise<"kept" | "switched"> => {
       const current = fleet.getState().link?.payload.fleet_id ?? null;
+      const sw = switcherRef.current;
+      if (sw && current !== link.payload.fleet_id) {
+        leave();
+        await sw.add(link);
+        return "switched";
+      }
       if (current && current !== link.payload.fleet_id) {
-        // Another fleet: its boxes forget this phone, and its inbox goes with it.
+        // No list to keep it in: the other fleet replaces this one, inbox and all.
         setPush(await pushSync.disable(allBoxes(fleet)));
         await inbox.clear();
       }
       await fleet.pair(link);
+      await sw?.refresh(link);
       setTailscale(null);
       start();
+      return "kept";
     },
-    [fleet, inbox, pushSync, start],
+    [fleet, inbox, pushSync, start, leave],
+  );
+
+  const switchFleet = useCallback(
+    async (fleetId: string) => {
+      const sw = switcherRef.current;
+      if (!sw || fleet.getState().link?.payload.fleet_id === fleetId) return;
+      leave();
+      await sw.switchTo(fleetId);
+    },
+    [fleet, leave],
   );
 
   const signOut = useCallback(async () => {
@@ -449,10 +524,13 @@ export function FleetProvider({
     setClient(null);
     setBanner(null);
     setTailscale(null);
+    const leaving = fleet.getState().link?.payload.fleet_id ?? null;
     await fleet.signOut();
     await inbox.clear();
     await deps.background?.unregister();
     await deps.notifier.setBadge(0);
+    // The next paired fleet, if any, remounts the app in front.
+    if (leaving) await switcherRef.current?.remove(leaving);
     setStatus("unpaired");
   }, [deps, fleet, inbox, pushSync]);
 
@@ -542,6 +620,8 @@ export function FleetProvider({
       banner,
       dismissBanner,
       pair,
+      fleets: switcher?.fleets ?? [],
+      switchFleet,
       primary,
       needsPrimary,
       setPrimary,
@@ -566,6 +646,8 @@ export function FleetProvider({
       banner,
       dismissBanner,
       pair,
+      switcher,
+      switchFleet,
       primary,
       needsPrimary,
       setPrimary,

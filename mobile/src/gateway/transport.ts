@@ -43,7 +43,7 @@ import {
   type TranscriptMask,
   transcriptMask,
 } from "@hermetic/core/chat-client";
-import { BotCreateInput, type BotProfile } from "@hermetic/core/schema";
+import { BotCreateInput, type BotProfile, type ChatCommand } from "@hermetic/core/schema";
 import type {
   AbortResult,
   HistoryResult,
@@ -131,6 +131,27 @@ export interface GatewayOps {
    * gateway without Bot Mode RPC.
    */
   createBot(instance: string, input: Omit<BotCreateInput, "instance">): Promise<BotProfile>;
+  /**
+   * One call to the dashboard API on `instance`'s box (`botModeRest`), the
+   * kanban board and routines read through it. `detail` appends a refused
+   * 400/409's reason to the error. `UNSUPPORTED` for a gateway without it.
+   */
+  rest(input: {
+    instance: string;
+    method: string;
+    path: string;
+    body?: unknown;
+    signal?: AbortSignal;
+  }): Promise<unknown>;
+  /**
+   * The slash commands the gateway offers `bot`, read against `session` while
+   * it is live there. `UNSUPPORTED` for a gateway with no catalog.
+   */
+  commands(input: {
+    instance: string;
+    bot: string;
+    session?: string | null;
+  }): Promise<{ commands: ChatCommand[]; warning: string | null }>;
 }
 
 export interface GatewayTransport extends ConversationTransport, RosterSource, GatewayOps {
@@ -651,6 +672,33 @@ export function createGatewayTransport(deps: GatewayTransportDeps): GatewayTrans
     return mask.deep(profile);
   }
 
+  async function rest(input: {
+    instance: string;
+    method: string;
+    path: string;
+    body?: unknown;
+    signal?: AbortSignal;
+  }): Promise<unknown> {
+    if (!client.botModeRest)
+      throw new HermeticError("UNSUPPORTED", "The dashboard API is unavailable on this gateway");
+    const answer = await client.botModeRest(
+      deps.address(input.instance),
+      input.method,
+      input.path,
+      input.body,
+      { detail: true, ...(input.signal ? { signal: input.signal } : {}) },
+    );
+    return mask.deep(answer);
+  }
+
+  async function commands(input: { instance: string; bot: string; session?: string | null }) {
+    if (!client.commands)
+      throw new HermeticError("UNSUPPORTED", "This gateway offers no command catalog");
+    return client.commands(deps.address(input.instance), input.bot, {
+      ...(input.session ? { session: input.session } : {}),
+    });
+  }
+
   return {
     history: (input) => history(input),
     sessions,
@@ -672,6 +720,8 @@ export function createGatewayTransport(deps: GatewayTransportDeps): GatewayTrans
     steerSubagent,
     abortSubagent,
     createBot,
+    rest,
+    commands,
     detachTurns,
     detachTurnsSince,
     liveStatus,

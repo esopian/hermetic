@@ -27,17 +27,22 @@ export async function saveBoxFile(
   } = {},
 ): Promise<void> {
   const got = await files.content(id, { maxBytes: SAVE_MAX_BYTES });
-  const write =
-    deps.write ??
-    ((fileName: string, bytes: Uint8Array) => {
-      const file = new File(Paths.cache, fileName);
-      if (file.exists) file.delete();
-      file.create({ intermediates: true });
-      file.write(bytes);
-      return file.uri;
-    });
+  const write = deps.write ?? writeCacheFile;
   const share = deps.share ?? ((url: string) => Share.share({ url }));
-  // The id keeps two shares with one name apart in the cache directory.
-  const url = write(`${id}-${name.replace(/[/\\]/g, "_")}`, got.bytes);
+  const url = write(cacheName(id, name), got.bytes);
   await share(url);
+}
+
+/** A share's file name in the cache directory: the id keeps two shares with one name apart. */
+export function cacheName(id: string, name: string): string {
+  return `${id}-${name.replace(/[/\\]/g, "_")}`;
+}
+
+/** Write `bytes` into the app's cache directory under `fileName`; answers its `file://` URI. */
+export function writeCacheFile(fileName: string, bytes: Uint8Array): string {
+  const file = new File(Paths.cache, fileName);
+  if (file.exists) file.delete();
+  file.create({ intermediates: true });
+  file.write(bytes);
+  return file.uri;
 }

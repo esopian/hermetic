@@ -1,6 +1,6 @@
 /**
  * The slash-command list over the composer (issue #76): the gateway's catalog,
- * filtered as a command name is typed (`chat-slash.ts`).
+ * filtered as a command name is typed (`slashQuery` and friends, `@hermetic/core/shared`).
  *
  * Keys follow the mention list's (`MentionPicker.tsx`): ArrowUp/ArrowDown move
  * and wrap, Tab accepts, Escape closes without touching the text, and leaving
@@ -15,8 +15,10 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { KeyboardEvent, RefObject } from "react";
 import type { ChatCommandView } from "../../api/types.ts";
-import { acceptSlash, filterSlashCommands, slashQuery, takesArgument } from "../chat-slash.ts";
-import type { SlashMatch } from "../chat-slash.ts";
+import { acceptSlash, filterSlashCommands, slashQuery, takesArgument } from "@hermetic/core/shared";
+import type { SlashMatch as SharedSlashMatch } from "@hermetic/core/shared";
+
+type SlashMatch = SharedSlashMatch<ChatCommandView>;
 
 export interface SlashPicker {
   /** The rows on show; empty when the list is closed. */

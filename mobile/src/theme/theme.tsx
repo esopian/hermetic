@@ -17,6 +17,7 @@ import type { KvStorage as PrefStorage } from "../fleet/store.ts";
 import { mono, sans } from "./fonts.ts";
 import { border, motion, space, touch, type } from "./scale.ts";
 import { type Palette, palettes, type SchemeName } from "./tokens.ts";
+import { readWhenOpen } from "../ui/when-open.ts";
 
 export type SchemePreference = "system" | SchemeName;
 
@@ -72,8 +73,8 @@ export function ThemeProvider({
 
   useEffect(() => {
     let live = true;
-    void storage
-      ?.get(PREF_KEY)
+    if (!storage) return;
+    void readWhenOpen(() => storage.get(PREF_KEY))
       .then((v) => {
         if (live && (v === "dark" || v === "light" || v === "system")) setPref(v);
       })

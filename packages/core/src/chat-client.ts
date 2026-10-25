@@ -48,6 +48,11 @@ export type {
 export { botProfileOf, createBotOverRpc } from "./chat/hermes/hermes-bot-create.ts";
 export type { BotModeCall } from "./chat/hermes/hermes-bot-create.ts";
 
+// --- Routines (Hermes cron jobs) ---------------------------------------
+// The `/api/cron/jobs` sequence `routines.*` runs, over a caller's bound `botModeRest`.
+export { routineCalls, routineFrom, zoneOrNull } from "./chat/routine-wire.ts";
+export type { RoutineRest } from "./chat/routine-wire.ts";
+
 // --- Following a transcript ----------------------------------------------
 export {
   OBSERVE_HINTS_ENDED,

@@ -184,6 +184,16 @@ describe("isAppRoute", () => {
 });
 
 describe("applyDrive", () => {
+  test("a first pairing that remounts the app stops here: the link runs again", async () => {
+    const { actions, calls } = recorder();
+    actions.pair = async () => {
+      calls.push("pair");
+      return "restart";
+    };
+    expect(await drive({ pair: "1", primary: "atlas", to: "/settings" }, actions)).toBeNull();
+    expect(calls).toEqual(["pair"]);
+  });
+
   test("steps run pair, listen, primary, createBot, avatar, theme whatever the URL order", async () => {
     const { actions, calls, warnings } = recorder();
     const to = await drive(

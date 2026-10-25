@@ -143,24 +143,33 @@ const SEEDS: readonly {
   },
 ];
 
-const hostOf = (seed: { name: string; dns_host?: string }) =>
-  `${cloudName(FIXTURE_FLEET_ID, seed.dns_host ?? seed.name)}.${FIXTURE_TAILNET}`;
+/** A second canned fleet, `staging` as on the desktop fixture, so the phone has a fleet to switch to. */
+export const FIXTURE_STAGING = { fleet_id: "sg7k2m4p", alias: "staging" } as const;
+const STAGING_AGENTS = new Set(["ember", "kestrel"]);
+
+type FixtureFleet = { fleet_id: string; alias: string };
+const MAIN: FixtureFleet = { fleet_id: FIXTURE_FLEET_ID, alias: FIXTURE_ALIAS };
+const seedsOf = (fleet: FixtureFleet) =>
+  fleet.fleet_id === FIXTURE_FLEET_ID ? SEEDS : SEEDS.filter((s) => STAGING_AGENTS.has(s.name));
+
+const hostOf = (seed: { name: string; dns_host?: string }, fleetId: string = FIXTURE_FLEET_ID) =>
+  `${cloudName(fleetId, seed.dns_host ?? seed.name)}.${FIXTURE_TAILNET}`;
 
 /** The canned `GET /fleet` answer. */
-export function fixtureFleetView(readAt: string): MobileFleetView {
+export function fixtureFleetView(readAt: string, fleet: FixtureFleet = MAIN): MobileFleetView {
   return {
     fleet: {
-      fleet_id: FIXTURE_FLEET_ID,
-      alias: FIXTURE_ALIAS,
+      fleet_id: fleet.fleet_id,
+      alias: fleet.alias,
       tailnet: FIXTURE_TAILNET,
       region: FIXTURE_REGION,
       account_id: FIXTURE_ACCOUNT,
       foundation_version: 16,
     },
-    agents: SEEDS.map((seed) => ({
+    agents: seedsOf(fleet).map((seed) => ({
       name: seed.name,
       status: seed.status,
-      tailscale_dns_name: hostOf(seed),
+      tailscale_dns_name: hostOf(seed, fleet.fleet_id),
       tailscale_ip: seed.ip,
       version: seed.version,
       health: seed.health,
@@ -170,15 +179,15 @@ export function fixtureFleetView(readAt: string): MobileFleetView {
 }
 
 /** What `hermetic mobile pair` would print for the fixture fleet. */
-export function fixturePairingLink(): string {
+export function fixturePairingLink(fleet: FixtureFleet = MAIN): string {
   return encodeMobileLink({
-    fleet_id: FIXTURE_FLEET_ID,
-    alias: FIXTURE_ALIAS,
+    fleet_id: fleet.fleet_id,
+    alias: fleet.alias,
     account_id: FIXTURE_ACCOUNT,
     region: FIXTURE_REGION,
     tailnet: FIXTURE_TAILNET,
-    agents: SEEDS.map((seed) =>
-      seed.dns_host ? { name: seed.name, host: hostOf(seed) } : { name: seed.name },
+    agents: seedsOf(fleet).map((seed) =>
+      seed.dns_host ? { name: seed.name, host: hostOf(seed, fleet.fleet_id) } : { name: seed.name },
     ),
   });
 }
@@ -234,8 +243,13 @@ export function fixtureFetch(input: {
   /** hermeticd's `/healthz` and files routes; absent, they answer 404 as before. */
   files?: FixtureFilesBox;
 }): FetchLike {
-  const known = new Set(SEEDS.map(hostOf));
-  const agentAt = new Map(SEEDS.map((seed) => [hostOf(seed), seed.name]));
+  const fleetAt = new Map<string, FixtureFleet>();
+  const agentAt = new Map<string, string>();
+  for (const fleet of [MAIN, FIXTURE_STAGING])
+    for (const seed of seedsOf(fleet)) {
+      fleetAt.set(hostOf(seed, fleet.fleet_id), fleet);
+      agentAt.set(hostOf(seed, fleet.fleet_id), seed.name);
+    }
   return async (request, init) => {
     const url = new URL(String(request instanceof Request ? request.url : request));
     const method = (init?.method ?? "GET").toUpperCase();
@@ -243,11 +257,11 @@ export function fixtureFetch(input: {
     if (status === "off")
       throw new TypeError("A server with the specified hostname could not be found.");
     if (status === "unreachable") throw new TypeError("The request timed out.");
-    if (!known.has(url.hostname))
-      throw new TypeError("A server with the specified hostname could not be found.");
+    const fleet = fleetAt.get(url.hostname);
+    if (!fleet) throw new TypeError("A server with the specified hostname could not be found.");
     if (url.pathname === "/api/health") return respond({ status: "ok" });
     if (url.pathname === RPC_PATHS.fleet && method === "GET")
-      return respond(fixtureFleetView(input.now()));
+      return respond(fixtureFleetView(input.now(), fleet));
     if (url.pathname === RPC_PATHS.pushDevices && method === "POST") {
       const device = JSON.parse(String(init?.body ?? "{}")) as MobilePushDevice;
       const box = input.registry.boxes.get(url.hostname) ?? new Map<string, MobilePushDevice>();
@@ -293,6 +307,7 @@ export const FIXTURE_DEMO_PROMPTS: readonly DemoPrompt[] = [
   { group: "Tools", label: "Tool rows", prompt: "Check the disk throughput" },
   { group: "Tools", label: "Background process", prompt: "Run the build E2E_PROCESS_EVENT" },
   { group: "Tools", label: "Message a teammate", prompt: "Tell scribe E2E_DM" },
+  { group: "Tools", label: "Kanban task", prompt: "Track the migration E2E_KANBAN" },
   { group: "Approvals", label: "Approval", prompt: "Resize the volume E2E_APPROVAL" },
   { group: "Approvals", label: "Smart approval", prompt: "Resize the volume E2E_APPROVAL_SMART" },
   { group: "Approvals", label: "No session", prompt: "Resize the volume E2E_APPROVAL_NOSESSION" },
@@ -323,6 +338,8 @@ export const FIXTURE_DEMO_PROMPTS: readonly DemoPrompt[] = [
   })),
   { group: "Errors", label: "after some text", prompt: "Try again E2E_ERROR_AFTER_TEXT" },
   { group: "Files", label: "Share files", prompt: "Send me the Q3 numbers E2E_FILE_SHARE" },
+  { group: "Files", label: "Share on MEDIA: lines", prompt: "Send me the Q3 numbers E2E_MEDIA_SHARE" },
+  { group: "Files", label: "Audio, video and text", prompt: "Send today's files E2E_MEDIA_KINDS" },
   { group: "Files", label: "File request", prompt: "I need the access log E2E_FILE_REQUEST" },
   { group: "Files", label: "Secret file", prompt: "I need the deploy key E2E_SECRET_REQUEST" },
   { group: "Files", label: "Text secret", prompt: "I need a token E2E_TEXT_SECRET" },
@@ -413,6 +430,7 @@ export interface FixtureKit {
   /** The real files client over `fetch`, one per box. */
   files: PhoneFilesFactory;
   link: string;
+  links: readonly string[];
   demoPrompts: readonly DemoPrompt[];
   /** The canned attachments for `?attach=` (`sample-files.ts`): an image, then a text file. */
   sampleFiles(): Promise<PickedFile[]>;
@@ -472,6 +490,7 @@ export function fixtureKit(
     fetch,
     files: (host) => createPhoneFiles({ fetch, host }),
     link: fixturePairingLink(),
+    links: [fixturePairingLink(), fixturePairingLink(FIXTURE_STAGING)],
     demoPrompts: FIXTURE_DEMO_PROMPTS,
     sampleFiles: async () => writeSampleFiles(await cannedPng(box), opts.writeSample ?? cacheWriter),
     clipboardImage: async () => clipboardSample(await cannedPng(box)),

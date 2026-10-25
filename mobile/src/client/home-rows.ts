@@ -126,7 +126,7 @@ export interface HomeSection {
   reason: string | null;
   /** Folded by the operator (never when unreachable: there is nothing to unfold to). */
   folded: boolean;
-  /** Every bot of the instance not already in the hero, needs-you → unread → recent → name. */
+  /** Every bot of the instance not already in the hero: its default first, then needs-you → unread → recent → name. */
   rows: HomeRow[];
   needs: boolean;
   unread: number;
@@ -268,7 +268,8 @@ export function homeRows(input: HomeInput): HomeLayout {
     const rows = swarm.bots
       .filter((b) => !inHero.has(botKey(b.instance, b.name)))
       .map((b) => row(b, swarm.reachable))
-      .sort(compareHomeRows);
+      // The instance's default (canonical) bot heads its section when the hero is the pins.
+      .sort((a, b) => Number(b.bot.is_default) - Number(a.bot.is_default) || compareHomeRows(a, b));
     if (swarm.reachable && rows.length === 0) continue;
     sections.push({
       instance: swarm.instance,

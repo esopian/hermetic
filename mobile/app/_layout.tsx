@@ -14,7 +14,8 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { openRoute, type RouteNavigator, routeFor } from "../src/fleet/alerts.ts";
 import { appFleetDeps } from "../src/fleet/deps.ts";
-import { FleetProvider, useFleetContext } from "../src/fleet/FleetProvider.tsx";
+import { useFleetContext } from "../src/fleet/FleetProvider.tsx";
+import { FleetSwitch } from "../src/fleet/FleetSwitch.tsx";
 import { secureKv } from "../src/fleet/persist.ts";
 import { PrefsProvider } from "../src/prefs/prefs.tsx";
 import { FONT_ASSETS } from "../src/theme/fonts.ts";
@@ -35,6 +36,11 @@ const NAV: RouteNavigator = {
   dismissTo: (href) => router.dismissTo(href as never),
 };
 const openHref = (href: string) => openRoute(href, NAV);
+/** Back to the entry route, which sends the fleet now in front to Pair, its primary picker, or home. */
+const toEntry = () => {
+  if (router.canDismiss()) router.dismissAll();
+  router.replace("/");
+};
 const hideNativeSplash = () => SplashScreen.hideAsync().catch(() => {});
 
 export default function RootLayout() {
@@ -47,9 +53,7 @@ export default function RootLayout() {
           <AccessibilityPreferencesProvider>
             <ThemeProvider storage={secureKv}>
               <PrefsProvider storage={secureKv}>
-                <FleetProvider deps={FLEET_DEPS} onOpen={openHref}>
-                  <Shell onEntryReady={hideNativeSplash} />
-                </FleetProvider>
+                <Entry />
               </PrefsProvider>
             </ThemeProvider>
           </AccessibilityPreferencesProvider>
@@ -59,16 +63,31 @@ export default function RootLayout() {
   );
 }
 
-function Shell({ onEntryReady }: { onEntryReady(): Promise<void> }) {
+/**
+ * The entry splash plays once per launch, above the fleet: switching fleets
+ * remounts everything under `FleetSwitch`, and must not replay it.
+ */
+function Entry() {
   const t = useTheme();
-  const { reduceMotion } = useAccessibilityPreferences();
-  const { banner, dismissBanner, status } = useFleetContext();
   const [entryVisible, setEntryVisible] = useState(true);
   useEffect(() => {
     void SystemUI.setBackgroundColorAsync(t.c.bg).catch(() => {});
   }, [t.c.bg]);
   return (
-    <EntrySplash onReady={onEntryReady} onVisibilityChange={setEntryVisible}>
+    <EntrySplash onReady={hideNativeSplash} onVisibilityChange={setEntryVisible}>
+      <FleetSwitch deps={FLEET_DEPS} onOpen={openHref} onSwitched={toEntry}>
+        <Shell entryVisible={entryVisible} />
+      </FleetSwitch>
+    </EntrySplash>
+  );
+}
+
+function Shell({ entryVisible }: { entryVisible: boolean }) {
+  const t = useTheme();
+  const { reduceMotion } = useAccessibilityPreferences();
+  const { banner, dismissBanner, status } = useFleetContext();
+  return (
+    <>
       {/*
         Keyed on the pairing status: signing out (or pairing) left iOS drawing a
         light status bar over the light scheme until relaunch, and a remount
@@ -96,6 +115,7 @@ function Shell({ onEntryReady }: { onEntryReady(): Promise<void> }) {
         {/* The title is what VoiceOver reads on the next screen's back button. */}
         <Stack.Screen name="home" options={{ headerShown: false, title: "Hermetic" }} />
         <Stack.Screen name="settings" options={{ headerShown: false, title: "Settings" }} />
+        <Stack.Screen name="board" options={{ headerShown: false, title: "Board" }} />
         <Stack.Screen
           name="search"
           options={{ headerShown: false, animation: reduceMotion ? "none" : "fade" }}
@@ -116,6 +136,16 @@ function Shell({ onEntryReady }: { onEntryReady(): Promise<void> }) {
             sheetAllowedDetents: [0.6, 1],
             sheetGrabberVisible: true,
             // A raised surface, so the sheet reads apart from the screen under it.
+            contentStyle: { backgroundColor: t.c.bg2 },
+          }}
+        />
+        <Stack.Screen
+          name="fleets"
+          options={{
+            headerShown: false,
+            presentation: "formSheet",
+            sheetAllowedDetents: [0.5, 1],
+            sheetGrabberVisible: true,
             contentStyle: { backgroundColor: t.c.bg2 },
           }}
         />
@@ -150,6 +180,6 @@ function Shell({ onEntryReady }: { onEntryReady(): Promise<void> }) {
           openHref(routeFor(alert.data));
         }}
       />
-    </EntrySplash>
+    </>
   );
 }

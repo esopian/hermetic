@@ -40,16 +40,19 @@ jest.mock("expo-file-system", () => ({
 
 const CSV = new TextEncoder().encode("month,revenue\n2026-09,207400\n");
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 9]);
+const WAV = new TextEncoder().encode("RIFF\0\0\0\0WAVEfmt ");
+const WAV_FILE = { id: "sh_fxphone00002", bytes: WAV, name: "recap.wav", mime: "audio/wav" };
 
 function fakeFiles(fail?: string) {
   const content = jest.fn(async (id: string) => {
     if (fail) throw Object.assign(new Error(`${fail}: the box refused`), { code: fail });
-    const bytes = id === "sh_fxphone00000" ? PNG : CSV;
-    return {
-      bytes,
-      mime: id === "sh_fxphone00000" ? "image/png" : "text/csv",
-      sha256: sha256Hex(bytes),
-    };
+    const [bytes, mime] =
+      id === "sh_fxphone00000"
+        ? [PNG, "image/png"]
+        : id === WAV_FILE.id
+          ? [WAV, "audio/wav"]
+          : [CSV, "text/csv"];
+    return { bytes, mime, sha256: sha256Hex(bytes) };
   });
   return { files: { content } as unknown as PhoneFiles, content };
 }
@@ -160,6 +163,41 @@ describe("share card", () => {
     await fireEvent.press(screen.getByLabelText("Save q3-revenue.csv"));
     await act(flush);
     expect(screen.getByText(/^not saved — /)).toBeTruthy();
+  });
+
+  test("a text share opens its contents behind Preview, read under the text cap", async () => {
+    const { files, content } = fakeFiles();
+    await draw(shareTool(), files);
+    expect(content).not.toHaveBeenCalled();
+    await fireEvent.press(screen.getByLabelText("Preview q3-revenue.csv"));
+    await act(flush);
+    expect(content).toHaveBeenCalledWith("sh_fxphone00001", {
+      signal: expect.anything(),
+      maxBytes: 256 * 1024,
+    });
+    expect(screen.getByText(/2026-09,207400/)).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText("Hide q3-revenue.csv"));
+    expect(screen.queryByText(/2026-09,207400/)).toBeNull();
+  });
+
+  test("an audio share plays from the cache directory once Play is tapped", async () => {
+    const { files, content } = fakeFiles();
+    await draw(shareTool({}, WAV_FILE), files);
+    expect(content).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("share-player")).toBeNull();
+    await fireEvent.press(screen.getByLabelText("Play recap.wav"));
+    await act(flush);
+    expect(mockWritten).toEqual([{ name: "sh_fxphone00002-recap.wav", bytes: WAV }]);
+    expect(screen.getByTestId("share-player")).toBeTruthy();
+  });
+
+  test("a share too large to play says to Save it instead", async () => {
+    const { files } = fakeFiles("FILE_TOO_LARGE");
+    await draw(shareTool({}, WAV_FILE), files);
+    await fireEvent.press(screen.getByLabelText("Play recap.wav"));
+    await act(flush);
+    expect(screen.getByText("too large to play here — Save instead")).toBeTruthy();
+    expect(screen.queryByTestId("share-player")).toBeNull();
   });
 
   test("without a files client the card is read-only", async () => {
