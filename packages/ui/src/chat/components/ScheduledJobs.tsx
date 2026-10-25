@@ -12,7 +12,6 @@ import { isVisible } from "../../lib/visibility.ts";
 import { gateFor, useBotCapabilities } from "../bot-capabilities.ts";
 import { useCronCallFinished } from "../cron-tools.ts";
 import {
-  LAPTOP_ZONE,
   dayLabel,
   describeSchedule,
   formatStamp,
@@ -20,7 +19,8 @@ import {
   laptopTime,
   relative,
   runTone,
-} from "../routine-schedule.ts";
+} from "@hermetic/core/shared";
+import { LAPTOP_ZONE } from "../routine-schedule.ts";
 import { BotModeDialog } from "./BotModeDialog.tsx";
 import { CapabilityNote, gateControl } from "./CapabilityNote.tsx";
 import { Face } from "./Face.tsx";

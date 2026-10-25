@@ -6,7 +6,6 @@
  * The board is a fleet-wide view, so unlike the rest of Bot Mode it does not
  * require the instance to be watched (`dashboardBox(…, false)`).
  */
-import type { z } from "zod";
 import * as S from "../schema/kanban.ts";
 import type { ChatDeps } from "./chat.ts";
 import { HermeticError } from "../errors.ts";
@@ -29,14 +28,6 @@ type KanbanDeps = Pick<
   "guardFleet" | "getAgent" | "listAgents" | "instanceListening" | "hermes" | "chatSettings"
 >;
 
-/** Every row of `v` that parses as `schema`; a row an older or newer backend shaped differently is dropped. */
-function rows<T extends z.ZodType>(schema: T, v: unknown): z.infer<T>[] {
-  return records(v).flatMap((r) => {
-    const parsed = schema.safeParse(r);
-    return parsed.success ? [parsed.data] : [];
-  });
-}
-
 /** The `{task}` envelope upstream's create and PATCH answer with. */
 function taskOf(instance: string, raw: unknown): S.KanbanTask {
   const parsed = S.KanbanTask.safeParse(record(raw).task);
@@ -48,18 +39,11 @@ function taskOf(instance: string, raw: unknown): S.KanbanTask {
   return parsed.data;
 }
 
-/** A board read's columns, flattened; the column name is the status. */
+/** A board read's columns, flattened (`parseKanbanBoardTasks`). */
 function boardTasks(instance: string, raw: unknown): S.KanbanTask[] {
-  const columns = record(raw).columns;
-  if (!Array.isArray(columns))
-    throw new HermeticError("CHAT_PROTOCOL", `${instance}: the board read has no columns`);
-  // A column this build has no lane for fails the status enum, and its cards are dropped.
-  return records(columns).flatMap((c) =>
-    rows(
-      S.KanbanTask,
-      records(c.tasks).map((t) => ({ ...t, status: c.name })),
-    ),
-  );
+  const tasks = S.parseKanbanBoardTasks(raw);
+  if (!tasks) throw new HermeticError("CHAT_PROTOCOL", `${instance}: the board read has no columns`);
+  return tasks;
 }
 
 export function createKanban(deps: KanbanDeps) {
@@ -175,9 +159,9 @@ export function createKanban(deps: KanbanDeps) {
 
   const task = operation(S.KanbanTaskInput, async (p, o): Promise<S.KanbanTaskDetail> => {
     const box = await dashboardBox(deps, p.instance, false);
-    let raw: Record<string, unknown>;
+    let raw: unknown;
     try {
-      raw = record(await call(box, "GET", `/tasks/${p.id}`, undefined, o));
+      raw = await call(box, "GET", `/tasks/${p.id}`, undefined, o);
     } catch (error) {
       const last = lastGood.get(key(box));
       const cached = last?.tasks.find((t) => t.id === p.id);
@@ -193,23 +177,13 @@ export function createKanban(deps: KanbanDeps) {
         stale_since: last.at,
       };
     }
-    const links = record(raw.links);
-    const resolved = records(raw.link_tasks);
-    // Older backends send ids only; the id stands in for the title.
-    const link = (id: string): S.KanbanLinkTask => {
-      const row = resolved.find((r) => r.id === id);
-      return { id, title: str(row?.title) ?? id, status: str(row?.status) ?? "unknown" };
-    };
-    const ids = (v: unknown) => (Array.isArray(v) ? v.flatMap((id) => str(id) ?? []) : []);
-    return {
-      instance: p.instance,
-      task: taskOf(p.instance, raw),
-      comments: rows(S.KanbanComment, raw.comments),
-      events: rows(S.KanbanEvent, raw.events),
-      runs: rows(S.KanbanRun, raw.runs),
-      links: { parents: ids(links.parents).map(link), children: ids(links.children).map(link) },
-      stale_since: null,
-    };
+    const detail = S.parseKanbanTaskDetail(p.instance, raw);
+    if (!detail)
+      throw new HermeticError(
+        "CHAT_PROTOCOL",
+        `${p.instance}: the kanban plugin answered without the task`,
+      );
+    return detail;
   });
 
   const log = operation(S.KanbanLogInput, async (p, o): Promise<S.KanbanLog> => {

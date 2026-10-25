@@ -17,6 +17,7 @@ import { type AvatarStyle, DEFAULT_AVATAR_STYLE, isAvatarStyle } from "@hermetic
 import type { KvStorage as PrefStorage } from "../fleet/store.ts";
 import { inQuietHours, type QuietHours } from "../client/inbox-logic.ts";
 import { setHapticsEnabled } from "../ui/haptics.ts";
+import { readWhenOpen } from "../ui/when-open.ts";
 
 export interface Prefs {
   haptics: boolean;
@@ -77,8 +78,8 @@ export function PrefsProvider({ children, storage }: { children: ReactNode; stor
 
   useEffect(() => {
     let live = true;
-    void storage
-      ?.get(PREFS_SLOT)
+    if (!storage) return;
+    void readWhenOpen(() => storage.get(PREFS_SLOT))
       .then((raw) => {
         if (!live) return;
         const next = parsePrefs(raw);

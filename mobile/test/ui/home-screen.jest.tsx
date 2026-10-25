@@ -128,18 +128,17 @@ test("pins take over the hero, starred; the defaults go back to their sections",
   expect(screen.getByLabelText("Pilot")).toBeTruthy();
 });
 
-test("a primary: the hero is its bots under a kicker; the others' defaults go to their sections", async () => {
+test("a primary: the hero is each default, the primary's first; the rest sit below", async () => {
   await setup(SWARMS, ["atlas", "corvid", "heron"], [], "corvid");
-  expect(screen.getByTestId("home-hero-kicker").props.children).toBe("Primary · corvid");
+  const hero = screen.getAllByTestId(/^home-hero-(?!kicker)/).map((n) => n.props.testID);
+  expect(hero).toEqual(["home-hero-corvid/pilot", "home-hero-atlas/ops"]);
   expect(screen.getByLabelText("Default bot: Pilot")).toBeTruthy();
-  // Not the default: the kicker says whose it is.
-  expect(screen.getByTestId("home-hero-corvid/wren")).toBeTruthy();
+  expect(screen.getByLabelText("Default bot: Ops")).toBeTruthy();
+  // Several instances' defaults: no "Primary" kicker.
+  expect(screen.queryByTestId("home-hero-kicker")).toBeNull();
+  // corvid's other bots are rows in its section, first.
   expect(screen.getByLabelText("Wren")).toBeTruthy();
-  // atlas's default is a plain row in its own section now; corvid has no section left.
-  expect(screen.queryByLabelText("Default bot: Ops")).toBeNull();
-  expect(screen.getByLabelText("Ops")).toBeTruthy();
-  expect(screen.getByTestId("home-section-atlas")).toBeTruthy();
-  expect(screen.queryByTestId("home-section-corvid")).toBeNull();
+  expect(screen.getAllByTestId(/^home-section-/)[0]?.props.testID).toBe("home-section-corvid");
 });
 
 test("pins still win the hero over the primary; the primary's section sorts first", async () => {

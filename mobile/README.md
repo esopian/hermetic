@@ -37,7 +37,8 @@ EXPO_PUBLIC_HERMETIC_FIXTURE=1 bun run ios     # expo run:ios — builds a dev c
 Fixture mode needs both a development build (`__DEV__`) and the flag set to exactly `1`
 (`fixtureSelected` in `src/fleet/deps.ts`); a release build ignores the flag. In fixture mode the
 Pair screen has a "Use fixture fleet" button (the `main` fleet, `fxtr0001`, with
-the desktop fixture's eleven agents), chat runs on core's fixture chat stack (`createFixtureChatStack`,
+the desktop fixture's eleven agents) and a "Use fixture fleet: staging" button (`sg7k2m4p`, two
+agents) to try the fleet switcher, chat runs on core's fixture chat stack (`createFixtureChatStack`,
 the same canned `fixtureChatClient` the desktop's fixture mode builds, with its activity store), and
 Settings →
 Tailscale can switch what the probe sees between `ok`, `off` and `unreachable`. The flag is inlined
@@ -50,12 +51,18 @@ run `hermetic mobile pair` (or open Settings → Pair a phone in the desktop app
 the app's pairing screen, or paste the `hermetic://fleet?v=3&…` link. The link names the fleet and a
 snapshot of its agents (and any viewer prefs, such as the avatar style) and carries no secret; the
 phone shows a confirm screen, then stores it in the iOS keychain (`expo-secure-store`,
-this-device-only) as `hermetic.fleet.v2`, a record of `{link, listening, primary}`. A new pairing
+readable after first unlock, so a background wake on a locked phone can read it) as
+`hermetic.fleet.v2.<fleet_id>`, a record of `{link, listening, primary}`, with the list of paired
+fleets and the one in front at `hermetic.fleets`. A keychain read that fails is never taken for "not
+paired": the app waits and reads again once it is in front. A new pairing
 listens to nothing: the **Primary instance** screen (`/primary`) comes before home and cannot be
 dismissed the first time, and the instance you pick becomes primary and is listened to. Other
 instances are opted in later (Settings → Bots → Listening, the `+` sheet's "Add instance…", or a
-long-press "Make primary" on the listening screen). Pairing again replaces the record, and Settings →
-Sign out forgets it. To cut a phone off, remove it from the tailnet.
+long-press "Make primary" on the listening screen). Scanning the same fleet's code again refreshes
+its record; another fleet's code adds that fleet beside the others and brings it to the front. The
+Fleet row in Settings opens the **Fleets** sheet, which switches between them (the app returns
+to that fleet's home, like switching accounts) or adds one. Push, the badge and the inbox follow the
+fleet in front. Settings → Sign out forgets the fleet in front, and the next one comes forward. To cut a phone off, remove it from the tailnet.
 
 A push registration on a box belongs to the tailnet login that made it: another member cannot update
 or delete it, and two logins never collide on a `device_id`. The phone mints its `device_id` once and
@@ -77,10 +84,18 @@ it needs a development build (`bun run ios`), not Expo Go.
 There is no tab bar and no inbox screen. Everything lives on one home screen, and the rest opens
 from it on demand:
 
+- **Board** (`/board`, the board button on home): the kanban cards of every listened instance in
+  one list, the phone's form of the desktop Work view's queue layout (the lane matrix stays on the
+  desktop). Lenses (need you · open · all) and a filter over the desktop's groups (Needs you,
+  Agents working, Queued, Done); a card opens its sheet (detail, comments, runs, comment and
+  unblock), and `+` files a new one (board, title, notes, assignee or nobody, ready or triage,
+  priority). Read from each box's dashboard every 10 s while in front; a box that stops answering
+  keeps its last cards, dimmed, and one with the plugin off says so with the command to enable it.
 - **Home**: a bare bar with three square buttons (the gear on the left, search and `+` on the
-  right). Under it, the hero: a row of large avatars, each with its name and its unread or needs-you
+  right, with a board button beside search). Under it, the hero: a row of large avatars, each with its name and its unread or needs-you
   state. The hero holds every bot pinned on this phone (a star marks a pin); with nothing pinned, it
-  holds the primary instance's bots, under a "Primary · <name>" kicker. A few sit centred; more
+  holds each listened instance's default (canonical) bot, the primary's first, with every other bot
+  in the sections below. A few sit centred; more
   scroll sideways. Avatars are drawn from core's shared seed in the style chosen in Settings →
   Appearance → Avatar style, so a bot looks the same on desktop. Below
   the hero, the other listened bots, in one quiet section per instance, the primary's first: the instance's name in muted
@@ -250,7 +265,7 @@ success is `ok`, and no listened boxes is `unknown`. The home screen shows a ban
 Agent list with status, per-agent detail (status, version, host, health), which instances to listen
 to and which is primary (phone-local), the agent browser (noVNC), Tailscale status, push on or off,
 and sign out. Beyond that the phone can create a bot on a listened instance and attach files to a
-message. Fleet switching, volumes, runs, and creating or destroying an instance stay on the laptop. All of it sits behind the home's gear
+message, and switch between paired fleets. Volumes, runs, and creating or destroying an instance stay on the laptop. All of it sits behind the home's gear
 (Settings). The phone's inbox store is its own: the last 200 pushes and socket-delivered events, kept
 on the device (`src/inbox/store.ts`), with no screen; it drives the home's unread marks.
 

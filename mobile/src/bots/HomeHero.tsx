@@ -2,7 +2,8 @@
  * Home's hero: a row of big avatars at the top. They are the bots pinned
  * on this phone (each with a small star on its lower-right edge, or the
  * frame's corner for the inset sigil and pixel faces), or, with
- * nothing pinned, the default bot of each listened instance (no star). Centred
+ * nothing pinned, the default (canonical) bot of each listened instance, the
+ * primary's first (no star). Centred
  * when they fit. When they do not, the row starts at the list's gutter, scrolls
  * sideways and snaps a whole bot to the left edge, so a resting row never cuts
  * an avatar on the left; it is never centred then, so pinning or unpinning a
@@ -12,7 +13,7 @@
  * name when its last turn failed; and a dimmed avatar when its box is not
  * answering. Tap opens its chat; long-press opens the bot menu. A kicker over
  * the row says whose bots they are ("Pinned", or "Primary · atlas" when the
- * hero is the primary instance's bots).
+ * hero is the primary instance's default alone).
  */
 import { memo } from "react";
 import { Pressable, ScrollView, useWindowDimensions, View } from "react-native";
@@ -53,15 +54,9 @@ export function heroFits(count: number, size: number, width: number): boolean {
   return count * (size + CELL_PAD) + EDGE * 2 <= width;
 }
 
-/**
- * What VoiceOver says before a hero's name: a pin, an instance's default, or
- * nothing for the primary instance's other bots (the kicker over the row says
- * whose they are).
- */
-export function heroRole(starred: boolean, primary: boolean, isDefault: boolean): string {
-  if (starred) return "Pinned bot: ";
-  if (primary && !isDefault) return "";
-  return "Default bot: ";
+/** What VoiceOver says before a hero's name: a pin, or an instance's default. */
+export function heroRole(starred: boolean): string {
+  return starred ? "Pinned bot: " : "Default bot: ";
 }
 
 function HeroBot({
@@ -69,7 +64,6 @@ function HeroBot({
   fleetId,
   size,
   starred,
-  primary,
   onPress,
   onLongPress,
 }: {
@@ -77,7 +71,6 @@ function HeroBot({
   fleetId: string;
   size: number;
   starred: boolean;
-  primary: boolean;
   onPress: (row: HomeRow) => void;
   onLongPress: (row: HomeRow) => void;
 }) {
@@ -96,7 +89,7 @@ function HeroBot({
     <Pressable
       testID={`home-hero-${row.key}`}
       accessibilityRole="button"
-      accessibilityLabel={`${heroRole(starred, primary, bot.is_default)}${homeRowLabel({ bot, suffix, badge, failed, reachable })}`}
+      accessibilityLabel={`${heroRole(starred)}${homeRowLabel({ bot, suffix, badge, failed, reachable })}`}
       accessibilityHint="Long-press for more"
       onPress={() => onPress(row)}
       onLongPress={() => onLongPress(row)}
@@ -175,7 +168,6 @@ function HeroBot({
 function HomeHeroImpl({
   rows,
   starred,
-  primary = false,
   kicker = null,
   fleetId,
   onPress,
@@ -184,8 +176,6 @@ function HomeHeroImpl({
   rows: readonly HomeRow[];
   /** The rows are the operator's pins (starred), not the instances' defaults. */
   starred: boolean;
-  /** The rows are the primary instance's bots, not one default per instance. */
-  primary?: boolean;
   /** A label over the row ("Primary · atlas"), or none. */
   kicker?: string | null;
   fleetId: string;
@@ -226,7 +216,6 @@ function HomeHeroImpl({
           fleetId={fleetId}
           size={size}
           starred={starred}
-          primary={primary}
           onPress={onPress}
           onLongPress={onLongPress}
         />

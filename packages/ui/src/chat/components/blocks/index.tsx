@@ -13,6 +13,7 @@
  * decides, and it is pure, so the fallthrough is tested without mounting
  * anything as well as with.
  */
+import { isKanbanTaskTool } from "@hermetic/core/shared";
 import { memo } from "react";
 import { ActivityNotice, ActivityGroup } from "../Activity.tsx";
 import type { ChatBlockOf, ChatBlockView } from "../../../api/index.ts";
@@ -23,7 +24,7 @@ import { CommandBlock } from "./Command.tsx";
 import { FileRequestBlock } from "./FileRequest.tsx";
 import { HermeticBlock } from "./Hermetic.tsx";
 import { isRequestTool } from "../../file-request-logic.ts";
-import { KanbanTaskBlock, isKanbanTaskTool } from "./KanbanTask.tsx";
+import { KanbanTaskBlock } from "./KanbanTask.tsx";
 import { ProcessEventBlock } from "./ProcessEvent.tsx";
 import { QuestionBlock } from "./Question.tsx";
 import { ReasoningBlock } from "./Reasoning.tsx";

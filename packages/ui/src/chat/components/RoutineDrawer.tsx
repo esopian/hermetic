@@ -10,7 +10,6 @@ import type { BotRoutineView } from "../../api/index.ts";
 import { Drawer, DrawerHead } from "../../components/Drawer.tsx";
 import {
   KINDS,
-  LAPTOP_ZONE,
   defaultPicker,
   describeSchedule,
   formatStamp,
@@ -24,8 +23,9 @@ import {
   weekdayShort,
   withKind,
   zoneAbbr,
-} from "../routine-schedule.ts";
-import type { Picker } from "../routine-schedule.ts";
+} from "@hermetic/core/shared";
+import type { SchedulePicker as Picker } from "@hermetic/core/shared";
+import { LAPTOP_ZONE } from "../routine-schedule.ts";
 
 const DAYS = [1, 2, 3, 4, 5, 6, 0];
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];

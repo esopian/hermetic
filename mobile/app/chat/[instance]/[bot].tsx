@@ -37,6 +37,7 @@ import { ChatScope, type ChatScopeValue } from "../../../src/chat/ChatScope.tsx"
 import { DemoSheet } from "../../../src/chat/DemoSheet.tsx";
 import { type AttachKind, Composer, openAttachSheet } from "../../../src/chat/Composer.tsx";
 import { isFresh } from "../../../src/chat/new-chat.ts";
+import { RoutinesSheet } from "../../../src/chat/RoutinesSheet.tsx";
 import { SessionSheet, sessionLabel } from "../../../src/chat/SessionSheet.tsx";
 import { TaskSheet } from "../../../src/chat/TaskSheet.tsx";
 import { TasksChip, TaskStrip } from "../../../src/chat/TaskStrip.tsx";
@@ -78,6 +79,7 @@ import {
 } from "../../../src/client/pick-attachment.ts";
 import { type PastePayload, pasteAttachments } from "../../../src/client/paste.ts";
 import { markConversationRead } from "../../../src/client/read.ts";
+import { phoneRoutines } from "../../../src/client/routines.ts";
 import { useFleetContext } from "../../../src/fleet/FleetProvider.tsx";
 import {
   useConversation,
@@ -88,7 +90,7 @@ import {
   useRoster,
 } from "../../../src/fleet/hooks.ts";
 import { useTheme } from "../../../src/theme/theme.tsx";
-import type { AvatarStatus } from "@hermetic/core/shared";
+import { finishedCronCalls, type AvatarStatus } from "@hermetic/core/shared";
 import type { ChatBlock, ErrorCode } from "@hermetic/core/chat-client";
 import { haptic } from "../../../src/ui/haptics.ts";
 import { Avatar, SkeletonRow, Text } from "../../../src/ui/index.ts";
@@ -155,6 +157,21 @@ export default function Conversation() {
   const [refreshing, setRefreshing] = useState(false);
   const fleetId = fleetState.link?.payload.fleet_id ?? "";
   const agent = agents.find((a) => a.name === target.instance) ?? null;
+  const slash = useMemo(
+    () =>
+      client
+        ? {
+            key: `${fleetId}/${target.instance}/${target.bot}`,
+            load: () =>
+              client.gateway.commands({
+                instance: target.instance,
+                bot: target.bot,
+                ...(target.session ? { session: target.session } : {}),
+              }),
+          }
+        : undefined,
+    [client, fleetId, target],
+  );
   // A new session still being opened: the Bot Chat is neither read nor watched meanwhile.
   const [freshPending, setFreshPending] = useState(() => isFresh(params.fresh) && !params.session);
 
@@ -745,10 +762,25 @@ export default function Conversation() {
     else router.replace("/");
   }, []);
   const onSessions = useCallback(() => setSessionsOpen(true), []);
+  const [routinesOpen, setRoutinesOpen] = useState(false);
+  const routines = useMemo(() => (client ? phoneRoutines(client.gateway.rest) : null), [client]);
+  // A job the bot changed through its cron tool re-reads the open Routines list.
+  const [routinesKey, setRoutinesKey] = useState(0);
+  const cronSeen = useRef(new Set<string>());
+  useEffect(() => {
+    let fresh = false;
+    for (const key of finishedCronCalls(live)) {
+      if (cronSeen.current.has(key)) continue;
+      cronSeen.current.add(key);
+      fresh = true;
+    }
+    if (fresh) setRoutinesKey((k) => k + 1);
+  }, [live]);
   const onMore = useCallback(
     () =>
       conversationMenu(title, t.c.fg, {
         sessions: () => setSessionsOpen(true),
+        routines: () => setRoutinesOpen(true),
         browser: () => router.push(`/agent/${encodeURIComponent(target.instance)}`),
         markRead: () => {
           if (!client) return;
@@ -988,6 +1020,7 @@ export default function Conversation() {
               onPaste={onPaste}
               onRemoveAttachment={removeAttachment}
               onRetryAttachment={(local_id) => dispatchAttachments({ type: "retry", local_id })}
+              {...(slash ? { slash } : {})}
             />
           </View>
         </KeyboardStickyView>
@@ -999,6 +1032,16 @@ export default function Conversation() {
           onSelect={goSession}
           onNew={() => openNewSession()}
           onClose={() => setSessionsOpen(false)}
+        />
+        <RoutinesSheet
+          visible={routinesOpen}
+          instance={target.instance}
+          bot={target.bot}
+          title={title}
+          routines={routines}
+          refreshKey={routinesKey}
+          now={now}
+          onClose={() => setRoutinesOpen(false)}
         />
         <TaskSheet
           visible={!!tasksSheet}

@@ -45,9 +45,9 @@ export function tailnetChange(
 
 interface ConfirmProps {
   link: PairedLink;
-  /** This phone is already paired: confirming asks once more before replacing it. */
-  replacing: boolean;
-  /** The tailnet of the pairing this would replace, if any. */
+  /** This phone is paired with another fleet already: confirming adds this one beside it. */
+  adding: boolean;
+  /** The tailnet of the fleet in front, if any. */
   currentTailnet?: string | null;
   busy: boolean;
   onConfirm(): void;
@@ -57,14 +57,14 @@ interface ConfirmProps {
 /** Cancel and the confirming button, side by side. */
 export function PairConfirmActions({
   link,
-  replacing,
+  adding,
   currentTailnet = null,
   busy,
   onConfirm,
   onCancel,
 }: ConfirmProps) {
   const t = useTheme();
-  const change = replacing ? tailnetChange(link, currentTailnet) : null;
+  const change = tailnetChange(link, currentTailnet);
   return (
     <View style={{ flexDirection: "row", gap: t.space.sm }} testID="pair-confirm-actions">
       <View style={{ flex: 1 }}>
@@ -72,7 +72,7 @@ export function PairConfirmActions({
       </View>
       <View style={{ flex: 1 }}>
         <Button
-          label={change ? "Switch tailnet" : replacing ? "Replace…" : "Pair"}
+          label={change ? (adding ? "Add fleet…" : "Switch tailnet") : adding ? "Add fleet" : "Pair"}
           busy={busy}
           onPress={onConfirm}
         />
@@ -88,11 +88,11 @@ export function PairConfirm({
   /** Draw the buttons inside the card; `false` when the screen pins them itself. */
   actions?: boolean;
 }) {
-  const { link, replacing, currentTailnet = null } = props;
+  const { link, adding, currentTailnet = null } = props;
   const t = useTheme();
   // Cleaned in `pairConfirmLines`: a link's labels are never shown raw.
   const lines = pairConfirmLines(link);
-  const change = replacing ? tailnetChange(link, currentTailnet) : null;
+  const change = tailnetChange(link, currentTailnet);
   return (
     <View
       accessibilityRole="summary"
@@ -120,9 +120,9 @@ export function PairConfirm({
         There is no secret in this code: it names the fleet and its agents. This phone reaches them only
         through Tailscale, signed in to that tailnet.
       </Text>
-      {replacing ? (
-        <Text variant="bodySmall" tone="warn">
-          This replaces the current pairing; you will be asked once more.
+      {adding ? (
+        <Text variant="bodySmall" tone="fg2">
+          This adds the fleet beside the one you have; switch between them from home.
         </Text>
       ) : null}
       {actions ? <PairConfirmActions {...props} /> : null}

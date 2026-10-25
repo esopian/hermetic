@@ -6,7 +6,7 @@ import { useEffect, useId, useState } from "react";
 import { routinesHistory } from "../../api/index.ts";
 import type { BotRoutineView } from "../../api/index.ts";
 import { Drawer, DrawerHead } from "../../components/Drawer.tsx";
-import { describeSchedule, formatStamp, relative, runTone, zoneAbbr } from "../routine-schedule.ts";
+import { describeSchedule, formatStamp, relative, runTone, zoneAbbr } from "@hermetic/core/shared";
 
 type Run = Awaited<ReturnType<typeof routinesHistory>>["runs"][number];
 const seconds = (r: Run) =>

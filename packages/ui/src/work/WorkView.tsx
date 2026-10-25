@@ -6,7 +6,7 @@
  * laptop preference, kept in `localStorage` under `hermetic.work.view`.
  */
 import { useMemo, useState, useSyncExternalStore } from "react";
-import { KANBAN_LANES, kanbanNeedsYou, kanbanTone } from "@hermetic/core/shared";
+import { KANBAN_LANES, KANBAN_QUEUE_GROUPS, kanbanNeedsYou, kanbanTone } from "@hermetic/core/shared";
 import type { KanbanInstanceBoardView, KanbanTaskView } from "../api/chat.ts";
 import { useFleet } from "../state/state.tsx";
 import { fleetIdOf } from "../api/index.ts";
@@ -294,28 +294,6 @@ function Matrix({ cards, instances }: { cards: Card[]; instances: KanbanInstance
   );
 }
 
-const GROUPS: { label: string; tone: string; hint: string; test: (t: Card) => boolean }[] = [
-  {
-    label: "Needs you",
-    tone: "warn",
-    hint: "a question, a crash, or no assignee",
-    test: kanbanNeedsYou,
-  },
-  {
-    label: "Agents working",
-    tone: "acc",
-    hint: "running, in review or being specified",
-    test: (t) => !kanbanNeedsYou(t) && ["running", "review", "triage"].includes(t.status),
-  },
-  {
-    label: "Queued",
-    tone: "none",
-    hint: "ready, waiting on another card or on time",
-    test: (t) => !kanbanNeedsYou(t) && ["ready", "todo", "scheduled"].includes(t.status),
-  },
-  { label: "Done", tone: "ok", hint: "finished", test: (t) => t.status === "done" },
-];
-
 function Queue({
   cards,
   all,
@@ -337,7 +315,7 @@ function Queue({
   return (
     <div className="wk-qwrap">
       <div className="wk-q">
-        {GROUPS.map((g, gi) => {
+        {KANBAN_QUEUE_GROUPS.map((g, gi) => {
           const ts = cards
             .filter(g.test)
             .sort((a, b) => b.priority - a.priority || b.created_at - a.created_at);

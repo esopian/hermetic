@@ -97,11 +97,16 @@ export { HERMES_INTERNAL_EVENTS, isHermesInternalEvent } from "./hermes-internal
 export {
   DISPATCH_TYPES,
   SLASH_COMMAND_RE,
+  acceptSlash,
+  filterSlashCommands,
   isCompactCommand,
   isNewSessionCommand,
   looksLikeSlashCommand,
+  offered,
   parseCommandDispatch,
   parseSlashCommand,
+  slashQuery,
+  takesArgument,
 } from "./slash.ts";
 export type {
   AliasCommandDispatch,
@@ -112,6 +117,8 @@ export type {
   PrefillCommandDispatch,
   SendCommandDispatch,
   SkillCommandDispatch,
+  SlashCommandLike,
+  SlashMatch,
 } from "./slash.ts";
 
 // --- Bot handles and @-mentions (§9.2) -----------------------------------
@@ -556,10 +563,43 @@ export {
   KANBAN_LANES,
   KANBAN_LANE_INDEX,
   KANBAN_NOTICE_RE,
+  KANBAN_QUEUE_GROUPS,
   KANBAN_STATUSES,
   KANBAN_TASK_ID_RE,
+  isKanbanTaskTool,
   kanbanNeedsYou,
   kanbanStatusWord,
   kanbanTone,
+  readKanbanCreateResult,
 } from "./kanban.ts";
 export type { KanbanLaneId, KanbanStatusName, KanbanTaskLike, KanbanTone } from "./kanban.ts";
+
+// --- Routine schedules -----------------------------------------------------
+// Hermes cron schedule strings in words and their next runs, on the profile's
+// clock, plus the picker both heads edit them with.
+export {
+  CRON_TOOL_NAMES,
+  KINDS,
+  dayLabel,
+  defaultPicker,
+  describeSchedule,
+  finishedCronCalls,
+  formatStamp,
+  formatTime,
+  fromSchedule,
+  laptopTime,
+  nextRuns,
+  relative,
+  runTone,
+  scheduleProblem,
+  toSchedule,
+  weekGrid,
+  weekdayShort,
+  withKind,
+  zoneAbbr,
+} from "./routine-schedule.ts";
+export type {
+  CronCallMessageLike,
+  Kind as ScheduleKind,
+  Picker as SchedulePicker,
+} from "./routine-schedule.ts";
