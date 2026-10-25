@@ -2580,19 +2580,7 @@ button.qj-row:hover {
   background: var(--bg2);
 }
 
-/* A conversation owns the remaining viewport; expanding history never moves its composer. */
-body:has(.app > .ch-body) {
-  height: 100dvh;
-  overflow: hidden;
-}
-.app:has(> .ch-body) {
-  height: 100dvh;
-  min-height: 0;
-  overflow: hidden;
-}
-.app:has(> .ch-body) > :not(.ch-body) {
-  flex-shrink: 0;
-}
+/* A conversation owns the shell's remaining height; expanding history never moves its composer. */
 .ch-body {
   overflow: hidden;
   grid-template-rows: minmax(0, 1fr);

@@ -50,13 +50,16 @@
   border-radius: 0;
 }
 
+/* A native window, not a document: the page never scrolls, each view scrolls
+   its own body under fixed chrome (see `.app`). */
 html,
 body {
   margin: 0;
   padding: 0;
+  height: 100%;
   background: var(--bg);
   color: var(--fg);
-  overflow-x: hidden;
+  overflow: hidden;
 }
 
 body {
@@ -382,15 +385,22 @@ button:focus-visible,
 
 /* ── shell ──────────────────────────────────────────────────────────────── */
 
+/* The window is exactly the viewport. Chrome (header, env strip, bands,
+   toolbar, footer) keeps its height; the view root (`flex: 1`, its own
+   `overflow`) takes the rest and is the only scroller. `:where` keeps the
+   shrink rule at zero specificity so every view root's `flex: 1` wins. */
 .app {
-  min-height: 100vh;
+  height: 100dvh;
   background: var(--bg);
   color: var(--fg);
   font-family: var(--sans);
   display: flex;
   flex-direction: column;
   position: relative;
-  overflow-x: hidden;
+  overflow: hidden;
+}
+:where(.app > *) {
+  flex-shrink: 0;
 }
 
 .header {
@@ -1140,6 +1150,8 @@ button:focus-visible,
 
 .empty {
   flex: 1;
+  min-height: 0;
+  overflow: auto;
   display: flex;
   flex-direction: column;
   align-items: center;

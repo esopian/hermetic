@@ -288,10 +288,22 @@
 
 /* ── queue ──────────────────────────────────────────────────────────────── */
 
+/* The list and the task pane scroll apart under the WORK toolbar; the pane's
+   header and footer actions stay on screen. */
 .wk-qwrap {
   flex: 1;
+  min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(420px, 40%);
+  grid-template-rows: minmax(0, 1fr);
+}
+.wk-q,
+.wk-matrix {
+  min-height: 0;
+  overflow: auto;
+}
+.wk-matrix {
+  flex: 1;
 }
 .wk-qg {
   display: grid;
@@ -359,10 +371,7 @@
   font-size: 11px;
 }
 .wk-pane {
-  position: sticky;
-  top: 0;
-  align-self: start;
-  height: 100vh;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   border-left: 3px solid var(--fg);
