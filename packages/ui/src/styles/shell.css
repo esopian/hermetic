@@ -68,6 +68,17 @@
   margin-top: 10px;
 }
 
+/* The way into the destroyed-agent audit: last on the agents legend, and quiet. */
+.legend-quiet {
+  color: var(--fg3);
+  font-size: 12px;
+  font-weight: 500;
+}
+.legend-quiet:hover {
+  color: var(--fg);
+  opacity: 1;
+}
+
 /* ── + New agent ────────────────────────────────────────────────────────── */
 
 .toolbar-divider {

@@ -38,18 +38,23 @@ function lens(): HTMLElement {
 }
 
 /**
- * The headline's third half carries its number up front, like the other two:
- * read once at mount, not on the first click, so the switch never grows a
- * number under the pointer.
+ * The audit is rarely wanted, so it is a quiet link with no count, and nothing
+ * reads `agents.destroyed` until it is opened.
  */
-test("the destroyed count is in the headline before the lens is opened", async () => {
+test("the destroyed audit is read only once it is opened", async () => {
   harness = await flowHarness();
   mountPortal();
+  const user = userEvent.setup();
 
+  const link = await screen.findByRole("button", { name: "destroyed agents" });
+  expect(within(lens()).queryByRole("button", { name: /destroyed/ })).toBeNull();
+  expect(harness.calls.filter((c) => c.name === "agents.destroyed").length).toBe(0);
+
+  await user.click(link);
+  expect(window.location.hash).toBe("#fleet/destroyed");
   // `oriole` is the fixture's one tombstone.
-  const half = await waitFor(() => within(lens()).getByRole("button", { name: /^1 destroyed$/ }));
-  expect(half.getAttribute("aria-pressed")).toBe("false");
-  expect(window.location.hash).toBe("#fleet");
+  const audit = await screen.findByRole("table", { name: "Destroyed agents" });
+  await waitFor(() => within(audit).getByRole("row", { name: /^oriole · destroyed / }));
   expect(harness.calls.filter((c) => c.name === "agents.destroyed").length).toBe(1);
 });
 
@@ -96,13 +101,8 @@ test("destroy, review the tombstone and its history, then reuse the name", async
     { timeout: 15_000 },
   );
 
-  // The count in the headline follows the destroy on the agents lens too.
-  await waitFor(() => within(lens()).getByRole("button", { name: /^2 destroyed$/ }), {
-    timeout: 10_000,
-  });
-
   // 3. The Destroyed lens has its record, and its history for that life alone.
-  await user.click(within(lens()).getByRole("button", { name: /destroyed$/ }));
+  await user.click(screen.getByRole("button", { name: "destroyed agents" }));
   expect(window.location.hash).toBe("#fleet/destroyed");
   const audit = await screen.findByRole("table", { name: "Destroyed agents" });
   const row = await waitFor(() =>
@@ -126,7 +126,7 @@ test("destroy, review the tombstone and its history, then reuse the name", async
   expect(Date.parse(params.since)).toBeLessThanOrEqual(Date.parse(params.until));
 
   // 4. The name is free: create it again, and it is back on the board.
-  await user.click(within(lens()).getByRole("button", { name: /agents$/ }));
+  await user.click(within(lens()).getByRole("button", { name: "Fleet" }));
   expect(window.location.hash).toBe("#fleet");
   await user.click(screen.getByRole("button", { name: /New agent/ }));
   const input = document.getElementById("create-name") as HTMLInputElement;

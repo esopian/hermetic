@@ -127,7 +127,7 @@ describe("the fleet, over a real head", () => {
     // `oriole` is destroyed: a destroy deletes the row (§6.7), so it is on no
     // layout, and its record is on the Destroyed lens instead.
     expect(within(table).queryAllByRole("row", { name: /^oriole/ }).length).toBe(0);
-    await user.click(screen.getByRole("button", { name: /destroyed$/ }));
+    await user.click(screen.getByRole("button", { name: "destroyed agents" }));
     const audit = await screen.findByRole("table", { name: "Destroyed agents" });
     await waitFor(() => {
       expect(within(audit).getByRole("row", { name: /^oriole · destroyed / })).toBeDefined();
