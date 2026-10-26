@@ -108,7 +108,7 @@ describe("compact conversation presentation", () => {
     // not in the list at all once the turn is over.
     expect(summary.querySelectorAll(".ch-activity-list > li").length).toBe(1);
     expect(summary.querySelector(".ch-activity-list")?.textContent).not.toContain("Conversation");
-    expect(summary.querySelector("summary")?.textContent).toContain("Tools complete");
+    expect(summary.querySelector("summary")?.textContent).toContain("Worked");
     expect(container.querySelector(".ch-msg-who")?.textContent).toBe("silent-crane");
     fireEvent.click(summary.querySelector("summary")!);
     expect(summary.open).toBe(true);
@@ -133,7 +133,7 @@ describe("compact conversation presentation", () => {
       "conversation",
     );
   });
-  test("activity does not relocate across intervening prose", () => {
+  test("narration between steps folds into the run, in order, and the answer follows it", () => {
     const { container } = message([
       activity("done", "Ready"),
       { kind: "text", markdown: "First explanation" },
@@ -141,17 +141,20 @@ describe("compact conversation presentation", () => {
       { kind: "text", markdown: "Final answer" },
     ]);
     expect(
-      Array.from(container.querySelector(".ch-msg-body")!.children).map((el) => el.tagName),
-    ).toEqual(["DETAILS", "P", "DETAILS", "P"]);
+      Array.from(container.querySelector(".ch-msg-body")!.children).map((el) => el.className),
+    ).toEqual(["ch-activity", "ch-text"]);
+    expect(container.querySelector(".ch-activity-note")?.textContent).toBe("First explanation");
+    expect(container.querySelector(".ch-text")?.textContent).toBe("Final answer");
   });
   test("old connection state settles when prose follows, and completed tool supersedes generation status", () => {
     const { container } = message(
       [activity("running", "Waiting for agent"), { kind: "text", markdown: "Answer underway" }],
       true,
     );
-    expect(container.querySelector(".ch-activity > summary")?.textContent).toContain(
-      "Activity complete",
-    );
+    // The group stays live until the turn settles, but no longer waits on the transport.
+    const summary = container.querySelector(".ch-activity > summary")?.textContent;
+    expect(summary).toContain("Responding…");
+    expect(summary).not.toContain("Waiting for agent");
     cleanup();
     const second = message([activity("running", "Preparing terminal"), tool("ok")], true);
     expect(second.container.querySelector(".ch-activity > summary")?.textContent).toContain(
@@ -314,10 +317,27 @@ describe("compact conversation presentation", () => {
 });
 
 test("only the current activity group thinks, including empty text placeholders", () => {
+  // A shared file's card closes the first run; prose between calls would fold into it.
+  const share = {
+    share_id: "sh_think0001",
+    name: "a.csv",
+    bytes: 1,
+    mime: "text/csv",
+    sha256: "9".repeat(64),
+  };
   const { container } = message(
     [
       tool(),
-      { kind: "text", markdown: "Earlier explanation" },
+      {
+        kind: "tool",
+        name: "share_file",
+        tool_id: "call-share",
+        args: { path: "/data/a.csv" },
+        result: share,
+        status: "ok",
+        render: "file_share",
+        share,
+      } as unknown as ChatBlockView,
       { ...tool(), tool_id: "call-2" } as ChatBlockView,
       { kind: "text", markdown: " \n " },
       { kind: "activity", category: "usage", key: "usage", state: "done", title: "Usage" },
@@ -327,7 +347,7 @@ test("only the current activity group thinks, including empty text placeholders"
   );
   const summaries = container.querySelectorAll(".ch-activity > summary");
   expect(summaries).toHaveLength(2);
-  expect(summaries[0]?.textContent).toContain("Tools complete");
+  expect(summaries[0]?.textContent).toContain("Worked");
   expect(summaries[0]?.querySelector(".busy")).toBeNull();
   expect(summaries[1]?.textContent).toContain("Thinking…");
   expect(summaries[1]?.querySelector(".busy")).not.toBeNull();

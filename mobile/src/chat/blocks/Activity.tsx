@@ -1,9 +1,10 @@
 /**
  * One turn's work as one collapsible group (desktop `ActivityGroup`): a head
  * that says what the run is doing ("Thinking…", "● terminal ls") or did
- * ("Tools complete · 3 tools"), and under it one step per tool, reasoning
- * pass or notice, each opening to its own detail. Delegated children are
- * their one-liners, and a group with children starts open.
+ * ("Worked · 3 tools · 2 notes"), and under it, in arrival order, the
+ * narration folded in as quote-ruled notes and one bare row per tool,
+ * reasoning pass or notice, each opening to its own detail. Delegated
+ * children are their one-liners, and a group with children starts open.
  */
 import { useState } from "react";
 import { Pressable, View } from "react-native";
@@ -18,6 +19,7 @@ import { haptic } from "../../ui/haptics.ts";
 import { StatusSquare } from "../../ui/StatusSquare.tsx";
 import { Text } from "../../ui/Text.tsx";
 import { CodePane } from "../CodePane.tsx";
+import { Markdown } from "../Markdown.tsx";
 import { Label } from "./SoftCard.tsx";
 import { glyphColor, SubagentLine } from "./Subagent.tsx";
 import { TaskChange } from "./TaskChange.tsx";
@@ -87,7 +89,7 @@ function Step({ block, streaming }: { block: ChatBlock; streaming: boolean }) {
           flexDirection: "row",
           alignItems: "center",
           gap: t.space.sm,
-          minHeight: 34,
+          minHeight: 28,
           backgroundColor: pressed ? t.c.sel : "transparent",
         })}
       >
@@ -96,19 +98,14 @@ function Step({ block, streaming }: { block: ChatBlock; streaming: boolean }) {
         <View style={{ width: 14, alignItems: "center" }}>
           <StatusSquare size={6} color={toneColor(t, state.tone)} pulse={state.tone === "run"} />
         </View>
-        <Text
-          variant="caption"
-          weight={500}
-          numberOfLines={1}
-          style={{ flexShrink: 0, maxWidth: "45%" }}
-        >
+        <Text mono variant="caption" numberOfLines={1} style={{ flexShrink: 0, maxWidth: "45%" }}>
           {stepLabel(block)}
         </Text>
         <Text mono variant="caption" tone="fg3" numberOfLines={1} style={{ flex: 1 }}>
           {target}
         </Text>
         <Text mono variant="caption" tone="fg3">
-          {[state.word, duration].filter(Boolean).join(" · ")}
+          {(state.tone === "ok" ? [duration] : [state.word, duration]).filter(Boolean).join(" · ")}
         </Text>
       </Pressable>
       {open ? (
@@ -139,8 +136,7 @@ export function ActivityGroup({
   const [choice, setChoice] = useState<boolean | null>(null);
   const open = choice ?? summary.kids.length > 0;
   if (summary.steps.length === 0 && summary.kids.length === 0 && !streaming) return null;
-  // The group's tone rides on its square marker; the open steps hang off a
-  // 1px rule down the left, the desktop's tool-row gutter.
+  // The group's tone rides on its square marker.
   const marker = streaming
     ? t.c.acc
     : summary.tone === "bad"
@@ -189,17 +185,22 @@ export function ActivityGroup({
         </Text>
       </Pressable>
       {open ? (
-        // Steps hang off a rule under the head's marker, indented to its text.
-        <View
-          style={{
-            marginLeft: 3,
-            paddingLeft: 5 + t.space.sm - t.border.row,
-            borderLeftWidth: t.border.row,
-            borderLeftColor: t.c.line,
-          }}
-        >
+        // Indented to the head's text, no gutter rule: the only rules are the notes'.
+        <View style={{ paddingLeft: 8 + t.space.sm }}>
           {summary.steps.map((block, i) =>
-            isTodoStep(block) ? (
+            block.kind === "text" ? (
+              <View
+                key={`${block.kind}:${i}`}
+                style={{
+                  marginVertical: t.space.xs,
+                  paddingLeft: 10,
+                  borderLeftWidth: t.border.control,
+                  borderLeftColor: t.c.line2,
+                }}
+              >
+                <Markdown markdown={block.markdown} quiet />
+              </View>
+            ) : isTodoStep(block) ? (
               <TaskChange key={`${block.kind}:${i}`} block={block} nested />
             ) : (
               <Step key={`${block.kind}:${i}`} block={block} streaming={streaming} />

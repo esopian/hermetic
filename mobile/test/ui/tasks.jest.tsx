@@ -71,7 +71,7 @@ describe("Tasks rows in the transcript", () => {
   test("settled, it folds into the run's head as a task update", async () => {
     await drawTurn(false);
     expect(screen.queryByLabelText(/^Tasks:/)).toBeNull();
-    await fireEvent.press(screen.getByLabelText("Tools complete, 1 tool · 1 task update"));
+    await fireEvent.press(screen.getByLabelText("Worked, 1 tool · 1 task update"));
     expect(screen.getByLabelText("Tasks: Planned 5 tasks, 1 of 5 done")).toBeTruthy();
   });
 });

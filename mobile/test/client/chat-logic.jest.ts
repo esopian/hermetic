@@ -1,4 +1,4 @@
-import { activeGroup, groupSummary, sections } from "../../src/client/chat-activity.ts";
+import { activeGroup, groupSummary, sectionKeys, sections } from "../../src/client/chat-activity.ts";
 import {
   blockKind,
   composerState,
@@ -217,7 +217,7 @@ describe("activity", () => {
       "● terminal",
     );
     expect(groupSummary([tool({ status: "ok" })], false, "idle", false)).toMatchObject({
-      status: "Tools complete",
+      status: "Worked",
       count: "1 tool",
     });
   });
@@ -234,7 +234,7 @@ describe("activity", () => {
       }) as const;
     const steps = [step("read"), step("plan")];
     expect(groupSummary(steps, false, "streaming", false)).toMatchObject({
-      status: "Activity complete",
+      status: "Worked",
       count: "2 steps",
     });
     expect(groupSummary(steps, false, "streaming", false, true)).toMatchObject({
@@ -247,6 +247,122 @@ describe("activity", () => {
     expect(groupSummary([tool({ status: "running" })], false, "streaming", false, true).status).toBe(
       "Working…",
     );
+  });
+});
+
+describe("narration folds into the run as notes", () => {
+  const text = (markdown: string) => ({ kind: "text", markdown }) as const;
+  const shape = (list: ReturnType<typeof sections>) =>
+    list.map((s) => [s.activity, s.blocks.map((b) => (b.kind === "text" ? b.markdown : b.kind))]);
+  const t1 = tool({ tool_id: "1", status: "ok" });
+  const t2 = tool({ tool_id: "2", status: "ok" });
+
+  test("interleaved text and tools: one group with the notes, the answer outside", () => {
+    expect(shape(sections([text("T1"), t1, text("T2"), t2, text("T3")]))).toEqual([
+      [true, ["T1", "tool", "T2", "tool"]],
+      [false, ["T3"]],
+    ]);
+  });
+
+  test("a share splits the fold in two", () => {
+    const share = tool({ tool_id: "s", render: "file_share", status: "bad" });
+    expect(shape(sections([text("T1"), t1, share, text("T2"), t2, text("T3")]))).toEqual([
+      [true, ["T1", "tool"]],
+      [false, ["tool"]],
+      [true, ["T2", "tool"]],
+      [false, ["T3"]],
+    ]);
+  });
+
+  test("settled, the last text stays outside even with steps after it; streaming, it folds", () => {
+    const blocks = [text("T1"), t1, text("T2"), t2];
+    expect(shape(sections(blocks))).toEqual([
+      [true, ["T1", "tool"]],
+      [false, ["T2"]],
+      [true, ["tool"]],
+    ]);
+    expect(shape(sections(blocks, true))).toEqual([[true, ["T1", "tool", "T2", "tool"]]]);
+  });
+
+  test("plain question and answer is unchanged", () => {
+    expect(shape(sections([text("Hello")]))).toEqual([[false, ["Hello"]]]);
+    expect(shape(sections([t1, text("Done.")]))).toEqual([
+      [true, ["tool"]],
+      [false, ["Done."]],
+    ]);
+  });
+
+  test("live head: the newest note's last sentence, unless a later step still runs", () => {
+    const note = text("Found it. Let me **check** `that`:");
+    const later = (status: "ok" | "running") => tool({ tool_id: "3", status });
+    expect(groupSummary([t1, note, later("ok")], true, "thinking", false).status).toBe(
+      "Let me check that…",
+    );
+    expect(groupSummary([t1, note, later("running")], true, "thinking", false).status).toBe(
+      "● terminal",
+    );
+  });
+
+  test("the run stays live while the answer streams after it", () => {
+    const list = sections([t1, text("Let me look."), t2, text("The answer")], true);
+    expect(shape(list)).toEqual([
+      [true, ["tool", "Let me look.", "tool"]],
+      [false, ["The answer"]],
+    ]);
+    expect(activeGroup(list, true, "streaming", false)).toBe(0);
+    expect(groupSummary(list[0]?.blocks ?? [], true, "streaming", false, true).status).toBe(
+      "Let me look.",
+    );
+  });
+
+  test("the look-ahead stops at a settled turn's closing prose", () => {
+    expect(shape(sections([text("A."), text("B."), t1]))).toEqual([
+      [false, ["A."]],
+      [false, ["B."]],
+      [true, ["tool"]],
+    ]);
+  });
+
+  test("notices are looked past: an answer followed only by a notice stays outside", () => {
+    const notice = {
+      kind: "activity",
+      category: "notice",
+      key: "n",
+      title: "n",
+      state: "done",
+      role: "work",
+    } as const;
+    expect(shape(sections([t1, text("The answer."), notice], true))).toEqual([
+      [true, ["tool"]],
+      [false, ["The answer."]],
+      [true, ["activity"]],
+    ]);
+    expect(shape(sections([text("Checking."), notice, t2], true))).toEqual([
+      [true, ["Checking.", "activity", "tool"]],
+    ]);
+  });
+
+  test("a group keeps its key when its leading note leaves it at settle", () => {
+    const blocks = [text("Checking."), t1];
+    const live = sections(blocks, true);
+    const settled = sections(blocks);
+    expect(shape(live)).toEqual([[true, ["Checking.", "tool"]]]);
+    expect(shape(settled)).toEqual([
+      [false, ["Checking."]],
+      [true, ["tool"]],
+    ]);
+    expect(sectionKeys(live)[0]).toBe("a:tool:1");
+    expect(sectionKeys(settled)[1]).toBe("a:tool:1");
+    // Two groups led by the same step identity fall back to their index.
+    expect(sectionKeys(sections([t1, text("x"), t1]))).toEqual(["a:tool:1", "b1", "a2"]);
+  });
+
+  test("counts include notes; settled says Worked", () => {
+    expect(groupSummary([text("a"), t1, text("b"), t2], false, "idle", false)).toMatchObject({
+      status: "Worked",
+      count: "2 tools · 2 notes",
+    });
+    expect(groupSummary([text("a"), t1], false, "idle", false).count).toBe("1 tool · 1 note");
   });
 });
 

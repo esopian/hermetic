@@ -332,13 +332,12 @@
   line-height: 1.72;
   color: color-mix(in srgb, var(--fg) 92%, var(--fg2));
 }
-[data-skin="soft"] .ch-msg-body > p,
-[data-skin="soft"] .ch-msg-body > ul,
-[data-skin="soft"] .ch-msg-body > ol,
-[data-skin="soft"] .ch-msg-body > blockquote {
+[data-skin="soft"] .ch-msg-body > :is(p, ul, ol, blockquote),
+[data-skin="soft"] .ch-msg-body > .ch-text > :is(p, ul, ol, blockquote) {
   max-width: 72ch;
 }
-[data-skin="soft"] .ch-msg-body > p {
+[data-skin="soft"] .ch-msg-body > p,
+[data-skin="soft"] .ch-msg-body > .ch-text > p {
   margin-bottom: 13px;
 }
 [data-skin="soft"] .ch-msg-body h3 {
