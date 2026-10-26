@@ -26,9 +26,12 @@ import {
   PROVIDERS,
   agentDashboardUrl,
   agentDesktopUrl,
+  agentHostnameMismatch,
   autoUpdateHermeticd,
   autoUpgrade,
+  cloudName,
   groupByDisposition,
+  legacyCloudNames,
   resolveFilesSettings,
   splitHermesSettings,
 } from "@hermetic/core";
@@ -159,7 +162,12 @@ export function renderPs(agents: readonly AgentView[]): string {
  * suffix is right there in `tailscale_dns_name`, and it is by construction the
  * tailnet this node joined.
  */
-function tailnetName(a: AgentView, fleetId?: string, fleetName?: string): string {
+function tailnetName(
+  a: AgentView,
+  fleetId?: string,
+  fleetName?: string,
+  fleetTailnet?: string,
+): string {
   // The node joins the tailnet as `<fleet id>-<agent>` since foundation v4
   // (core's `cloudName`), so that — not the bare agent name — is the canonical
   // spelling a stale device would be holding.
@@ -178,6 +186,20 @@ function tailnetName(a: AgentView, fleetId?: string, fleetName?: string): string
   // and never equal the row's own name. The dot says nothing a reader needs.
   const real = a.tailscale_dns_name?.replace(/\.$/, "") ?? null;
   if (!real) return "-";
+  // A name the box reported that hermetic never gives this agent: shown, so
+  // the operator sees what was written, but marked as ignored (core's
+  // `trustedDnsName`).
+  if (
+    fleetTailnet &&
+    agentHostnameMismatch(
+      a,
+      fleetTailnet,
+      cloudName(fleetId, a.name),
+      legacyCloudNames(fleetName, a.name),
+    )?.kind === "untrusted"
+  ) {
+    return `${real} (not a name hermetic gives this agent; ignored)`;
+  }
   const [host, ...rest] = real.split(".");
   const tailnet = rest.join(".");
   if (host === canonicalHost || tailnet === "") return real;
@@ -263,22 +285,32 @@ function hermesRows(a: AgentView): Array<[string, string]> {
  * spelling: after a recreate whose predecessor still sits in the tailnet, the
  * canonical name resolves to the dead box, and Serve answers only on the real
  * one (core's `agentHostname`). So nothing is printed at all for a row that has
- * not reported one yet — a URL that cannot be right is worse than no URL.
+ * not reported one yet — a URL that cannot be right is worse than no URL — nor
+ * for one whose reported name is not a name hermetic gives this agent in the
+ * fleet's own tailnet (core's `trustedDnsName`): any box can write any row,
+ * and a URL printed here is one an operator will open.
  *
  * `desktop` appears for every agent, because every agent runs a browser — one
  * row per identity in `browsers`, which is a list so that a second identity is a
  * data change rather than a second field.
  */
-function urlRows(a: AgentView): Array<[string, string]> {
-  // Tailscale reports `DNSName` fully qualified, with the root dot; a URL built
-  // from `atlas.tail0.ts.net.` works but reads as a typo.
-  const real = a.tailscale_dns_name?.replace(/\.$/, "") ?? null;
-  if (!real) return [];
-  const tailnet = real.split(".").slice(1).join(".");
-  if (tailnet === "") return [];
-  const node = { name: a.name, tailscale_dns_name: real };
-  const rows: Array<[string, string]> = [["dashboard", agentDashboardUrl(node, tailnet)]];
-  for (const b of a.browsers) rows.push(["desktop", agentDesktopUrl(node, tailnet, null, b.name)]);
+function urlRows(
+  a: AgentView,
+  fleetId?: string,
+  fleetName?: string,
+  tailnet?: string,
+): Array<[string, string]> {
+  if (!a.tailscale_dns_name || !tailnet) return [];
+  const canonical = cloudName(fleetId, a.name);
+  const legacy = legacyCloudNames(fleetName, a.name);
+  const mismatch = agentHostnameMismatch(a, tailnet, canonical, legacy);
+  if (mismatch !== null && mismatch.kind !== "legacy") return [];
+  const rows: Array<[string, string]> = [
+    ["dashboard", agentDashboardUrl(a, tailnet, canonical, legacy)],
+  ];
+  for (const b of a.browsers) {
+    rows.push(["desktop", agentDesktopUrl(a, tailnet, canonical, b.name, legacy)]);
+  }
   return rows;
 }
 
@@ -298,7 +330,12 @@ function diskCell(v: number | null | undefined): string {
   return v === null || v === undefined ? "not reported" : `${Math.round(v)}%`;
 }
 
-export function renderStatus(a: AgentView, fleetId?: string, fleetName?: string): string {
+export function renderStatus(
+  a: AgentView,
+  fleetId?: string,
+  fleetName?: string,
+  tailnet?: string,
+): string {
   const pairs: Array<[string, string]> = [
     ["name", a.name],
     ["status", a.display_status],
@@ -336,8 +373,8 @@ export function renderStatus(a: AgentView, fleetId?: string, fleetName?: string)
     ["secrets", a.secrets_mode],
     ["memory", memoryLine(a.memory)],
     ...hermesRows(a),
-    ["tailnet name", tailnetName(a, fleetId, fleetName)],
-    ...urlRows(a),
+    ["tailnet name", tailnetName(a, fleetId, fleetName, tailnet)],
+    ...urlRows(a, fleetId, fleetName, tailnet),
     ["tailscale ip", a.tailscale_ip ?? "-"],
     // The daemon's own version, reported on the heartbeat. `-` is *unknown* —
     // a box that has never heartbeated, or a row written before the field —

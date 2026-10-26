@@ -648,7 +648,7 @@ export function AgentDrawer({
               {agent.display_status}
             </span>
             <span className="detail-host">
-              {hostname(agent.name, tailnet, agent.tailscale_dns_name, fleetId)} ·{" "}
+              {hostname(agent.name, tailnet, agent.tailscale_dns_name, fleetId, fleetCloudName)} ·{" "}
               {agent.tailscale_ip ?? "no tailnet ip"}
             </span>
           </div>
@@ -667,8 +667,19 @@ export function AgentDrawer({
             built, and core's `staleDeviceNote` says why: the spelling a node
             asks for comes from the release published in the fleet bucket, so
             an agent created minutes ago can wear it too.
+
+            An `untrusted` name is neither: the row names a node hermetic never
+            gives this agent, which any box in the fleet can write. Every link
+            here already ignores it; the note is what tells the operator a box
+            wrote it.
           */}
-          {staleDevice?.kind === "stale" ? (
+          {staleDevice?.kind === "untrusted" ? (
+            <div className="detail-host-note">
+              the row names this agent&apos;s node {staleDevice.real}, which is not a name hermetic
+              gives it — ignored, and {staleDevice.canonical} used instead. Any box in the fleet can
+              write this row: check for a compromised agent
+            </div>
+          ) : staleDevice?.kind === "stale" ? (
             <div className="detail-host-note">
               {staleDevice.canonical} is held by a stale device — delete it in the Tailscale admin
               console (Machines → {agent.name})
@@ -687,7 +698,15 @@ export function AgentDrawer({
                 type="button"
                 className="btn btn-sm btn-secondary"
                 onClick={() =>
-                  openExternal(dashboardUrl(agent.name, tailnet, agent.tailscale_dns_name, fleetId))
+                  openExternal(
+                    dashboardUrl(
+                      agent.name,
+                      tailnet,
+                      agent.tailscale_dns_name,
+                      fleetId,
+                      fleetCloudName,
+                    ),
+                  )
                 }
               >
                 Dashboard ↗
@@ -700,7 +719,14 @@ export function AgentDrawer({
               */}
               <a
                 className="btn btn-sm btn-secondary"
-                href={desktopUrl(agent.name, tailnet, agent.tailscale_dns_name, fleetId)}
+                href={desktopUrl(
+                  agent.name,
+                  tailnet,
+                  agent.tailscale_dns_name,
+                  fleetId,
+                  undefined,
+                  fleetCloudName,
+                )}
                 target="_blank"
                 rel="noopener"
                 title="Open this agent's screen in a new tab"

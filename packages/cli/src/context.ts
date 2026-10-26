@@ -22,7 +22,7 @@ export interface Ctx {
    * on a fleet created before v3, which was never given one. It is not the same
    * as `name`, which is what this home calls it.
    */
-  config: LocalConfig & { stack_id: string | null; fleet_name: string | null };
+  config: LocalConfig & { stack_id: string | null; fleet_name: string | null; tailnet: string | null };
   /** The one-line account header, already written to stderr once. */
   header: string;
   signal: AbortSignal;

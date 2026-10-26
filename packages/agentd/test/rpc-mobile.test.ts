@@ -81,6 +81,32 @@ describe("the whois gate covers the phone routes", () => {
 });
 
 describe("GET /fleet", () => {
+  /**
+   * Every box may write every agent's row, so a name the row reports is passed
+   * to the phone only when it is one hermetic gives that agent in the fleet's
+   * tailnet; anything else goes out as null, and the phone derives the name.
+   */
+  test("passes on only the node names hermetic gives each agent", async () => {
+    const rig = mobileRig({
+      items: [
+        fleetRow(),
+        agentRow({ name: "atlas", tailscale_dns_name: "fxtr0001-atlas.tail1234.ts.net." }),
+        agentRow({ name: "corvid", tailscale_dns_name: "fxtr0001-atlas.tail1234.ts.net" }),
+        agentRow({ name: "ember", tailscale_dns_name: "fxtr0001-ember.attacker.ts.net" }),
+        agentRow({ name: "fable", tailscale_dns_name: "main-fable.tail1234.ts.net" }),
+        agentRow({ name: "gale", tailscale_dns_name: "fxtr0001-gale-2.tail1234.ts.net" }),
+      ],
+    });
+    const view = MobileFleetView.parse(await (await rig.call("GET", RPC_PATHS.fleet)).json());
+    expect(Object.fromEntries(view.agents.map((a) => [a.name, a.tailscale_dns_name]))).toEqual({
+      atlas: "fxtr0001-atlas.tail1234.ts.net",
+      corvid: null,
+      ember: null,
+      fable: "main-fable.tail1234.ts.net",
+      gale: null,
+    });
+  });
+
   test("answers MobileFleetView: live agents sorted, _ and destroyed rows dropped", async () => {
     const rig = mobileRig({
       items: [

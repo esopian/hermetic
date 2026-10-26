@@ -13,7 +13,7 @@ import {
   cloudName,
   legacyCloudNames,
 } from "@hermetic/core/shared";
-import type { Provider, SizeId } from "@hermetic/core/shared";
+import type { HostnameMismatch, Provider, SizeId } from "@hermetic/core/shared";
 import type { AgentView } from "../api/index.ts";
 
 /** Core's naming rules, re-exported so the UI keeps one import for them. */
@@ -643,20 +643,28 @@ export function width(v: number | null | undefined): string {
  * dashboard's rebinding guard admits only that Host, so an "Open dashboard"
  * built from the canonical spelling opens a dead node.
  *
- * `fleetId` is the last argument and optional: since foundation v4 a node
- * joins the tailnet as `<fleet id>-<agent>` (`cloudName`), and a caller that
- * does not know the fleet's id gets the bare agent name.
+ * `fleetId` is optional: since foundation v4 a node joins the tailnet as
+ * `<fleet id>-<agent>` (`cloudName`), and a caller that does not know the
+ * fleet's id gets the bare agent name.
+ *
+ * The node's reported name is used only when it is one hermetic gives this
+ * agent (core's `trustedDnsName`): any box may write any row, so anything else
+ * falls back to the canonical spelling. `fleetName`, when the caller has it,
+ * lets a node still wearing the v3 `<fleet name>-<agent>` spelling count as
+ * one of those.
  */
 export function hostname(
   name: string,
   tailnet?: string | null,
   dnsName?: string | null,
   fleetId?: string | null,
+  fleetName?: string | null,
 ): string {
   return agentHostname(
     { name, tailscale_dns_name: dnsName ?? null },
     tailnet ?? DEFAULT_TAILNET,
     cloudName(fleetId, name),
+    legacyCloudNames(fleetName, name),
   );
 }
 
@@ -681,7 +689,8 @@ export function canonicalHostname(
  * `recreate` failed to delete. The drawer must not offer "delete it in the
  * admin console" for the first — that device is the machine the agent is
  * running on. `fleetName` is passed for exactly that test, and is not used to
- * build any name.
+ * build any name. An `untrusted` name is one hermetic never gives this agent;
+ * every URL above already ignores it, and the note says so.
  *
  * The null-tailnet clause matters: `DEFAULT_TAILNET` is a good enough guess to
  * *display* a hostname with, and nowhere near good enough to accuse a node of
@@ -696,7 +705,7 @@ export function hostnameMismatch(
   tailnet?: string | null,
   fleetId?: string | null,
   fleetName?: string | null,
-): { real: string; canonical: string; kind: "legacy" | "stale" } | null {
+): HostnameMismatch | null {
   if (!tailnet) return null;
   return agentHostnameMismatch(
     agent,
@@ -716,8 +725,9 @@ export function dashboardUrl(
   tailnet?: string | null,
   dnsName?: string | null,
   fleetId?: string | null,
+  fleetName?: string | null,
 ): string {
-  return `https://${hostname(name, tailnet, dnsName, fleetId)}/`;
+  return `https://${hostname(name, tailnet, dnsName, fleetId, fleetName)}/`;
 }
 
 /**
@@ -732,12 +742,14 @@ export function desktopUrl(
   dnsName?: string | null,
   fleetId?: string | null,
   browser?: string,
+  fleetName?: string | null,
 ): string {
   return agentDesktopUrl(
     { name, tailscale_dns_name: dnsName ?? null },
     tailnet ?? DEFAULT_TAILNET,
     cloudName(fleetId, name),
     browser,
+    legacyCloudNames(fleetName, name),
   );
 }
 
@@ -755,12 +767,14 @@ export function desktopClientUrl(
   dnsName?: string | null,
   fleetId?: string | null,
   browser?: string,
+  fleetName?: string | null,
 ): string {
   return agentDesktopClientUrl(
     { name, tailscale_dns_name: dnsName ?? null },
     tailnet ?? DEFAULT_TAILNET,
     cloudName(fleetId, name),
     browser,
+    legacyCloudNames(fleetName, name),
   );
 }
 

@@ -48,6 +48,9 @@ import {
   RPC_PATHS,
   RPC_PROTOCOL_VERSION,
   RPC_VERSION_HEADER,
+  cloudName,
+  legacyCloudNames,
+  trustedDnsName,
 } from "@hermetic/core/shared";
 import type { Aws } from "./aws.ts";
 import { PUSH_DEVICES_MAX, deviceTag, type PushDeviceStore } from "./push/devices.ts";
@@ -122,12 +125,26 @@ function str(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-/** One parsed agent row as the phone sees it; `null` when it does not fit the wire. */
-function fleetAgent(row: Agent): MobileFleetAgentType | null {
+/**
+ * One parsed agent row as the phone sees it; `null` when it does not fit the wire.
+ *
+ * `tailscale_dns_name` is passed on only when it is a name hermetic gives this
+ * agent in the fleet's tailnet (core's `trustedDnsName`). Every box may write
+ * every row, so without this one compromised agent could point the phone's
+ * chat with a sibling at a machine it controls; the phone falls back to the
+ * derived `<fleet id>-<agent>` name, as it does for a row with no name yet.
+ */
+function fleetAgent(
+  row: Agent,
+  fleet: { fleet_id: string; fleet_name: string | null; tailnet: string },
+): MobileFleetAgentType | null {
   const candidate = {
     name: row.name,
     status: row.status,
-    tailscale_dns_name: row.tailscale_dns_name ?? null,
+    tailscale_dns_name: trustedDnsName(row.tailscale_dns_name, fleet.tailnet, [
+      cloudName(fleet.fleet_id, row.name),
+      ...legacyCloudNames(fleet.fleet_name, row.name),
+    ]),
     tailscale_ip: row.tailscale_ip ?? null,
     version: row.running_hermes_version ?? row.hermes_version ?? null,
     ...(row.health ? { health: row.health } : {}),
@@ -165,6 +182,11 @@ export function buildFleetView(
       `the agents table's ${FLEET_KEY} row names fleet ${rowFleetId ?? "(none)"}, not this box's fleet ${manifest.fleet_id}`,
     );
   }
+  const identity = {
+    fleet_id: manifest.fleet_id,
+    fleet_name: str(fleetRow["fleet_name"]),
+    tailnet: str(fleetRow["tailnet"]) ?? "",
+  };
   const agents: MobileFleetAgentType[] = [];
   let skipped = 0;
   for (const item of items) {
@@ -176,7 +198,7 @@ export function buildFleetView(
       continue;
     }
     if (parsed.data.status === "destroyed") continue;
-    const agent = fleetAgent(parsed.data);
+    const agent = fleetAgent(parsed.data, identity);
     if (agent === null) skipped += 1;
     else agents.push(agent);
   }

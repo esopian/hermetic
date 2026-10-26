@@ -11,6 +11,7 @@ import {
   cloudName,
   legacyCloudNames,
   dashboardUrl,
+  desktopUrl,
   destroyedSummary,
   drawerActions,
   rebootState,
@@ -304,18 +305,34 @@ describe("hostname builder", () => {
   });
 
   /**
-   * The name the node reported wins over the one it was asked for. A recreate
-   * cannot delete the old device, so the replacement joins as `<name>-2` and
-   * MagicDNS keeps `<name>` on the terminated box — a link built from the
-   * canonical spelling opens nothing.
+   * The name the node reported wins over the one it was asked for — but only
+   * when it is a name hermetic gives this agent (core's `trustedDnsName`). Any
+   * box can write any row, so a sibling's name, another tailnet, or a `-<n>`
+   * that a sibling called `atlas-2` would also wear is ignored.
    */
-  test("the node's reported name wins over the canonical one", () => {
-    expect(hostname("atlas", "example.ts.net", "atlas-2.example.ts.net")).toBe(
+  test("the node's reported name wins when it is one hermetic gives this agent", () => {
+    expect(hostname("atlas", "example.ts.net", "main-atlas.example.ts.net", null, "main")).toBe(
+      "main-atlas.example.ts.net",
+    );
+    expect(dashboardUrl("atlas", "example.ts.net", "main-atlas.example.ts.net", null, "main")).toBe(
+      "https://main-atlas.example.ts.net/",
+    );
+  });
+
+  test("a reported name hermetic does not give this agent falls back to the canonical one", () => {
+    for (const forged of [
       "atlas-2.example.ts.net",
-    );
-    expect(dashboardUrl("atlas", "example.ts.net", "atlas-2.example.ts.net")).toBe(
-      "https://atlas-2.example.ts.net/",
-    );
+      "corvid.example.ts.net",
+      "atlas.attacker.ts.net",
+      "atlas.example.ts.net.attacker.ts.net",
+      "example.com",
+    ]) {
+      expect(hostname("atlas", "example.ts.net", forged)).toBe("atlas.example.ts.net");
+      expect(desktopUrl("atlas", "example.ts.net", forged)).toBe("https://atlas.example.ts.net/vnc/");
+      expect(
+        hostnameMismatch({ name: "atlas", tailscale_dns_name: forged }, "example.ts.net")?.kind,
+      ).toBe(forged === "atlas-2.example.ts.net" ? "stale" : "untrusted");
+    }
   });
 
   test("a null or absent reported name falls back to the canonical one", () => {
@@ -406,8 +423,13 @@ describe("hostname builder", () => {
     });
 
     test("a reported dns name still wins over the fleet-prefixed canonical one", () => {
-      expect(hostname("atlas", "hermetic.ts.net", "atlas-2.hermetic.ts.net", "k7m2x9qa")).toBe(
-        "atlas-2.hermetic.ts.net",
+      // The bare name is what a pre-v3 node wears.
+      expect(hostname("atlas", "hermetic.ts.net", "atlas.hermetic.ts.net", "k7m2x9qa")).toBe(
+        "atlas.hermetic.ts.net",
+      );
+      // A sibling's canonical name is not this agent's.
+      expect(hostname("atlas", "hermetic.ts.net", "k7m2x9qa-corvid.hermetic.ts.net", "k7m2x9qa")).toBe(
+        "k7m2x9qa-atlas.hermetic.ts.net",
       );
     });
 
@@ -476,9 +498,9 @@ describe("hostname builder", () => {
 
       /**
        * Without the fleet's own name there is no way to know that
-       * `main-atlas` was ever a spelling hermetic chose, so it reads as a
-       * device holding a name — the safe direction to be wrong in, because it
-       * over-reports rather than telling anyone to delete something.
+       * `main-atlas` was ever a spelling hermetic chose, so it reads as a name
+       * hermetic does not give this agent — the safe direction to be wrong in,
+       * because it over-reports rather than telling anyone to delete something.
        */
       test("the v3 spelling needs the fleet's name to be recognised", () => {
         expect(
@@ -487,7 +509,7 @@ describe("hostname builder", () => {
             "hermetic.ts.net",
             "k7m2x9qa",
           )?.kind,
-        ).toBe("stale");
+        ).toBe("untrusted");
       });
 
       test("legacyCloudNames mirrors core: v3 spelling first, then the bare one", () => {

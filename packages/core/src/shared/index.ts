@@ -31,8 +31,10 @@ export {
   isValidName,
   legacyCloudNames,
   staleDeviceNote,
+  trustedDnsName,
   validateName,
 } from "./naming.ts";
+export type { HostnameMismatch } from "./naming.ts";
 
 // --- Fleet identity ------------------------------------------------------
 export { sameFleetTarget } from "./target.ts";

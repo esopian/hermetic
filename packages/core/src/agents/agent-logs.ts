@@ -12,7 +12,7 @@
  * Pure extraction: the behaviour, the guards and the comments below are the
  * ones that were in `hermetic.ts`.
  */
-import { agentHostname, cloudName } from "../schema/index.ts";
+import { agentHostname, cloudName, legacyCloudNames } from "../schema/index.ts";
 import type { Agent, LogsInput, SshInput } from "../schema/index.ts";
 import type { LogLine } from "../backend/types.ts";
 import { validateName } from "../shared/naming.ts";
@@ -56,7 +56,12 @@ export function createAgentLogs(deps: AgentLogsDeps) {
     validateName(input.name);
     const { fleet } = await guardFleet();
     const agent = await getAgent(input.name);
-    const host = agentHostname(agent, fleet.tailnet, cloudName(fleet.fleet_id, agent.name));
+    const host = agentHostname(
+      agent,
+      fleet.tailnet,
+      cloudName(fleet.fleet_id, agent.name),
+      legacyCloudNames(fleet.fleet_name, agent.name),
+    );
     return ["tailscale", "ssh", `${SSH_LOGIN_USER}@${host}`];
   }
 

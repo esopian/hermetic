@@ -26,7 +26,7 @@
  * not recorded anywhere — `runs` stores the request, which is a name, and the
  * portal logs the op and not its result.
  */
-import { agentDashboardUrl, cloudName } from "../schema/index.ts";
+import { agentDashboardUrl, cloudName, legacyCloudNames } from "../schema/index.ts";
 import { validateName } from "../shared/naming.ts";
 import type { Agent, FleetItem, LocalConfig } from "../schema/index.ts";
 import type { StackInfo } from "../backend/types.ts";
@@ -92,7 +92,12 @@ export function createDesktop(deps: DesktopDeps) {
     validateName(input.name);
     const { fleet } = await guardFleet();
     const agent = await getAgent(input.name);
-    const url = agentDashboardUrl(agent, fleet.tailnet, cloudName(fleet.fleet_id, agent.name));
+    const url = agentDashboardUrl(
+      agent,
+      fleet.tailnet,
+      cloudName(fleet.fleet_id, agent.name),
+      legacyCloudNames(fleet.fleet_name, agent.name),
+    );
     const token = await hermes.token(
       { instance: agent.name, baseUrl: url, fleet_id: fleet.fleet_id },
       { signal: opts.signal },

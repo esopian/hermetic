@@ -109,21 +109,66 @@ export function legacyCloudNames(
  * the canonical spelling reaches nothing at all.
  *
  * `tailscale_dns_name` is what the node reported about itself, so it wins
- * whenever it is there; the canonical form is the fallback for a row whose
- * first heartbeat has not landed (or was written by an older hermeticd).
+ * whenever it is a name this agent could legitimately be wearing
+ * (`trustedDnsName`); the canonical form is the fallback for a row whose
+ * first heartbeat has not landed (or was written by an older hermeticd), and
+ * for a reported name that fails the check.
  *
  * `cloudName` is the name this agent wears in the tailnet — `<fleet id>-<agent>`
  * since v4 (`cloudName` in `fleet.ts`, computed by the caller because
  * `fleet.ts` imports this module and the cycle would not resolve). Omitted, the
  * fallback is the bare agent name, which is what a pre-v3 fleet's nodes are
- * actually called.
+ * actually called. `legacyNames` is `legacyCloudNames` for a caller that knows
+ * the fleet's name; without it a node still wearing the v3
+ * `<fleet name>-<agent>` spelling is addressed by its canonical name instead.
  */
 export function agentHostname(
   agent: { name: string; tailscale_dns_name?: string | null },
   tailnet: string,
   cloudName?: string | null,
+  legacyNames: readonly string[] = [],
 ): string {
-  return agent.tailscale_dns_name ?? `${cloudName ?? agent.name}.${tailnet}`;
+  const canonical = cloudName ?? agent.name;
+  const reported = trustedDnsName(agent.tailscale_dns_name, tailnet, [
+    canonical,
+    ...legacyNames,
+    agent.name,
+  ]);
+  return reported ?? `${canonical}.${tailnet}`;
+}
+
+/**
+ * The reported name, lower-cased and without a trailing dot, when it is one
+ * this agent's node could be wearing: exactly one of `names`, directly under
+ * `tailnet`. Null for anything else, and for no name at all.
+ *
+ * `tailscale_dns_name` is written by the box, and every box's role may write
+ * every agent's row (§7.1, the shared `FleetRows` statement), so a single
+ * compromised agent could otherwise point a sibling's terminal, chat and
+ * dashboard at a machine it controls — another node in the tailnet, or a
+ * public `*.ts.net` Funnel host in a tailnet of its own. The check holds the
+ * reported name to the spellings hermetic itself hands out, in the fleet's own
+ * tailnet, so the most such a write can do is choose between this agent's own
+ * names.
+ *
+ * Tailscale's `-<n>` collision suffix is deliberately not one of them. A node
+ * admitted as `<cloud name>-2` because a dead device held its name is
+ * indistinguishable by shape from the canonical name of a sibling called
+ * `<agent>-2`, and trusting it would let that sibling claim this agent's
+ * traffic. Such a node is addressed by its canonical name instead and reported
+ * as a `stale` mismatch, whose remedy (delete the dead device, recreate) is the
+ * same as before.
+ */
+export function trustedDnsName(
+  reported: string | null | undefined,
+  tailnet: string,
+  names: readonly string[],
+): string | null {
+  if (!reported) return null;
+  const host = reported.trim().toLowerCase().replace(/\.$/, "");
+  const zone = tailnet.trim().toLowerCase().replace(/\.$/, "");
+  if (zone === "") return null;
+  return names.some((name) => name !== "" && host === `${name.toLowerCase()}.${zone}`) ? host : null;
 }
 
 /**
@@ -135,8 +180,9 @@ export function agentDashboardUrl(
   agent: { name: string; tailscale_dns_name?: string | null },
   tailnet: string,
   cloudName?: string | null,
+  legacyNames: readonly string[] = [],
 ): string {
-  return `https://${agentHostname(agent, tailnet, cloudName)}/`;
+  return `https://${agentHostname(agent, tailnet, cloudName, legacyNames)}/`;
 }
 
 /**
@@ -162,8 +208,9 @@ export function agentDesktopUrl(
   tailnet: string,
   cloudName?: string | null,
   browser: string = DEFAULT_BROWSER_NAME,
+  legacyNames: readonly string[] = [],
 ): string {
-  return `https://${agentHostname(agent, tailnet, cloudName)}${browserServePath(browser)}/`;
+  return `https://${agentHostname(agent, tailnet, cloudName, legacyNames)}${browserServePath(browser)}/`;
 }
 
 /**
@@ -184,8 +231,9 @@ export function agentDesktopClientUrl(
   tailnet: string,
   cloudName?: string | null,
   browser: string = DEFAULT_BROWSER_NAME,
+  legacyNames: readonly string[] = [],
 ): string {
-  const host = agentHostname(agent, tailnet, cloudName);
+  const host = agentHostname(agent, tailnet, cloudName, legacyNames);
   const path = browserServePath(browser);
   // Root-relative for the page, root-*less* for the query: noVNC concatenates
   // `path` onto the origin itself, so a leading slash would give it `//vnc/…`.
@@ -209,24 +257,43 @@ export function agentDesktopClientUrl(
  * - `stale` — the node is wearing something hermetic never would have chosen,
  *   which in practice is Tailscale's `-2`/`-4` suffix: the canonical name was
  *   taken when this node joined, by the device a `recreate` failed to delete.
- *   That device is a corpse and deleting it is the fix.
+ *   That device is a corpse and deleting it is the fix. hermetic no longer
+ *   addresses the node by that name (`trustedDnsName` says why), so its
+ *   dashboard and terminal reach nothing until it is recreated.
+ * - `untrusted` — a name hermetic never hands this agent at all: another
+ *   node's, another tailnet's, or no tailnet's. The box reported it, and any
+ *   box in the fleet can write any agent's row, so it may be a compromised
+ *   sibling's doing. hermetic ignores it and uses the canonical name.
  *
- * Returned rather than asserted because neither is an error: the agent is
- * reachable, under a name the operator did not choose, and what to do about it
- * differs by kind.
+ * Returned rather than asserted because none is an error the caller can fix
+ * here, and what to do about it differs by kind.
  */
 export function agentHostnameMismatch(
   agent: { name: string; tailscale_dns_name?: string | null },
   tailnet: string | null,
   cloudName?: string | null,
   legacyNames: readonly string[] = [],
-): { real: string; canonical: string; kind: "legacy" | "stale" } | null {
-  const real = agent.tailscale_dns_name ?? null;
+): HostnameMismatch | null {
+  // Tailscale reports `DNSName` fully qualified, root dot and all.
+  const real = agent.tailscale_dns_name?.trim().toLowerCase().replace(/\.$/, "") ?? null;
   if (!real || !tailnet) return null;
   const canonical = `${cloudName ?? agent.name}.${tailnet}`;
   if (real === canonical) return null;
-  const legacy = legacyNames.some((n) => real === `${n}.${tailnet}`);
-  return { real, canonical, kind: legacy ? "legacy" : "stale" };
+  if (trustedDnsName(real, tailnet, legacyNames) !== null) {
+    return { real, canonical, kind: "legacy" };
+  }
+  // Tailscale's `-<n>`: the canonical name was held when this node joined.
+  const prefix = `${cloudName ?? agent.name}-`;
+  const suffix = real.startsWith(prefix) ? real.slice(prefix.length) : "";
+  const stale = /^[0-9]+\./.test(suffix) && suffix.slice(suffix.indexOf(".") + 1) === tailnet;
+  return { real, canonical, kind: stale ? "stale" : "untrusted" };
+}
+
+/** How a node's reported name differs from its canonical one (`agentHostnameMismatch`). */
+export interface HostnameMismatch {
+  real: string;
+  canonical: string;
+  kind: "legacy" | "stale" | "untrusted";
 }
 
 /**
@@ -240,10 +307,7 @@ export function agentHostnameMismatch(
  * thing to delete really is a corpse; a `legacy` node is described as what it
  * is and left alone.
  */
-export function staleDeviceNote(
-  name: string,
-  mismatch: { real: string; canonical: string; kind: "legacy" | "stale" },
-): string {
+export function staleDeviceNote(name: string, mismatch: HostnameMismatch): string {
   if (mismatch.kind === "legacy") {
     /**
      * What is *known* — the name it is wearing is one hermetic itself hands out
@@ -260,8 +324,16 @@ export function staleDeviceNote(
       `\`hermetic agent recreate ${name}\` rebuilds it, and nothing needs deleting`
     );
   }
+  if (mismatch.kind === "untrusted") {
+    return (
+      `the agent's row names its node ${mismatch.real}, which is not a name hermetic gives ` +
+      `${name}; hermetic ignores it and uses ${mismatch.canonical}. Any box in the fleet can ` +
+      `write this row, so check the fleet for a compromised agent before trusting either name`
+    );
+  }
   return (
     `the node is ${mismatch.real}, not ${mismatch.canonical}: a stale device holds the name; ` +
-    `delete it in the Tailscale admin console (Machines → ${name})`
+    `delete it in the Tailscale admin console (Machines → ${name}), then ` +
+    `\`hermetic agent recreate ${name}\` so the node takes its own name back`
   );
 }

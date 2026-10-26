@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import type { z } from "zod";
 import * as S from "../schema/bot-mode.ts";
-import { agentDashboardUrl, cloudName } from "../schema/index.ts";
+import { agentDashboardUrl, cloudName, legacyCloudNames } from "../schema/index.ts";
 import type { ChatDeps, ChatOptions } from "./chat.ts";
 import { HermeticError } from "../errors.ts";
 import { validateName } from "../shared/naming.ts";
@@ -275,12 +275,17 @@ export async function dashboardBox(deps: DashboardDeps, instance: string, watche
 
 /** One agent row's dashboard address in `fleet`. */
 export const dashboardAddress = (
-  fleet: { fleet_id: string; tailnet: string },
+  fleet: { fleet_id: string; tailnet: string; fleet_name?: string | null },
   agent: Parameters<typeof agentDashboardUrl>[0],
 ) => ({
   instance: agent.name,
   fleet_id: fleet.fleet_id,
-  baseUrl: agentDashboardUrl(agent, fleet.tailnet, cloudName(fleet.fleet_id, agent.name)),
+  baseUrl: agentDashboardUrl(
+    agent,
+    fleet.tailnet,
+    cloudName(fleet.fleet_id, agent.name),
+    legacyCloudNames(fleet.fleet_name, agent.name),
+  ),
 });
 
 /**

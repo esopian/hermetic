@@ -56,6 +56,7 @@ import {
   ChatSwarmsInput,
   agentDashboardUrl,
   cloudName,
+  legacyCloudNames,
 } from "../schema/index.ts";
 import type {
   Agent,
@@ -470,7 +471,12 @@ export function createChat(deps: ChatDeps) {
     requireListening(fleet.fleet_id, instance);
     return {
       instance: agent.name,
-      baseUrl: agentDashboardUrl(agent, fleet.tailnet, cloudName(fleet.fleet_id, agent.name)),
+      baseUrl: agentDashboardUrl(
+        agent,
+        fleet.tailnet,
+        cloudName(fleet.fleet_id, agent.name),
+        legacyCloudNames(fleet.fleet_name, agent.name),
+      ),
       // §9.2: a bot's avatar is seeded from `fleet_id/instance/bot`, so that a
       // rename does not change its face and two fleets' `default@atlas` do not
       // wear the same one. The adapter reaches boxes, not tables, so the fleet
@@ -501,7 +507,12 @@ export function createChat(deps: ChatDeps) {
         : [await getAgent(parsed.instance)];
     const boxOf = (agent: Agent): BoxAddress => ({
       instance: agent.name,
-      baseUrl: agentDashboardUrl(agent, fleet.tailnet, cloudName(fleet.fleet_id, agent.name)),
+      baseUrl: agentDashboardUrl(
+        agent,
+        fleet.tailnet,
+        cloudName(fleet.fleet_id, agent.name),
+        legacyCloudNames(fleet.fleet_name, agent.name),
+      ),
       fleet_id: fleet.fleet_id,
     });
     const settled = await Promise.allSettled(

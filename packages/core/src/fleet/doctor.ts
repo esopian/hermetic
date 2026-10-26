@@ -19,6 +19,7 @@ import {
   tablesFor,
 } from "../schema/index.ts";
 import type {
+  HostnameMismatch,
   Agent,
   AgentStatus,
   LocalConfig,
@@ -169,8 +170,10 @@ export interface DoctorReport {
        * live node wearing a spelling hermetic used to hand out. Only the first
        * is something to go and delete, and a head that cannot tell them apart
        * will tell an operator to delete the machine their agent is running on.
+       * `untrusted` is a name hermetic never hands this agent, written to its
+       * row by some box; it is ignored, and reported as a finding.
        */
-      kind: "legacy" | "stale";
+      kind: HostnameMismatch["kind"];
       /**
        * True when this node was built *after* its fleet adopted the naming rule
        * it is not following — i.e. it is not an old box at all, and the fleet's
@@ -929,7 +932,9 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
     const meanwhile =
       mismatch.kind === "stale"
         ? `until then ${mismatch.canonical} resolves to the dead node (tailscale_stale_device)`
-        : `until then nothing answers to ${mismatch.canonical} (tailscale_legacy_name)`;
+        : mismatch.kind === "untrusted"
+          ? `hermetic addresses ${mismatch.canonical} instead (tailscale_untrusted_name)`
+          : `until then nothing answers to ${mismatch.canonical} (tailscale_legacy_name)`;
     /**
      * A *legacy* name on a box built before the rule moved is a fact of history,
      * and stays a note. A legacy name on a box this fleet built *after* it
@@ -948,6 +953,20 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
       ...(misnamed ? { misnamed: true } : {}),
       note: `${a.name}: ${staleDeviceNote(a.name, mismatch)}${byHand} — ${meanwhile}`,
     });
+    /**
+     * Unlike the other two kinds, an untrusted name *is* a finding: it is not
+     * history or a stale device but a write to this agent's row that no
+     * hermeticd of this agent's would make, which is what a compromised
+     * sibling redirecting this agent's traffic looks like (§5.2). hermetic
+     * already refuses to use it; the operator still needs to hear about it.
+     */
+    if (mismatch.kind === "untrusted") {
+      findings.push(
+        `${a.name}'s row names its node ${mismatch.real}, which is not a name hermetic gives it; ` +
+          "the name is ignored, but some box wrote it — check the fleet for a compromised agent " +
+          "(tailscale_untrusted_name)",
+      );
+    }
     if (misnamed) {
       findings.push(
         `${a.name} was created after this fleet adopted fleet-id naming but came up as ` +
