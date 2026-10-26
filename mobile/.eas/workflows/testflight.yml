@@ -1,0 +1,52 @@
+# Build the iPhone app and send it to TestFlight testers, start to finish:
+# build (production profile, next build number), upload, add to Alpha Users
+# with RELEASE_NOTES.md's "What to test" as the tester notes, and submit for
+# Beta App Review. Apple's approval is the only step left by hand.
+#
+# Runs on a `mobile-v*` tag (`git tag mobile-v0.1.0-5 && git push origin
+# mobile-v0.1.0-5`), or on demand: `bun run release:testflight` from mobile/.
+# See RELEASING.md, "Automated TestFlight".
+name: TestFlight
+
+on:
+  push:
+    tags:
+      - mobile-v*
+  workflow_dispatch: {}
+
+jobs:
+  notes:
+    name: Read What to Test
+    outputs:
+      what_to_test: ${{ steps.notes.outputs.what_to_test }}
+    steps:
+      - uses: eas/checkout
+      - id: notes
+        # The "## What to test" section of RELEASE_NOTES.md, up to the next
+        # heading; App Store Connect caps the field at 4,000 characters.
+        run: |
+          # A tag run checks out the repo; `workflow:run` uploads mobile/ alone.
+          file="$(ls mobile/RELEASE_NOTES.md RELEASE_NOTES.md 2>/dev/null | head -n 1)"
+          notes="$(awk '/^## What to test/{on=1; next} /^## /{on=0} on' "${file:-RELEASE_NOTES.md}" | sed '/./,$!d' | head -c 4000)"
+          if [ -z "$notes" ]; then
+            echo "RELEASE_NOTES.md has no '## What to test' section" >&2
+            exit 1
+          fi
+          set-output what_to_test "$notes"
+
+  build_ios:
+    name: Build iOS
+    type: build
+    params:
+      platform: ios
+      profile: production
+
+  testflight:
+    name: Distribute to TestFlight
+    type: testflight
+    needs: [notes, build_ios]
+    params:
+      build_id: ${{ needs.build_ios.outputs.build_id }}
+      external_groups: ["Alpha Users"]
+      changelog: ${{ needs.notes.outputs.what_to_test }}
+      submit_beta_review: true

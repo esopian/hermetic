@@ -32,7 +32,8 @@ Git commit and EAS build UUID together. Never reuse a build number for a store u
 1. Confirm the app record uses bundle ID `com.hermetic.mobile`. Create the record if it does not
    exist. Copy its numeric Apple ID into `submit.production.ios.ascAppId` in `eas.json`; it is public
    metadata. It is intentionally not invented in this repo. Noninteractive submission needs it.
-2. Create the internal TestFlight group **Alpha Users**, matching `submit.production.ios.groups`.
+2. Create the TestFlight group **Alpha Users**, matching `submit.production.ios.groups` and the
+   workflow's `external_groups`.
    Add the intended App Store Connect testers. External testers need a separate group and Apple's
    Beta App Review; don't invite them implicitly.
 3. Configure EAS Submit credentials interactively or provide an App Store Connect API key through
@@ -65,6 +66,33 @@ Git commit and EAS build UUID together. Never reuse a build number for a store u
    Have a tester install through TestFlight and repeat first launch, pairing and push checks.
 6. Public App Store release is a separate approval and submission step. Select this tested build;
    complete the listing, privacy declarations and review information before requesting review.
+
+## Automated TestFlight
+
+`.eas/workflows/testflight.yml` (EAS Workflows) does steps 4 and 5 above in one run: a production
+build with the next build number, the upload, the **Alpha Users** group, the "What to test"
+section of `RELEASE_NOTES.md` as the TestFlight **What to Test** notes, and the Beta App Review
+submission. Apple's approval is the only step left; the first build of a version takes longest.
+
+- **On a tag:** push `mobile-v<version>-<n>` (for example `git tag mobile-v0.1.0-6 && git push
+  origin mobile-v0.1.0-6`) from the commit to ship. The tag is a trigger only; EAS still assigns
+  the build number.
+- **On demand:** `bun run release:testflight` from `mobile/`. This uploads the local `mobile/`
+  directory, so run it from a clean checkout of the revision you mean to ship.
+
+Fill the "What to test" section of `RELEASE_NOTES.md` before either; the run fails without it.
+
+One-time setup, beyond the App Store Connect steps above:
+
+1. In the EAS project (**Project settings → GitHub**), connect `esopian/hermetic` with the base
+   directory `mobile`, so tag pushes reach the workflow.
+2. In the EAS project (**Project settings → General → Connections**), connect App Store Connect,
+   so the workflow can set groups, notes and the review submission.
+3. In App Store Connect, complete **TestFlight → Test Information** (beta description, feedback
+   email, contact, review notes). Beta App Review refuses a submission without it.
+
+`submit:testflight` stays for a build made by hand; it uploads and joins the group, but does not
+fill What to Test or submit for review.
 
 ## Acceptance record
 
