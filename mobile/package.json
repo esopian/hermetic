@@ -34,7 +34,7 @@
     "react-native-screens": "~4.26.0",
     "react-native-svg": "15.15.4",
     "react-native-webview": "13.16.1",
-    "react-native-worklets": "0.10.1"
+    "react-native-worklets": "0.13.0"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.12",
