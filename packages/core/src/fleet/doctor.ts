@@ -921,7 +921,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
      */
     const byHand =
       mismatch.kind === "stale" && devices !== null
-        ? ` — hermetic agent recreate ${a.name} will remove it`
+        ? ` — or skip the console: the recreate removes the dead device itself`
         : "";
     /**
      * What the canonical name does *today* — the sentence an operator needs to

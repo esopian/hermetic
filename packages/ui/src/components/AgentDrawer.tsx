@@ -682,7 +682,7 @@ export function AgentDrawer({
           ) : staleDevice?.kind === "stale" ? (
             <div className="detail-host-note">
               {staleDevice.canonical} is held by a stale device — delete it in the Tailscale admin
-              console (Machines → {agent.name})
+              console (Machines → {agent.name}), then recreate this agent so it takes its own name back
             </div>
           ) : staleDevice ? (
             <div className="detail-host-note">

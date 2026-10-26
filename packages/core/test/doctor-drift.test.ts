@@ -381,8 +381,8 @@ describe("doctor: tailscale drift", () => {
     // was never re-scoped, and the one an operator may prefer anyway.
     expect(stale.note).toContain("Machines → atlas");
     // But this fixture *can* read devices, so the client has `devices:core`
-    // and the note offers the command that clears it (§6.5).
-    expect(stale.note).toContain("hermetic agent recreate atlas will remove it");
+    // and the note says the recreate clears the device on its own (§6.5).
+    expect(stale.note).toContain("the recreate removes the dead device itself");
     expect(report.findings.join(" ")).not.toContain("tailscale_stale_device");
     // The findings are what they would have been without the rename: the seeded
     // stale heartbeat, and nothing else. Renaming only the row cannot cause
@@ -393,8 +393,9 @@ describe("doctor: tailscale drift", () => {
 
   /**
    * The other half of the same sentence: a fleet that cannot read the device
-   * list cannot delete one either, so the note must not promise a command that
-   * would only warn.
+   * list cannot delete one either, so the note must not promise that the
+   * recreate removes it. The recreate is still named, because hermetic no longer
+   * follows a `-<n>` name (§6.1) and only a fresh node takes the canonical one.
    */
   test("without the devices scope the note keeps the admin console as the only fix", async () => {
     const { backend, hermetic } = seeded();
@@ -404,7 +405,7 @@ describe("doctor: tailscale drift", () => {
     const report = await hermetic.doctor();
     const stale = report.tailscale.stale.find((s) => s.agent === "atlas")!;
     expect(stale.note).toContain("Machines → atlas");
-    expect(stale.note).not.toContain("agent recreate");
+    expect(stale.note).not.toContain("removes the dead device itself");
   });
 
   /**

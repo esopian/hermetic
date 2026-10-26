@@ -30,6 +30,7 @@ function report(over: Partial<PolicyReport> = {}): PolicyReport {
     ],
     etag: '"abc123"',
     diff: null,
+    exposure: [],
     ...over,
   } as PolicyReport;
 }
@@ -45,6 +46,35 @@ function panel(over: { report?: PolicyReport | null; error?: string | null } = {
 }
 
 describe("PolicyPanel", () => {
+  /**
+   * §5.2: the operator's own rules that let a box out. Listed by key and
+   * index, said to be clean when read and clean, and absent — never "clean" —
+   * when the policy could not be read.
+   */
+  test("exposure findings are listed by rule, and an unread policy shows no verdict", () => {
+    const found = panel({
+      report: report({
+        exposure: [
+          {
+            rule: "grants",
+            index: 0,
+            severity: "high",
+            summary:
+              "grants[0] lets agent boxes reach nodes other than tag:hermetic (matched through autogroup:tagged)",
+          },
+        ],
+      }),
+    });
+    expect(found).toContain("What your rules let a box do");
+    expect(found).toContain("grants[0]");
+    expect(found).toContain("matched through autogroup:tagged");
+
+    expect(panel()).toContain("No rule outside hermetic");
+    const unread = panel({ report: report({ managed: "unavailable", scope: "none", exposure: null }) });
+    expect(unread).not.toContain("What your rules let a box do");
+    expect(unread).not.toContain("No rule outside hermetic");
+  });
+
   test("before the first read it is a skeleton, never an empty verdict", () => {
     const out = panel({ report: null });
     expect(out).toContain("reading the tailnet policy…");

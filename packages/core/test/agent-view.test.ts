@@ -33,11 +33,24 @@ describe("agentDesktopUrl", () => {
     expect(agentDesktopUrl(AGENT, TAILNET)).toEndWith("/vnc/");
   });
 
-  /** The name the node actually holds wins, as it does for the dashboard. */
-  test("a node wearing a suffixed name is addressed by that name", () => {
+  /**
+   * The name the node holds wins when it is one hermetic gives the agent, as it
+   * does for the dashboard. A `-<n>` name is not: a sibling called `atlas-2`
+   * would wear the same one (`trustedDnsName`).
+   */
+  test("a node's own name wins, but a suffixed one is not followed", () => {
+    expect(
+      agentDesktopUrl(
+        { name: "atlas", tailscale_dns_name: "main-atlas.hermetic.ts.net" },
+        TAILNET,
+        null,
+        undefined,
+        ["main-atlas"],
+      ),
+    ).toBe("https://main-atlas.hermetic.ts.net/vnc/");
     expect(
       agentDesktopUrl({ name: "atlas", tailscale_dns_name: "atlas-2.hermetic.ts.net" }, TAILNET),
-    ).toBe("https://atlas-2.hermetic.ts.net/vnc/");
+    ).toBe("https://atlas.hermetic.ts.net/vnc/");
   });
 
   /** A second identity nests under the first: one data change, no redesign. */
