@@ -9,12 +9,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { presetsView } from "@hermetic/core";
 import { renderPresets } from "../src/commands/presets.ts";
+import { cliBinary } from "./cli-binary.ts";
 
-const MAIN = Bun.fileURLToPath(new URL("../src/main.ts", import.meta.url));
 const HOME = mkdtempSync(join(tmpdir(), "hermetic-cli-presets-"));
 
 async function run(...args: string[]) {
-  const proc = Bun.spawn([process.execPath, MAIN, ...args], {
+  const proc = Bun.spawn([await cliBinary(), ...args], {
     stdout: "pipe",
     stderr: "pipe",
     env: { ...process.env, HERMETIC_FIXTURE: "1", HERMETIC_NO_TTY: "1", HERMETIC_HOME: HOME },

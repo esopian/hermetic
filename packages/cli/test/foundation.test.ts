@@ -82,7 +82,7 @@ interface StatusJson {
   agents: Array<{ name: string; status: string; hermeticd_version: string | null; current: boolean }>;
 }
 
-describe.concurrent("the pre-command foundation warning", () => {
+describe("the pre-command foundation warning", () => {
   test("an outdated fleet warns on stderr, once, and does not fail the command", async () => {
     const { code, stdout, stderr } = await run({ outdated: true }, "agent", "ps");
     expect(code).toBe(0);
@@ -129,7 +129,7 @@ describe.concurrent("the pre-command foundation warning", () => {
  * process per entry. Two rules, for two different reasons: commands that report
  * the same thing better themselves, and commands that touch AWS not at all.
  */
-describe.concurrent("which commands pay for the foundation check", () => {
+describe("which commands pay for the foundation check", () => {
   test("the commands that say it better themselves are skipped", () => {
     for (const command of ["init", "foundation", "foundation status", "foundation update"]) {
       expect(skipsFoundationCheck(command)).toBe(true);
@@ -169,7 +169,7 @@ describe.concurrent("which commands pay for the foundation check", () => {
   });
 });
 
-describe.concurrent("the check is bounded", () => {
+describe("the check is bounded", () => {
   /**
    * The failure this guards: a wedged VPN, an AWS SDK still retrying, and
    * `hermetic agent ps` blocked behind a courtesy it never asked for.
@@ -210,7 +210,7 @@ describe.concurrent("the check is bounded", () => {
   });
 });
 
-describe.concurrent("foundation status", () => {
+describe("foundation status", () => {
   test("--json carries fleet, available, the two flags and every agent", async () => {
     const { code, stdout } = await run({ outdated: true }, "foundation", "status", "--json");
     expect(code).toBe(0);
@@ -395,7 +395,7 @@ describe("renderHermesLine", () => {
   });
 });
 
-describe.concurrent("plan foundation", () => {
+describe("plan foundation", () => {
   test("lists the op's phases as steps, without executing any of them", async () => {
     const { code, stdout } = await run({ outdated: true }, "plan", "foundation", "--json");
     expect(code).toBe(0);
@@ -427,7 +427,7 @@ describe.concurrent("plan foundation", () => {
   });
 });
 
-describe.concurrent("foundation update", () => {
+describe("foundation update", () => {
   test("--yes runs every phase through to done and exits 0", async () => {
     const { code, stdout, stderr } = await run(
       { outdated: true },

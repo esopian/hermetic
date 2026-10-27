@@ -99,7 +99,7 @@ interface FleetsJson {
   fleets: FleetRow[];
 }
 
-describe.concurrent("fleet ls", () => {
+describe("fleet ls", () => {
   test("lists both fixture fleets, saying which is current and which is behind", async () => {
     const { code, stdout } = await run("fleet", "ls", "--json");
     expect(code).toBe(0);
@@ -135,7 +135,7 @@ describe.concurrent("fleet ls", () => {
   });
 });
 
-describe.concurrent("--fleet picks the fleet, on either side of the subcommand", () => {
+describe("--fleet picks the fleet, on either side of the subcommand", () => {
   test("before the subcommand", async () => {
     const { code, stdout, stderr } = await run("--fleet", "staging", "agent", "ps", "--json");
     expect(code).toBe(0);
@@ -155,7 +155,7 @@ describe.concurrent("--fleet picks the fleet, on either side of the subcommand",
   });
 });
 
-describe.concurrent("init --attach", () => {
+describe("init --attach", () => {
   test("freezes a seeded fleet that is missing from this home", async () => {
     const h = await seededHome();
     const staging = fixtureConfigFor("staging");
@@ -183,7 +183,7 @@ describe.concurrent("init --attach", () => {
   });
 });
 
-describe.concurrent("fleet use", () => {
+describe("fleet use", () => {
   test("records the default, and a bare command then means it", async () => {
     const h = home();
     const used = await runIn(h, "fleet", "use", "staging");
@@ -210,7 +210,7 @@ describe.concurrent("fleet use", () => {
   });
 });
 
-describe.concurrent("directory status", () => {
+describe("directory status", () => {
   test("reports the table, its backup bound, and every fleet in it", async () => {
     const { code, stdout } = await run("directory", "status", "--json");
     expect(code).toBe(0);
@@ -230,7 +230,7 @@ describe.concurrent("directory status", () => {
   });
 });
 
-describe.concurrent("teardown will not guess which fleet", () => {
+describe("teardown will not guess which fleet", () => {
   test("two fleets frozen and no --fleet is a refusal, not the default", async () => {
     const { code, stderr } = await runIn(await seededHome(), "teardown", "--yes");
     expect(code).toBe(8);
@@ -249,7 +249,7 @@ describe.concurrent("teardown will not guess which fleet", () => {
   });
 });
 
-describe.concurrent("HERMETIC_FLEET selects, but it does not decide", () => {
+describe("HERMETIC_FLEET selects, but it does not decide", () => {
   test("teardown still refuses: an exported variable is not an explicit --fleet", async () => {
     const { code, stderr } = await runEnv(
       { home: await seededHome(), env: { HERMETIC_FLEET: "staging" } },
@@ -282,7 +282,7 @@ describe.concurrent("HERMETIC_FLEET selects, but it does not decide", () => {
  * document, so the invocation that applies it is the only thing that says which
  * fleet it lands on.
  */
-describe.concurrent("apply of a teardown plan is guarded like teardown itself", () => {
+describe("apply of a teardown plan is guarded like teardown itself", () => {
   async function stagingPlan(hermeticHome: string): Promise<string> {
     // Also the read that materialises this home's fleets; see `seededHome`.
     const { code, stdout } = await runIn(
@@ -368,7 +368,7 @@ describe.concurrent("apply of a teardown plan is guarded like teardown itself", 
  * nothing named. `fleet ls` is the way out of it, so it is the one read that
  * has to work there.
  */
-describe.concurrent("several fleets and none chosen", () => {
+describe("several fleets and none chosen", () => {
   /** Seed the fixture home, then take its default away. */
   async function homeWithNoDefault(): Promise<string> {
     const h = await seededHome();
@@ -414,7 +414,7 @@ describe.concurrent("several fleets and none chosen", () => {
   });
 });
 
-describe.concurrent("a fleet-less home still gets a header", () => {
+describe("a fleet-less home still gets a header", () => {
   test("nothing frozen: `fleet ls` says so on both streams", async () => {
     const { code, stdout, stderr } = await runEnv({ home: home(), fixture: false }, "fleet", "ls");
     expect(code).toBe(0);
@@ -423,7 +423,7 @@ describe.concurrent("a fleet-less home still gets a header", () => {
   });
 });
 
-describe.concurrent("the foundation nag", () => {
+describe("the foundation nag", () => {
   test("§4.8's own commands skip it — they report every fleet's version themselves", () => {
     for (const command of ["fleet", "fleet ls", "fleet use", "directory", "directory status"]) {
       expect(skipsFoundationCheck(command)).toBe(true);

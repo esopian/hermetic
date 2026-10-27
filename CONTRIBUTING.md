@@ -299,10 +299,13 @@ file, `bun test packages/core/test/render.test.ts`.
 `packages/cli` is the one suite that spawns the thing it tests (§11.6), so it is built rather than
 interpreted: `packages/cli/test/cli-binary.ts` compiles `packages/cli/src/main.ts` once per test
 process with `bun build --compile` and every suite spawns that binary — the same entry point
-`bun run build` ships. Suites whose tests share nothing but a fixture are `describe.concurrent`, so
-the spawns overlap; the ones that read the run log back out of a shared `HERMETIC_HOME`, and the
-golden snapshots (Bun does not support snapshot matchers in concurrent tests), are deliberately
-left sequential. A home the concurrent tests share is seeded first (`seedFixtureHome`, same file):
+`bun run build` ships. The compile runs at module load, outside every test's and hook's 5 s clock.
+Only `cli.test.ts`, where overlapping spawns save most of the package's wall time, keeps
+`describe.concurrent` groups: a concurrent test runs on its own 5 s clock but shares the CPU with
+every spawn in its group, so on a loaded machine it pays for the whole group's work and times out.
+The other suites run in order; the ones that read the run log back out of a shared
+`HERMETIC_HOME`, and the golden snapshots (Bun does not support snapshot matchers in concurrent
+tests), always did. A home the concurrent tests share is seeded first (`seedFixtureHome`, same file):
 the first open of a fixture home writes its fleets and default without a lock, and concurrent first
 spawns race it.
 
