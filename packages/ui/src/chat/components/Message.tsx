@@ -31,7 +31,7 @@ import { renderProbe } from "../render-probe.ts";
 import type { ChatBlockView, ChatMessageView } from "../../api/index.ts";
 import { fmtClock } from "../../logic/format.ts";
 import { FailureCard, failureOf } from "./FailureCard.tsx";
-import { SILENT_LABEL, heldBlock, silentBlock, silentTitle } from "../chat-silence.ts";
+import { SILENT_LABEL, finalText, heldBlock, silentBlock, silentTitle } from "../chat-silence.ts";
 import type { MessageRow } from "../chat-logic.ts";
 import { Block } from "./blocks/index.tsx";
 import { isRequestTool, untrustedBefore } from "../file-request-logic.ts";
@@ -105,6 +105,22 @@ function asksNow(
 /** A text block's words; empty for any other kind. */
 function markdownOf(block: ChatBlockView | undefined): string {
   return block?.kind === "text" ? block.markdown : "";
+}
+
+/**
+ * Whether `block` is a step of a run of work: not a DM, a card the operator
+ * answers or keeps, or something that needs their attention. The section loop
+ * and the narration rule both read it, so the two cannot drift.
+ */
+function joinsRun(block: ChatBlockView): boolean {
+  return (
+    !messageAgentCall(block) &&
+    !isRequestTool(block) &&
+    !isShareTool(block) &&
+    !isKanbanTaskTool(block) &&
+    isActivity(block) &&
+    !needsAttention(block)
+  );
 }
 
 /**
@@ -271,12 +287,28 @@ export const Message = memo(function Message({
   // first block's position, so a notice that arrived mid-run is drawn *below*
   // the whole group, not between the two calls it separated. Keeping arrival
   // order instead is what split the turn in two.
+  //
+  // Narration between steps is part of the work, not the answer: a text block
+  // followed by more work folds into the run as a note. Notices are *about*
+  // the run, so only a later step decides; the settled turn's closing prose
+  // (and a silence marker) is never a note, nor is any text before it.
+  const final = streaming ? -1 : finalText(blocks);
+  const note = (block: ChatBlockView, i: number): boolean => {
+    if (block.kind !== "text" || !block.markdown.trim() || i === silent || i === final) return false;
+    for (let j = i + 1; j < blocks.length; j++) {
+      const later = blocks[j]!;
+      if (later.kind === "text") {
+        if (j === final || j === silent) return false;
+      } else if (later.kind !== "activity") return joinsRun(later);
+    }
+    return false;
+  };
   const sections: { activity: boolean; blocks: typeof blocks }[] = [];
   let run: { activity: boolean; blocks: typeof blocks } | null = null;
   // A file shared once is one card, whether the turn named it by `share_file`
   // or again on a `MEDIA:` line: the first block to draw it keeps it.
   const shared = new Set<string>();
-  for (const block of blocks) {
+  for (const [i, block] of blocks.entries()) {
     const shareId = shareIdOf(block);
     if (shareId !== null) {
       if (shared.has(shareId)) continue;
@@ -298,7 +330,7 @@ export const Message = memo(function Message({
       run = null;
       continue;
     }
-    if (isActivity(block) && !attention) {
+    if (joinsRun(block) || note(block, i)) {
       if (run) run.blocks.push(block);
       else {
         run = { activity: true, blocks: [block] };
@@ -317,15 +349,23 @@ export const Message = memo(function Message({
   // the last section whenever a notice about the run arrived after it: those
   // sections sit below the group and are still part of the same turn's work.
   // Reading the last section as the live one there tells a running turn it
-  // stopped.
+  // stopped. So does the answer streaming below it: the group stays live until
+  // the turn settles.
   const lastActivity = sections.findLastIndex((section) => section.activity);
   const trailingNotices =
     lastActivity >= 0 &&
-    sections.slice(lastActivity + 1).every((section) => section.blocks[0]?.kind === "activity");
+    sections
+      .slice(lastActivity + 1)
+      .every((section) => section.blocks[0]?.kind === "activity" || section.blocks[0]?.kind === "text");
   const activeGroup =
     trailingNotices || (streaming && (activity === "thinking" || waiting))
       ? lastActivity
       : sections.length - 1;
+  // The prose still arriving reads as provisional (muted, small) until the turn
+  // settles, then restyles in place to body text: same element, class removed.
+  const pendingText = streaming
+    ? sections.findLastIndex((section) => !section.activity && section.blocks[0]?.kind === "text")
+    : -1;
 
   const meta = [
     fmtClock(message.at),
@@ -451,6 +491,16 @@ export const Message = memo(function Message({
                     instance={author?.instance ?? instance}
                     status={status}
                   />
+                ) : section.blocks[0]!.kind === "text" ? (
+                  // `display: contents`: layout is unchanged, and the element
+                  // persists across settle so the restyle can transition.
+                  <div className={index === pendingText ? "ch-text pending" : "ch-text"}>
+                    <Block
+                      block={section.blocks[0]!}
+                      streaming={streaming && activity === "streaming" && index === sections.length - 1}
+                      mine={mine}
+                    />
+                  </div>
                 ) : (
                   <Block
                     block={section.blocks[0]!}

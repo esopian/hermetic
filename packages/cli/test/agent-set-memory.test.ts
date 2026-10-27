@@ -27,7 +27,7 @@ async function run(...args: string[]) {
   return { code, stdout, stderr };
 }
 
-describe.concurrent("agent set --memory", () => {
+describe("agent set --memory", () => {
   test("a provider id passes through and comes back on the row", async () => {
     const { code, stdout } = await run("agent", "set", "atlas", "--memory", "hindsight", "--json");
     expect(code).toBe(0);

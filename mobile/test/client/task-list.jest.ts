@@ -243,7 +243,7 @@ describe("the transcript", () => {
     const list = sections(blocks);
     expect(list).toHaveLength(1);
     const head = groupSummary(list[0]?.blocks ?? [], false, "idle", false);
-    expect(head.status).toBe("Tools complete");
+    expect(head.status).toBe("Worked");
     expect(head.count).toBe("2 tools · 2 task updates");
     expect(groupSummary([RUNNING], false, "idle", false)).toMatchObject({
       status: "Tasks updated",

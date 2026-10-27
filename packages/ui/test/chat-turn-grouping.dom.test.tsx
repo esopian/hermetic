@@ -108,12 +108,14 @@ const counts = (container: HTMLElement) => ({
 });
 
 /**
- * The tag of every child of the turn's body, in order. The streaming caret is
+ * The tag of every child of the turn's body, in order, looking through a text
+ * section's `display: contents` wrapper as layout does. The streaming caret is
  * left out: it is the one thing a live turn is *supposed* to draw and a durable
  * one is not.
  */
 const body = (container: HTMLElement) =>
   Array.from(container.querySelector(".ch-msg-body")!.children)
+    .flatMap((el) => (el.classList.contains("ch-text") ? Array.from(el.children) : [el]))
     .filter((el) => !el.classList.contains("caret"))
     .map((el) => el.tagName);
 
@@ -381,12 +383,12 @@ describe("turn grouping", () => {
     expect(group.querySelector(".ch-activity-status")?.textContent).toContain("Preparing terminal");
   });
 
-  test("a finished group is closed and reads Tools complete", () => {
+  test("a finished group is closed and reads Worked", () => {
     const { container } = thread([toolRow(1), toolRow(2), botRow("stored:3", [prose("Done")])]);
     const group = container.querySelector<HTMLDetailsElement>(".ch-activity")!;
     expect(group.open).toBe(false);
     const summary = group.querySelector("summary")!.textContent ?? "";
-    expect(summary).toContain("Tools complete");
+    expect(summary).toContain("Worked");
     expect(summary).toContain("2 tools");
   });
 
@@ -1128,5 +1130,193 @@ describe("delegated children", () => {
     );
     // A single child gets no header.
     expect(container.querySelector(".sa-head")).toBeNull();
+  });
+});
+
+describe("narration folds into the run", () => {
+  /** Each section the turn's body draws, in order: a group, the answer's words, or anything else. */
+  const sections = (container: HTMLElement) =>
+    Array.from(container.querySelector(".ch-msg-body")!.children).map((el) =>
+      el.classList.contains("ch-activity")
+        ? "group"
+        : el.classList.contains("ch-text")
+          ? `text:${el.textContent}`
+          : "other",
+    );
+  /** A group's list, in order: each note's words, or `step`. */
+  const list = (group: Element) =>
+    Array.from(group.querySelectorAll(".ch-activity-list > li")).map((li) =>
+      li.classList.contains("ch-activity-note") ? li.textContent : "step",
+    );
+  const shareTool = (): ChatBlockView => {
+    const share = {
+      share_id: "sh_fold0001",
+      name: "plan.html",
+      bytes: 48,
+      mime: "text/html",
+      sha256: "9".repeat(64),
+    };
+    return {
+      kind: "tool",
+      name: "share_file",
+      tool_id: "call-share",
+      args: { path: "/data/plan.html" },
+      result: share,
+      status: "ok",
+      render: "file_share",
+      share,
+    } as unknown as ChatBlockView;
+  };
+
+  test("narration between calls is one group of notes, and the answer stays outside", () => {
+    const { container } = thread([
+      botRow("t", [
+        prose("Looking first."),
+        toolBlock(1),
+        prose("Now the second."),
+        toolBlock(2),
+        prose("The answer."),
+      ]),
+    ]);
+    expect(sections(container)).toEqual(["group", "text:The answer."]);
+    const group = container.querySelector(".ch-activity")!;
+    expect(list(group)).toEqual(["Looking first.", "step", "Now the second.", "step"]);
+    const summary = group.querySelector("summary")!.textContent ?? "";
+    expect(summary).toContain("Worked");
+    expect(summary).toContain("2 tools · 2 notes");
+    expect(summary).not.toContain("for");
+  });
+
+  test("a shared file's card splits the fold in two", () => {
+    const { container } = thread([
+      botRow("t", [
+        prose("One."),
+        toolBlock(1),
+        shareTool(),
+        prose("Two."),
+        toolBlock(2),
+        prose("Done."),
+      ]),
+    ]);
+    expect(sections(container)).toEqual(["group", "other", "group", "text:Done."]);
+    const groups = container.querySelectorAll(".ch-activity");
+    expect(list(groups[0]!)).toEqual(["One.", "step"]);
+    expect(list(groups[1]!)).toEqual(["Two.", "step"]);
+  });
+
+  test("a settled turn ending in activity keeps its last text as the answer; streaming, it is a note", () => {
+    const blocks = [prose("Checking."), toolBlock(1), prose("Here is what I found."), toolBlock(2)];
+    const settled = thread([botRow("t", blocks)]);
+    expect(sections(settled.container)).toEqual(["group", "text:Here is what I found.", "group"]);
+    expect(list(settled.container.querySelector(".ch-activity")!)).toEqual(["Checking.", "step"]);
+    cleanup();
+    const live = thread([], botRow("live", blocks), "thinking");
+    expect(sections(live.container)).toEqual(["group"]);
+    expect(list(live.container.querySelector(".ch-activity")!)).toEqual([
+      "Checking.",
+      "step",
+      "Here is what I found.",
+      "step",
+    ]);
+  });
+
+  test("text before the settled answer is never a note, however much activity follows", () => {
+    const { container } = thread([botRow("t", [prose("A."), prose("B."), toolBlock(1)])]);
+    expect(sections(container)).toEqual(["text:A.", "text:B.", "group"]);
+    expect(list(container.querySelector(".ch-activity")!)).toEqual(["step"]);
+  });
+
+  test("a notice after the answer does not fold the answer in while streaming", () => {
+    const notice: ChatBlockView = {
+      kind: "activity",
+      category: "notice",
+      key: "n1",
+      state: "done",
+      title: "Saved",
+    } as ChatBlockView;
+    const { container } = thread(
+      [],
+      botRow("live", [toolBlock(1), prose("The answer."), notice]),
+      "streaming",
+    );
+    expect(sections(container)).toContain("text:The answer.");
+    expect(container.querySelector(".ch-activity-note")).toBeNull();
+  });
+
+  test("plain question and answer is unchanged", () => {
+    const { container } = thread([botRow("t", [prose("Just an answer.")])]);
+    expect(sections(container)).toEqual(["text:Just an answer."]);
+    expect(container.querySelector(".ch-activity")).toBeNull();
+  });
+
+  test("live, the summary is the newest note's last sentence, or the running step after it", () => {
+    const said = thread(
+      [],
+      botRow("live", [
+        prose("Started."),
+        toolBlock(1),
+        prose("Found it. Let me check **the logs**:"),
+        toolBlock(2),
+      ]),
+      "thinking",
+    );
+    expect(said.container.querySelector(".ch-activity > summary")?.textContent).toContain(
+      "Let me check the logs…",
+    );
+    cleanup();
+    const running = thread(
+      [],
+      botRow("live", [prose("Let me look."), toolBlock(1, "running")]),
+      "thinking",
+    );
+    const summary = running.container.querySelector(".ch-activity > summary")?.textContent ?? "";
+    expect(summary).toContain("terminal");
+    expect(summary).not.toContain("Let me look");
+  });
+
+  test("the group stays live while the answer streams below it", () => {
+    const blocks = [
+      prose("Looking."),
+      toolBlock(1),
+      prose("Got it. Checking the second:"),
+      toolBlock(2),
+    ];
+    const said = thread([], botRow("live", [...blocks, prose("The answer so")]), "streaming");
+    const summary = said.container.querySelector(".ch-activity > summary")!;
+    expect(summary.textContent).toContain("Checking the second…");
+    expect(summary.querySelector(".busy")).not.toBeNull();
+    expect(sections(said.container)).toEqual(["group", "text:The answer so"]);
+    expect(said.container.querySelector(".ch-text.pending .caret")).not.toBeNull();
+    cleanup();
+    // No notes: the existing live wording, never the settled one.
+    const plain = thread([], botRow("live", [toolBlock(1), prose("The answer so")]), "streaming");
+    const line = plain.container.querySelector(".ch-activity > summary")!;
+    expect(line.textContent).toContain("Tools complete");
+    expect(line.textContent).not.toContain("Worked");
+    expect(line.querySelector(".busy")).not.toBeNull();
+  });
+
+  test("a finished step shows its time alone; one still running says so", () => {
+    const { container } = thread(
+      [],
+      botRow("live", [toolBlock(1), toolBlock(2, "running")]),
+      "thinking",
+    );
+    const right = Array.from(container.querySelectorAll(".ch-activity-dur")).map(
+      (el) => el.textContent,
+    );
+    expect(right[0]).not.toContain("Complete");
+    expect(right[0]).toMatch(/\ds$/);
+    expect(right[1]).toContain("Running");
+  });
+
+  test("prose still arriving is pending, and the same element restyles when the turn settles", () => {
+    const live = botRow("live", [toolBlock(1), prose("Partial answer")]);
+    const { container, rerender } = render(threadEl([], NOW, live, "streaming"));
+    const text = container.querySelector(".ch-text")!;
+    expect(text.classList.contains("pending")).toBe(true);
+    rerender(threadEl([], NOW, live, "idle"));
+    expect(container.querySelector(".ch-text")).toBe(text);
+    expect(text.classList.contains("pending")).toBe(false);
   });
 });

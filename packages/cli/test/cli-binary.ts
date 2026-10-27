@@ -20,9 +20,21 @@
  * times while `describe.concurrent` keeps twenty spawns in flight ran past the
  * 5s timeout there. It is the same code, precompiled, not a different program.
  *
- * One build per test process, shared by every suite in the package: the
- * promise is the lock, so the twenty concurrent tests Bun may have in flight
- * all await the same compile instead of racing twenty of them.
+ * A test in a `describe.concurrent` group runs on its own 5s clock but shares
+ * the CPU with every spawn in the group, so on a loaded machine its budget pays
+ * for the whole group's work. Only `cli.test.ts`, where running concurrently
+ * saves most of the package's wall time, keeps its groups concurrent. The other
+ * suites run in order, where running concurrently saved a second or three.
+ * A cap on spawns in flight does not help, because a test waiting for a slot
+ * is on its clock too; measured, it failed more tests than no cap at all.
+ *
+ * One build per test process, shared by every suite in the package, done by
+ * the top-level `await` below while the first suite that imports this file is
+ * loading. Module evaluation runs outside every test's and hook's 5s clock,
+ * which is where a compile of seconds belongs: inside a `beforeAll` it timed
+ * out on a loaded machine, and Bun killed the half-done compile with the hook.
+ * A hook registered here would not help: a module evaluates once per process,
+ * so its hooks bind to the first file that imports it and no other.
  */
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -42,12 +54,11 @@ const OUT = join(
   "hermetic",
 );
 
-let building: Promise<string> | undefined;
+const BINARY = await compile();
 
-/** The compiled CLI's path, compiling it on the first call. */
+/** The compiled CLI's path; the compile finished when this module loaded. */
 export function cliBinary(): Promise<string> {
-  building ??= compile();
-  return building;
+  return Promise.resolve(BINARY);
 }
 
 async function compile(): Promise<string> {

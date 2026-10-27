@@ -9,6 +9,7 @@ import type { BlockLike } from "../chat-logic.ts";
 import { CodePane } from "./Card.tsx";
 import { RedactedText } from "./RedactedText.tsx";
 import { JumpLink, useProcessEvents } from "./blocks/ProcessEvent.tsx";
+import { TextBlock } from "./blocks/Text.tsx";
 import { ToolBlock } from "./blocks/Tool.tsx";
 import { SubagentGroup } from "./blocks/Subagent.tsx";
 import { dispatchedOnly, isSubagent, subagentLayout } from "../chat-subagents.ts";
@@ -289,7 +290,12 @@ function Step({
             <RedactedText text={target} />
           </span>
         ) : null}
-        <span>{[state.word, duration].filter(Boolean).join(" \u00B7 ")}</span>
+        <span className="ch-activity-dur">
+          {/* A finished step's tick already says it worked: the time is enough. */}
+          {state.tone === "ok" && duration
+            ? duration
+            : [state.word, duration].filter(Boolean).join(" \u00B7 ")}
+        </span>
         {pid && anchors.has(pid) ? (
           <JumpLink end="event" processId={pid}>
             result ↓
@@ -371,19 +377,39 @@ function stepKey(block: ChatBlockView, index: number): string {
 
 /**
  * A group's identity within its turn, for the disclosure store. It must not
- * move while the turn streams, so it is read off the group's *first* block,
- * which a growing group keeps: that block's own identity when it has one, else
- * its position among the row's blocks (`position`, -1 outside a row), which
- * only appending cannot shift. A later block with an id is no use here — a
- * group that opened on bare reasoning would change key when its first tool
- * call streamed in, and lose the reader's choice with it.
+ * move while the turn streams, so it is read off the group's first *step*
+ * (`first`, see `anchorOf`), which a growing group keeps: that block's own
+ * identity when it has one, else its position among the row's blocks
+ * (`position`, -1 outside a row), which only appending cannot shift. A later
+ * block with an id is no use here — a group that opened on bare reasoning
+ * would change key when its first tool call streamed in, and lose the
+ * reader's choice with it.
  */
-function groupKey(blocks: readonly ChatBlockView[], position: number): string {
-  const first = blocks[0];
+function groupKey(first: ChatBlockView | undefined, position: number): string {
   if (first === undefined) return "group:empty";
   const own = stepKey(first, 0);
   if (!own.startsWith("row:")) return `group:${own}`;
   return position >= 0 ? `group:at:${position}` : "group:anonymous";
+}
+
+/**
+ * The block a group is keyed by: its first step, not a leading note. A turn
+ * that ends in activity hands its last text back to the answer when it
+ * settles (`Message`), so a leading note can leave the group; its first step
+ * never does.
+ */
+function anchorOf(blocks: readonly ChatBlockView[]): ChatBlockView | undefined {
+  return blocks.find((block) => block.kind !== "text") ?? blocks[0];
+}
+
+/** A note's last sentence, unmarked, for a live summary: "Let me check that:" → "Let me check that…". */
+function lastSentence(markdown: string): string {
+  const sentences = markdown
+    .replace(/\*\*|`|\*/g, "")
+    .trim()
+    .split(/(?<=[.!?:])\s+/)
+    .filter(Boolean);
+  return (sentences[sentences.length - 1] ?? "").replace(/:$/, "\u2026");
 }
 
 function ActivityGroupView({
@@ -398,7 +424,8 @@ function ActivityGroupView({
   // marks the summary rather than opening the group; see `Step`.
   // Kept in the thread's disclosure store too (`disclosures.ts`), so a group the
   // reader opened is still open when its row is scrolled away and back.
-  const group = groupKey(blocks, useRowPosition(blocks[0]));
+  const anchor = anchorOf(blocks);
+  const group = groupKey(anchor, useRowPosition(anchor));
   const [choice, setOpen] = useDisclosure(group);
   const rows = activityRows(blocks);
   if (rows.length === 0) return null;
@@ -407,8 +434,12 @@ function ActivityGroupView({
   // Delegated children are not steps of their own: each is a line under the
   // `delegate_task` call that spawned it (`subagentLayout`), the loose ones at
   // the end of the list.
+  // Narration between steps rides along as notes (`Message`): listed in order
+  // with the steps, never counted as one.
   const all = rows.filter((block) => !isStatusBlock(block));
-  const steps = all.filter((block) => block.kind !== "subagent");
+  const items = all.filter((block) => block.kind !== "subagent");
+  const steps = items.filter((block) => block.kind !== "text");
+  const notes = items.filter((block) => block.kind === "text");
   const kids = all.filter(isSubagent);
   const layout = subagentLayout(all);
   const kidsRunning = kids.filter((kid) => kid.verdict === "running" && !dispatchedOnly(kid)).length;
@@ -435,8 +466,10 @@ function ActivityGroupView({
   const snapshots = rows.filter(
     (block) => isStatusBlock(block) && block.kind === "activity" && block.category !== "usage",
   );
+  // Once the answer is arriving the transport is old news: the group stays
+  // live, but its status line goes.
   const statusLine =
-    (streaming
+    (streaming && activity !== "streaming"
       ? [...snapshots].reverse().find((block) => block.kind === "activity" && block.state === "running")
       : undefined) ?? (steps.length === 0 ? snapshots[snapshots.length - 1] : undefined);
   const failed = tools.some((block) => block.kind === "tool" && block.status === "bad");
@@ -464,6 +497,21 @@ function ActivityGroupView({
           ? statusLine.title
           : undefined
       : undefined;
+  // Live, the newest note says what the turn is doing, unless a step started
+  // after it is still running.
+  const lastNote = items.findLastIndex((block) => block.kind === "text");
+  const noteBlock = items[lastNote];
+  const said =
+    noteBlock?.kind === "text" &&
+    !items
+      .slice(lastNote + 1)
+      .some(
+        (block) =>
+          (block.kind === "tool" && block.status === "running") ||
+          (block.kind === "activity" && block.state === "running"),
+      )
+      ? lastSentence(noteBlock.markdown) || undefined
+      : undefined;
   const status = failed
     ? "Tool failed"
     : warning
@@ -475,27 +523,26 @@ function ActivityGroupView({
           : kidsFailed
             ? "Subagent failed"
             : streaming
-              ? activity === "streaming"
-                ? tools.length && tools.every((block) => block.status !== "running")
-                  ? "Tools complete"
-                  : "Responding…"
-                : (current ??
-                  (working
-                    ? "Working…"
-                    : activity === "thinking"
-                      ? "Thinking…"
-                      : tools.length
-                        ? "Tools complete"
-                        : "Thinking…"))
+              ? (said ??
+                (activity === "streaming"
+                  ? tools.length && tools.every((block) => block.status !== "running")
+                    ? "Tools complete"
+                    : "Responding…"
+                  : (current ??
+                    (working
+                      ? "Working…"
+                      : activity === "thinking"
+                        ? "Thinking…"
+                        : tools.length
+                          ? "Tools complete"
+                          : "Thinking…"))))
               : unfinished
                 ? remoteRunning
                   ? "Working…"
                   : remoteBusy === null
                     ? "No result yet"
                     : "Activity stopped"
-                : tools.length
-                  ? "Tools complete"
-                  : "Activity complete";
+                : "Worked";
   return (
     <details
       className={`ch-activity${failed || (kidsFailed && !kidsRunning) ? " failed" : warning ? " warning" : ""}`}
@@ -515,6 +562,7 @@ function ActivityGroupView({
                 ? `${steps.length} step${steps.length === 1 ? "" : "s"}`
                 : null,
             kids.length ? `${kids.length} subagent${kids.length === 1 ? "" : "s"}` : null,
+            notes.length ? `${notes.length} note${notes.length === 1 ? "" : "s"}` : null,
             taskCount ? `tasks ${taskCount.done}/${taskCount.total}` : null,
           ]
             .filter(Boolean)
@@ -527,13 +575,19 @@ function ActivityGroupView({
         ) : null}
       </summary>
       <ol className="ch-activity-list">
-        {steps.flatMap((block, index) => {
+        {items.flatMap((block, index) => {
           // A tool call keeps its identity across renders, so its step keeps
           // whatever the reader opened; only a block with no identity at all
           // falls back to its position.
           const key = stepKey(block, index);
           const children =
             block.kind === "tool" && block.tool_id ? layout.byTool.get(block.tool_id) : undefined;
+          if (block.kind === "text")
+            return [
+              <li key={key} className="ch-activity-note">
+                <TextBlock block={block} />
+              </li>,
+            ];
           return [
             <li key={key}>
               {block.kind === "tool" && block.todos ? (

@@ -1,6 +1,7 @@
 /**
  * One turn's work as the transcript draws it: which blocks are steps of the
- * run (grouped under one collapsible "Tools complete" head), which are
+ * run (grouped under one collapsible "Worked" head, with the narration between
+ * them folded in as notes), which are
  * addressed to the reader, what each step and the group say, and how a
  * delegated child reads on its one line.
  *
@@ -75,34 +76,94 @@ export interface Section {
 }
 
 /**
- * Split a turn's blocks into sections, the desktop's way (`Message.tsx`).
- * `todosApart`: the turn is running, so each todo call is its own one-line
- * Tasks row; once it settles they stay steps of their run. The `todo.updated`
- * notice and the resume seed restate a call and are never drawn.
+ * The turn's closing prose block: the last text block, provided only steps
+ * follow it; else -1. Mirrors desktop `finalText`
+ * (`packages/ui/src/chat/chat-silence.ts`).
  */
-export function sections(blocks: readonly ChatBlock[], todosApart = false): Section[] {
-  const out: Section[] = [];
-  let run: Section | null = null;
-  for (const block of blocks) {
-    if (isTodoNotice(block)) continue;
-    // A file or secret request is a card the operator answers, a shared file
-    // is a card with Save, a filed kanban card is its live card, and a
-    // bot-to-bot DM is a line between the prose:
-    // none is a step folded into "Tools complete". Each stands alone and
-    // closes the run.
-    if (
-      isRequestTool(block) ||
-      isShareTool(block) ||
-      isKanbanTaskTool(block) ||
-      isDmTool(block) ||
-      (todosApart && isTodoStep(block))
-    ) {
-      out.push({ activity: false, blocks: [block] });
-      run = null;
+export function finalText(blocks: readonly ChatBlock[]): number {
+  const index = blocks.findLastIndex((block) => block.kind === "text");
+  if (index < 0) return -1;
+  return blocks.slice(index + 1).every(isActivity) ? index : -1;
+}
+
+/**
+ * A block that joins (or opens) a run of steps. A file or secret request is a
+ * card the operator answers, a shared file is a card with Save, a filed
+ * kanban card is its live card, a bot-to-bot DM is a line between the prose,
+ * and while the turn runs a todo call is its own Tasks row: none is a step.
+ */
+function joinsRun(block: ChatBlock, streaming: boolean): boolean {
+  if (
+    isRequestTool(block) ||
+    isShareTool(block) ||
+    isKanbanTaskTool(block) ||
+    isDmTool(block) ||
+    (streaming && isTodoStep(block))
+  )
+    return false;
+  return isActivity(block) && !needsAttention(block);
+}
+
+/**
+ * Narration between steps ("Let me check that:"): a text block whose next
+ * step joins a run. It folds into the run as a note. Notices and other texts
+ * are looked past, but a settled turn's closing prose is never one and ends
+ * the look: nothing after it makes an earlier text a note.
+ */
+function isNote(blocks: readonly ChatBlock[], i: number, streaming: boolean, final: number): boolean {
+  const block = blocks[i];
+  if (block?.kind !== "text" || !block.markdown.trim() || i === final) return false;
+  for (let j = i + 1; j < blocks.length; j++) {
+    const next = blocks[j];
+    if (!next || next.kind === "activity") continue;
+    if (next.kind === "text") {
+      if (j === final) return false;
       continue;
     }
-    const attention = needsAttention(block);
-    if (isActivity(block) && !attention) {
+    return joinsRun(next, streaming);
+  }
+  return false;
+}
+
+/**
+ * Each section's React key. A group is keyed by its first step's identity,
+ * never a leading note, which can leave the group when the turn settles
+ * (desktop `anchorOf`), so the reader's open choice survives; by index when
+ * that step has no identity or another group already took it.
+ */
+export function sectionKeys(list: readonly Section[]): string[] {
+  const seen = new Set<string>();
+  return list.map((section, index) => {
+    if (!section.activity) return `b${index}`;
+    const first = section.blocks.find((block) => block.kind !== "text");
+    const own =
+      first?.kind === "tool" && first.tool_id
+        ? `a:tool:${first.tool_id}`
+        : first?.kind === "activity"
+          ? `a:activity:${first.key}`
+          : first?.kind === "subagent"
+            ? `a:subagent:${first.subagent_id}`
+            : null;
+    const key = own && !seen.has(own) ? own : `a${index}`;
+    seen.add(key);
+    return key;
+  });
+}
+
+/**
+ * Split a turn's blocks into sections, the desktop's way (`Message.tsx`).
+ * `streaming`: the turn is running, so each todo call is its own one-line
+ * Tasks row (once it settles they stay steps of their run), and its last
+ * prose is still narration if a step follows it. The `todo.updated` notice
+ * and the resume seed restate a call and are never drawn.
+ */
+export function sections(blocks: readonly ChatBlock[], streaming = false): Section[] {
+  const out: Section[] = [];
+  const final = streaming ? -1 : finalText(blocks);
+  let run: Section | null = null;
+  for (const [i, block] of blocks.entries()) {
+    if (isTodoNotice(block)) continue;
+    if (joinsRun(block, streaming) || isNote(blocks, i, streaming, final)) {
       if (run) run.blocks.push(block);
       else {
         run = { activity: true, blocks: [block] };
@@ -110,8 +171,10 @@ export function sections(blocks: readonly ChatBlock[], todosApart = false): Sect
       }
       continue;
     }
+    // Anything else stands alone and closes the run, but a warning notice
+    // leaves it open.
     out.push({ activity: false, blocks: [block] });
-    if (!(attention && block.kind === "activity")) run = null;
+    if (!(needsAttention(block) && block.kind === "activity")) run = null;
   }
   return out;
 }
@@ -133,8 +196,9 @@ export function activeGroup(
     lastActivity >= 0 &&
     list.slice(lastActivity + 1).every((s) => {
       const first = s.blocks[0];
-      // A Tasks row after the run is part of it, like a notice.
-      return first?.kind === "activity" || (!!first && isTodoStep(first));
+      // A Tasks row after the run is part of it, like a notice, and so is
+      // prose still arriving: the run stays live until the turn settles.
+      return first?.kind === "activity" || first?.kind === "text" || (!!first && isTodoStep(first));
     });
   return trailingNotices || (streaming && (activity === "thinking" || waiting))
     ? lastActivity
@@ -205,13 +269,25 @@ export interface GroupSummary {
   status: string;
   count: string;
   tone: "ok" | "bad" | "warn" | "muted";
+  /** Notes (text) and steps, in arrival order. */
   steps: ChatBlock[];
   kids: SubagentBlock[];
   usage: string | null;
 }
 
+/** A note's last sentence, plain, for the live head: "Let me check that…". */
+function lastSentence(markdown: string): string {
+  const pieces = markdown
+    .replace(/\*\*|`|\*/g, "")
+    .trim()
+    .split(/(?<=[.!?:])\s+/);
+  return (pieces[pieces.length - 1] ?? "").replace(/:$/, "…");
+}
+
 /**
  * The group head: what the run is doing or did, and how many steps it took.
+ * Notes (text folded into the run) are neither steps nor tools; while the run
+ * is live, a note newer than every step speaks for it.
  * `streaming` is this group being the live one; `turnRunning` is the turn it
  * belongs to still running, so a group that is not live (yet) is never
  * called complete before the turn settles.
@@ -226,15 +302,32 @@ export function groupSummary(
   const rows = activityRows(blocks);
   const all = rows.filter((b) => !isStatusBlock(b));
   const steps = all.filter((b) => b.kind !== "subagent");
+  const work = steps.filter((b) => b.kind !== "text");
+  const notes = steps.length - work.length;
   const kids = all.filter((b): b is SubagentBlock => b.kind === "subagent");
   const kidsRunning = kids.filter((k) => k.verdict === "running" && k.status !== "dispatched").length;
   const kidsFailed = kids.some((k) => k.verdict === "failed");
   const allTools = steps.filter((b) => b.kind === "tool");
   // A todo call is a task update, not a tool, in the head's words.
-  const updates = steps.filter(isTodoStep).length;
+  const updates = work.filter(isTodoStep).length;
   const tools = allTools.filter((b) => !isTodoStep(b));
   const finished = tools.length ? "Tools complete" : updates ? "Tasks updated" : null;
-  const latest = steps[steps.length - 1];
+  const latest = work[work.length - 1];
+  // Live, the newest note says what the run is doing, unless a step started
+  // after it is still running (desktop `said`).
+  const lastNote = steps.findLastIndex((b) => b.kind === "text");
+  const note = steps[lastNote];
+  const noteLine =
+    note?.kind === "text" &&
+    !steps
+      .slice(lastNote + 1)
+      .some(
+        (b) =>
+          (b.kind === "tool" && b.status === "running") ||
+          (b.kind === "activity" && b.state === "running"),
+      )
+      ? lastSentence(note.markdown)
+      : null;
   const working =
     !!latest &&
     ((latest.kind === "activity" && latest.state === "running") ||
@@ -246,7 +339,7 @@ export function groupSummary(
   const statusLine =
     (streaming
       ? [...snapshots].reverse().find((b) => b.kind === "activity" && b.state === "running")
-      : undefined) ?? (steps.length === 0 ? snapshots[snapshots.length - 1] : undefined);
+      : undefined) ?? (work.length === 0 ? snapshots[snapshots.length - 1] : undefined);
   const failed = allTools.some((b) => b.kind === "tool" && b.status === "bad");
   const warning = allTools.some((b) => b.kind === "tool" && b.status === "warn");
   const current =
@@ -270,22 +363,29 @@ export function groupSummary(
           : kidsFailed
             ? "Subagent failed"
             : streaming
-              ? activity === "streaming"
-                ? allSettled
-                  ? (finished ?? "Tools complete")
-                  : "Responding…"
-                : (current ??
-                  (working
-                    ? "Working…"
-                    : activity === "thinking"
-                      ? "Thinking…"
-                      : (finished ?? "Thinking…")))
+              ? noteLine ||
+                (activity === "streaming"
+                  ? allSettled
+                    ? (finished ?? "Tools complete")
+                    : "Responding…"
+                  : (current ??
+                    (working
+                      ? "Working…"
+                      : activity === "thinking"
+                        ? "Thinking…"
+                        : (finished ?? "Thinking…"))))
               : allTools.some((b) => b.kind === "tool" && b.status === "running")
                 ? turnRunning
                   ? "Working…"
                   : "Activity stopped"
-                : (finished ?? (turnRunning ? "Working…" : "Activity complete"));
-  const others = steps.length - updates;
+                : tools.length
+                  ? "Worked"
+                  : updates
+                    ? "Tasks updated"
+                    : turnRunning
+                      ? "Working…"
+                      : "Worked";
+  const others = work.length - updates;
   const count = [
     tools.length
       ? `${tools.length} tool${tools.length === 1 ? "" : "s"}`
@@ -294,6 +394,7 @@ export function groupSummary(
         : null,
     updates ? `${updates} task update${updates === 1 ? "" : "s"}` : null,
     kids.length ? `${kids.length} subagent${kids.length === 1 ? "" : "s"}` : null,
+    notes ? `${notes} note${notes === 1 ? "" : "s"}` : null,
   ]
     .filter(Boolean)
     .join(" · ");
