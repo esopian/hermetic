@@ -11,9 +11,14 @@ import { type FleetDeps, FleetProvider, type FleetSwitcher } from "./FleetProvid
 import { type FleetIndex, loadFleets, saveFleets, withFleet, withoutFleet } from "./fleets.ts";
 import { FleetStore, fleetRecordKey, type TextFile } from "./store.ts";
 
-export interface FleetSwitchDeps extends Omit<FleetDeps, "viewCache" | "inboxFile" | "recordKey"> {
+export interface FleetSwitchDeps
+  extends Omit<FleetDeps, "viewCache" | "inboxFile" | "rosterFile" | "recordKey"> {
   /** One fleet's view cache and inbox; `null` is the empty state before any pairing. */
-  fleetFiles(fleetId: string | null): { viewCache: TextFile; inboxFile: TextFile };
+  fleetFiles(fleetId: string | null): {
+    viewCache: TextFile;
+    inboxFile: TextFile;
+    rosterFile?: TextFile;
+  };
 }
 
 export function FleetSwitch({

@@ -61,7 +61,17 @@ export interface FixtureControls {
   /** A canned clipboard picture, as the paste control answers it, for the conversation's `?paste=image` link. */
   clipboardImage?: () => Promise<PastedImage>;
   tailscale: {
-    get(): Exclude<TailscaleStatus, "unknown">;
-    set(s: Exclude<TailscaleStatus, "unknown">): void;
+    get(): FixtureTailscaleMode;
+    set(s: FixtureTailscaleMode): void;
   };
 }
+
+/**
+ * What the fixture's network shows the Tailscale probe: a probe answer, or
+ * `waking`, a cold start with Tailscale set to connect on demand (the tunnel
+ * comes up `FIXTURE_WAKE_TUNNEL_MS` after the mode is picked, the boxes answer
+ * `FIXTURE_WAKE_BOXES_MS` after it), for home's connection header.
+ */
+export type FixtureTailscaleMode = Exclude<TailscaleStatus, "unknown"> | "waking";
+export const FIXTURE_WAKE_TUNNEL_MS = 6_000;
+export const FIXTURE_WAKE_BOXES_MS = 9_000;

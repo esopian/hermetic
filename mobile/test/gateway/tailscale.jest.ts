@@ -1,5 +1,12 @@
 import { resetTunnelChecks, tunnelVerified } from "../../src/gateway/hermeticd.ts";
-import { classifyProbeError, probeHosts, probeTailscale } from "../../src/gateway/tailscale.ts";
+import {
+  classifyProbeError,
+  probeHosts,
+  probeTailscale,
+  probeTunnel,
+  readTunnelPage,
+  TAILSCALE_SERVICE_URL,
+} from "../../src/gateway/tailscale.ts";
 import { fakeFetch, json } from "../helpers/fakes.ts";
 
 /** Errors shaped like what React Native's fetch rejects with on iOS. */
@@ -34,14 +41,77 @@ describe("classifyProbeError", () => {
   });
 });
 
+/** Box probes only: the Tailscale status page is asked on every probe too. */
+const boxCalls = (calls: { url: string }[]) => calls.filter((c) => c.url !== TAILSCALE_SERVICE_URL);
+
+/** Tailscale's own page (`ipn/ipnlocal/local.go`, `handleQuad100Port80Conn`), verbatim shapes. */
+const PAGE = {
+  connected: "<h1>Tailscale</h1>\n<p>Local addresses:</p><ul>\n<li>100.64.0.42</li>\n</ul>\n",
+  noNetmap: "<h1>Tailscale</h1>\nNo netmap.\n",
+  noAddresses: "<h1>Tailscale</h1>\nNo local addresses.\n",
+};
+
+describe("readTunnelPage", () => {
+  test.each([
+    ["the page listing this device's addresses: connected", 200, PAGE.connected, "connected"],
+    ["no netmap yet: running, not connected", 200, PAGE.noNetmap, "no_netmap"],
+    ["a netmap with no addresses: not connected yet", 200, PAGE.noAddresses, "no_netmap"],
+    [
+      "the web interface (turned on): still Tailscale, connected",
+      200,
+      "<title>Tailscale</title>",
+      "connected",
+    ],
+    ["something else answering that address: says nothing", 200, "<h1>Welcome</h1>", "unknown"],
+    ["an error status: says nothing", 502, PAGE.connected, "unknown"],
+  ])("%s", (_name, status, body, expected) => {
+    expect(readTunnelPage(status, body)).toBe(expected);
+  });
+});
+
+describe("probeTunnel", () => {
+  test("asks the service address once, with GET", async () => {
+    const f = fakeFetch(() => new Response(PAGE.connected));
+    expect(await probeTunnel({ fetch: f.fetch })).toBe("connected");
+    expect(f.calls.map((c) => [c.method, c.url])).toEqual([["GET", "http://100.100.100.100/"]]);
+  });
+
+  test("no answer, or no answer in time: down", async () => {
+    const refused = fakeFetch(() => {
+      throw RN.timedOut();
+    });
+    expect(await probeTunnel({ fetch: refused.fetch })).toBe("down");
+    const silent = fakeFetch(
+      (_url, init) =>
+        new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(RN.bare()))),
+    );
+    expect(await probeTunnel({ fetch: silent.fetch, timeoutMs: 10 })).toBe("down");
+  });
+});
+
 describe("probeTailscale", () => {
-  test("no hosts: unknown", async () => {
-    const f = fakeFetch(() => json({}));
+  test("no hosts: unknown, but Tailscale's own answer is still read", async () => {
+    const f = fakeFetch((url) =>
+      url === TAILSCALE_SERVICE_URL ? new Response(PAGE.noNetmap) : json({}),
+    );
     expect(await probeTailscale({ hosts: [], fetch: f.fetch })).toEqual({
       status: "unknown",
       failing: [],
+      tunnel: "no_netmap",
     });
-    expect(f.calls).toHaveLength(0);
+    expect(boxCalls(f.calls)).toHaveLength(0);
+  });
+
+  test("the box probes and Tailscale's page are asked together", async () => {
+    const f = fakeFetch((url) => {
+      if (url === TAILSCALE_SERVICE_URL) return new Response(PAGE.connected);
+      throw RN.timedOut();
+    });
+    expect(await probeTailscale({ hosts: ["a.t.ts.net"], fetch: f.fetch })).toEqual({
+      status: "unreachable",
+      failing: ["a.t.ts.net"],
+      tunnel: "connected",
+    });
   });
 
   test("any probe answering is ok, with the failing hosts listed; at most three probed", async () => {
@@ -53,8 +123,8 @@ describe("probeTailscale", () => {
       hosts: ["a.t.ts.net", "b.t.ts.net", "c.t.ts.net", "d.t.ts.net"],
       fetch: f.fetch,
     });
-    expect(result).toEqual({ status: "ok", failing: ["b.t.ts.net"] });
-    expect(f.calls.map((c) => c.url)).toEqual([
+    expect(result).toMatchObject({ status: "ok", failing: ["b.t.ts.net"] });
+    expect(boxCalls(f.calls).map((c) => c.url)).toEqual([
       "https://a.t.ts.net/api/health",
       "https://b.t.ts.net/api/health",
       "https://c.t.ts.net/api/health",
@@ -73,6 +143,7 @@ describe("probeTailscale", () => {
     expect(await probeTailscale({ hosts: ["a.t.ts.net", "b.t.ts.net"], fetch: f.fetch })).toEqual({
       status: "off",
       failing: ["a.t.ts.net", "b.t.ts.net"],
+      tunnel: "down",
     });
   });
 

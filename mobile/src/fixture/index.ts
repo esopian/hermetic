@@ -63,8 +63,13 @@ import { createPhoneFiles, type PhoneFilesFactory } from "../gateway/files.ts";
 import type { FetchLike } from "../gateway/hermeticd.ts";
 import type { PickedFile } from "../client/attachments.ts";
 import type { PastedImage } from "../client/paste.ts";
-import type { DemoPrompt, FixtureControls } from "../fleet/fixture-types.ts";
-import type { TailscaleStatus } from "../gateway/tailscale.ts";
+import {
+  type DemoPrompt,
+  FIXTURE_WAKE_BOXES_MS,
+  FIXTURE_WAKE_TUNNEL_MS,
+  type FixtureControls,
+  type FixtureTailscaleMode,
+} from "../fleet/fixture-types.ts";
 import { drive } from "./drive.ts";
 import { cacheWriter, clipboardSample, type SampleWriter, writeSampleFiles } from "./sample-files.ts";
 
@@ -207,22 +212,41 @@ export function memoryPushRegistry(): MemoryPushRegistry {
 
 /* ── the switchable Tailscale status ────────────────────────────────────── */
 
-export type FixtureTailscale = Exclude<TailscaleStatus, "unknown">;
+export type FixtureTailscale = FixtureTailscaleMode;
 
 export interface FixtureTailscaleSwitch {
   get(): FixtureTailscale;
   set(status: FixtureTailscale): void;
+  /**
+   * What the network shows right now: `waking` walks from `off` (no tunnel)
+   * through `tunnel` (Tailscale up, the boxes not yet answering) to `ok`.
+   */
+  network(): "ok" | "off" | "unreachable" | "tunnel";
 }
 
-function tailscaleSwitch(initial: FixtureTailscale = "ok"): FixtureTailscaleSwitch {
+function tailscaleSwitch(
+  initial: FixtureTailscale = "ok",
+  clock: () => number = Date.now,
+): FixtureTailscaleSwitch {
   let status = initial;
+  let since = clock();
   return {
     get: () => status,
     set: (next) => {
       status = next;
+      since = clock();
+    },
+    network: () => {
+      if (status !== "waking") return status;
+      const elapsed = clock() - since;
+      if (elapsed < FIXTURE_WAKE_TUNNEL_MS) return "off";
+      return elapsed < FIXTURE_WAKE_BOXES_MS ? "tunnel" : "ok";
     },
   };
 }
+
+/** Tailscale's own status page (`src/gateway/tailscale.ts`, `readTunnelPage`), as a connected client serves it. */
+const TUNNEL_PAGE = "<h1>Tailscale</h1>\n<p>Local addresses:</p><ul>\n<li>100.64.0.42</li>\n</ul>\n";
 
 /* ── the stand-in network ───────────────────────────────────────────────── */
 
@@ -253,10 +277,14 @@ export function fixtureFetch(input: {
   return async (request, init) => {
     const url = new URL(String(request instanceof Request ? request.url : request));
     const method = (init?.method ?? "GET").toUpperCase();
-    const status = input.tailscale.get();
+    const status = input.tailscale.network();
+    if (url.hostname === "100.100.100.100") {
+      if (status === "off") throw new TypeError("The request timed out.");
+      return new Response(TUNNEL_PAGE, { status: 200, headers: { "content-type": "text/html" } });
+    }
     if (status === "off")
       throw new TypeError("A server with the specified hostname could not be found.");
-    if (status === "unreachable") throw new TypeError("The request timed out.");
+    if (status === "unreachable" || status === "tunnel") throw new TypeError("The request timed out.");
     const fleet = fleetAt.get(url.hostname);
     if (!fleet) throw new TypeError("A server with the specified hostname could not be found.");
     if (url.pathname === "/api/health") return respond({ status: "ok" });

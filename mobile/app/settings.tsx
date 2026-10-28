@@ -40,7 +40,7 @@ import { minutesOf } from "../src/client/inbox-logic.ts";
 import { useFleetContext } from "../src/fleet/FleetProvider.tsx";
 import { useFleetAgents, useFleetState } from "../src/fleet/hooks.ts";
 import { isForbidden, type PushStatus } from "../src/fleet/push.ts";
-import type { TailscaleStatus } from "../src/gateway/tailscale.ts";
+import type { TailscaleStatus, TunnelState } from "../src/gateway/tailscale.ts";
 import { usePrefs } from "../src/prefs/prefs.tsx";
 import { supportReport } from "../src/support/diagnostics.ts";
 import { type SchemePreference, useTheme } from "../src/theme/theme.tsx";
@@ -412,6 +412,14 @@ const TAILSCALE_WORDS: Record<TailscaleStatus, string> = {
   unknown: "Not checked",
 };
 
+/** The Tailscale client's own answer (`probeTunnel`), as a line under the guess. */
+const TUNNEL_WORDS: Record<TunnelState, string> = {
+  connected: "Tailscale on this phone: connected",
+  no_netmap: "Tailscale on this phone: running, not connected yet",
+  down: "Tailscale on this phone: not answering",
+  unknown: "Tailscale on this phone: did not say",
+};
+
 /** What Settings says about push. */
 export function pushLine(push: PushStatus, wanted: boolean): string {
   if (push.state === "on") {
@@ -446,7 +454,7 @@ export function fleetViewLine(code: string | null): string {
     : "Fleet view: from boxes (no box answered /fleet)";
 }
 
-const FIXTURE_TAILSCALE = ["ok", "off", "unreachable"] as const;
+const FIXTURE_TAILSCALE = ["ok", "off", "unreachable", "waking"] as const;
 const SCHEMES: readonly SchemePreference[] = ["system", "dark", "light"];
 
 /* ── the screen ─────────────────────────────────────────────────────────── */
@@ -651,8 +659,8 @@ export default function Settings() {
                   <Note tone="warn">{`Did not answer: ${tailscale.failing.join(", ")}`}</Note>
                 ) : null}
                 <Note>
-                  A guess from asking up to three listened agents: iOS does not let an app ask the
-                  Tailscale app directly.
+                  A guess from asking up to three listened agents and Tailscale’s own status page on
+                  this phone: iOS does not let an app ask the Tailscale app directly.
                 </Note>
               </View>
             }
@@ -661,6 +669,7 @@ export default function Settings() {
               label={status ? TAILSCALE_WORDS[status] : "Checking…"}
               leading={<Dot color={tailscaleColor} />}
             />
+            {tailscale ? <Item label={TUNNEL_WORDS[tailscale.tunnel]} /> : null}
             <Item
               label={probing ? "Checking…" : "Check again"}
               tone="acc"

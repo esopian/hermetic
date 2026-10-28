@@ -9,7 +9,6 @@ import {
   openTailscale,
   TAILSCALE_APP_STORE_URL,
   TAILSCALE_URL,
-  TailscaleBanner,
 } from "../../src/ui/Banner.tsx";
 import type { ReactElement } from "react";
 import type { PanGesture } from "react-native-gesture-handler";
@@ -129,48 +128,7 @@ describe("Banner gestures and VoiceOver", () => {
   });
 });
 
-describe("TailscaleBanner", () => {
-  test("off: says so and opens Tailscale, not a retry", async () => {
-    const onRetry = jest.fn();
-    const onOpenTailscale = jest.fn();
-    await renderUi(
-      <TailscaleBanner status="off" onRetry={onRetry} onOpenTailscale={onOpenTailscale} />,
-    );
-    expect(screen.getByText("Tailscale is off or not signed in")).toBeTruthy();
-    await fireEvent.press(screen.getByLabelText("Open Tailscale"));
-    expect(onOpenTailscale).toHaveBeenCalledTimes(1);
-    expect(onRetry).not.toHaveBeenCalled();
-  });
-
-  test("unreachable: on the tailnet, no box answers, with a retry and Open Tailscale", async () => {
-    const onRetry = jest.fn();
-    const onOpenTailscale = jest.fn();
-    await renderUi(
-      <TailscaleBanner status="unreachable" onRetry={onRetry} onOpenTailscale={onOpenTailscale} />,
-    );
-    expect(screen.getByText("On the tailnet, but no box answers")).toBeTruthy();
-    await fireEvent.press(screen.getByLabelText("Retry"));
-    expect(onRetry).toHaveBeenCalledTimes(1);
-    await fireEvent.press(screen.getByLabelText("Open Tailscale"));
-    expect(onOpenTailscale).toHaveBeenCalledTimes(1);
-  });
-
-  test("the strip can be dismissed when the screen offers it", async () => {
-    const onDismiss = jest.fn();
-    await renderUi(<TailscaleBanner status="off" onRetry={jest.fn()} onDismiss={onDismiss} />);
-    await fireEvent.press(screen.getByLabelText("Dismiss"));
-    expect(onDismiss).toHaveBeenCalledTimes(1);
-    await renderUi(<TailscaleBanner status="off" onRetry={jest.fn()} />);
-    expect(screen.queryByLabelText("Dismiss")).toBeNull();
-  });
-
-  test("ok, unknown and not-yet-probed draw nothing", async () => {
-    for (const status of ["ok", "unknown", null] as const) {
-      await renderUi(<TailscaleBanner status={status} onRetry={jest.fn()} />);
-      expect(screen.queryByTestId("band-tailscale")).toBeNull();
-    }
-  });
-
+describe("openTailscale", () => {
   test("Open Tailscale uses the app when iOS says it can, else the App Store", async () => {
     const opened: string[] = [];
     const linking = (can: boolean) => ({

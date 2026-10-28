@@ -1,10 +1,10 @@
 /**
  * Banners: the in-app alert (a square bordered card at the top while the app is in front;
  * tap opens, close or a swipe up dismisses; under VoiceOver a Dismiss action
- * and the escape scrub) and home's Tailscale strip.
+ * and the escape scrub), and the way to the Tailscale app.
  */
 import { useEffect, useMemo, useRef } from "react";
-import { Linking, Pressable, useWindowDimensions, View } from "react-native";
+import { Linking, Pressable, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
   FadeInUp,
@@ -15,7 +15,6 @@ import Animated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Alert } from "../client/client.ts";
-import type { TailscaleStatus } from "../gateway/tailscale.ts";
 import { useTheme } from "../theme/theme.tsx";
 import { useAccessibilityPreferences } from "./AccessibilityPreferences.tsx";
 import { Avatar } from "./avatar/Avatar.tsx";
@@ -219,124 +218,4 @@ export async function openTailscale(
 ): Promise<void> {
   const installed = await linking.canOpenURL(TAILSCALE_URL).catch(() => false);
   await linking.openURL(installed ? TAILSCALE_URL : TAILSCALE_APP_STORE_URL).catch(() => {});
-}
-
-/**
- * Home's Tailscale strip, for the two probe answers worth a word
- * (`src/gateway/tailscale.ts`): `off` — no listened box's name resolved — and
- * `unreachable` — names resolve but no box answered. One slim line under the
- * top bar with quiet text actions: both offer "Open Tailscale", `unreachable`
- * also keeps "Retry", and the strip can be dismissed (it comes back when the
- * status changes). The probe is a heuristic, and the hint says "looks".
- */
-export function TailscaleBanner({
-  status,
-  busy = false,
-  onRetry,
-  onOpenTailscale = () => void openTailscale(),
-  onDismiss,
-}: {
-  status: TailscaleStatus | null;
-  busy?: boolean;
-  onRetry(): void;
-  onOpenTailscale?: () => void;
-  onDismiss?: () => void;
-}) {
-  const t = useTheme();
-  const { width, fontScale } = useWindowDimensions();
-  const stacked = width < 390 || fontScale > 1;
-  if (status !== "off" && status !== "unreachable") return null;
-  const off = status === "off";
-  const color = off ? t.c.bad : t.c.warn;
-  return (
-    <View
-      testID="band-tailscale"
-      accessibilityRole="alert"
-      accessibilityHint={
-        off
-          ? "The fleet's names did not resolve. It looks like Tailscale is not connected on this phone."
-          : "The boxes you listen to did not answer. They may be stopped, or still starting."
-      }
-      style={{
-        flexDirection: "row",
-        flexWrap: "wrap",
-        alignItems: "center",
-        gap: t.space.sm,
-        marginHorizontal: t.space.lg,
-        marginTop: t.space.xs,
-        paddingHorizontal: t.space.md,
-        paddingVertical: stacked ? t.space.xs : 0,
-        minHeight: t.touch.min,
-        backgroundColor: t.c.bg2,
-        borderWidth: t.border.row,
-        borderColor: t.c.line,
-        borderLeftWidth: t.border.seam,
-        borderLeftColor: color,
-      }}
-    >
-      <View style={{ width: 8, height: 8, backgroundColor: color }} />
-      <Text
-        variant="bodySmall"
-        weight={600}
-        style={{ flexGrow: 1, flexShrink: 1, flexBasis: stacked ? "85%" : 0 }}
-      >
-        {off ? "Tailscale is off or not signed in" : "On the tailnet, but no box answers"}
-      </Text>
-      {off ? null : <StripAction label="Retry" busyLabel="Retrying" busy={busy} onPress={onRetry} />}
-      <StripAction label="Open Tailscale" onPress={onOpenTailscale} />
-      {onDismiss ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Dismiss"
-          onPress={onDismiss}
-          style={{
-            width: t.touch.min,
-            height: t.touch.min,
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <Icon name="close" size={16} color={t.c.fg3} />
-        </Pressable>
-      ) : (
-        <View style={{ width: t.space.sm }} />
-      )}
-    </View>
-  );
-}
-
-/** A text-only action inside the strip: 44pt tall, accent label. */
-function StripAction({
-  label,
-  busyLabel,
-  busy = false,
-  onPress,
-}: {
-  label: string;
-  busyLabel?: string;
-  busy?: boolean;
-  onPress(): void;
-}) {
-  const t = useTheme();
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      accessibilityState={{ busy, disabled: busy }}
-      disabled={busy}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        minHeight: t.touch.min,
-        maxWidth: "100%",
-        flexShrink: 1,
-        paddingHorizontal: t.space.xs,
-        justifyContent: "center",
-        opacity: pressed || busy ? 0.6 : 1,
-      })}
-    >
-      <Text variant="bodySmall" weight={700} tone="acc">
-        {busy && busyLabel ? `${busyLabel}…` : label}
-      </Text>
-    </Pressable>
-  );
 }
