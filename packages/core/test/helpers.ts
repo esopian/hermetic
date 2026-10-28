@@ -29,6 +29,9 @@ import type { CoreContext } from "../src/context.ts";
  * `acme.ts.net` is the tailnet those tests already pass to `init`, so the
  * detected and the requested one agree and no disagreement warning is emitted.
  */
+/** Both resolvers answer: a laptop that uses Tailscale's DNS. No query is sent. */
+export const OK_TAILNET_DNS = async (name: string) => ({ name, via_tailscale: true, via_system: true });
+
 export const OK_TAILSCALE = async (): Promise<TailscalePreflight> => ({
   ok: true,
   installed: true,
@@ -143,6 +146,7 @@ export const OFFLINE_BROWSER_MIRROR: BrowserMirrorFn = async ({ chrome_ref, exis
 export function testHermetic(deps: HermeticDeps) {
   return createHermetic({
     localTailscale: OK_TAILSCALE,
+    localTailnetDns: OK_TAILNET_DNS,
     verifyTailscaleOauth: OK_OAUTH,
     hermesMirror: OFFLINE_HERMES_MIRROR,
     browserMirror: OFFLINE_BROWSER_MIRROR,

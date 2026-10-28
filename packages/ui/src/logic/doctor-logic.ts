@@ -84,6 +84,8 @@ export interface DoctorFacts {
     tailnet: string | null;
     https_certificates: boolean;
     detail: string;
+    /** One agent's name asked through Tailscale's resolver and the system's; null when not asked. */
+    dns?: { name: string; via_tailscale: boolean; via_system: boolean } | null;
   };
   /**
    * §5's fleet network mode. `checked_nat` is the field that keeps a `public`
@@ -357,6 +359,31 @@ function tailnet(d: DoctorFacts): DoctorCheck[] {
   return checks;
 }
 
+/**
+ * Whether this machine resolves the agents' MagicDNS names. Only "Tailscale's
+ * resolver answers, the system's does not" is a fault: the daemon is fine and
+ * the machine is simply not using its DNS. Not asked, or Tailscale's resolver
+ * silent too, is a skip: the fleet reads above say more than this could.
+ */
+function tailnetDns(dns: DoctorFacts["local_tailscale"]["dns"]): DoctorCheck {
+  const base = { id: "tailnet-dns", label: "tailnet names (DNS)" } as const;
+  if (!dns)
+    return {
+      ...base,
+      state: "skip",
+      detail: "unchecked — no agent name to ask, or tailscale did not answer",
+    };
+  if (dns.via_tailscale && dns.via_system)
+    return { ...base, state: "ok", detail: `${dns.name} resolves through Tailscale's DNS` };
+  if (dns.via_tailscale)
+    return {
+      ...base,
+      state: "bad",
+      detail: `${dns.name} resolves through Tailscale's resolver but not this machine's — turn on "Use Tailscale DNS"`,
+    };
+  return { ...base, state: "skip", detail: `Tailscale's resolver did not answer for ${dns.name}` };
+}
+
 function thisMachine(d: DoctorFacts): DoctorCheck[] {
   const lt = d.local_tailscale;
   /**
@@ -384,6 +411,7 @@ function thisMachine(d: DoctorFacts): DoctorCheck[] {
           ? "on for this tailnet — `tailscale serve --https=443` can get a certificate"
           : "off for this tailnet — every agents.create will fail on the box, twenty minutes in",
     },
+    tailnetDns(lt.dns ?? null),
     {
       /**
        * `aws.client()` pins the frozen profile, so these change nothing — but

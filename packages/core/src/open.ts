@@ -228,7 +228,12 @@ const FIXTURE_HERMES_FETCH: NonNullable<
   NonNullable<HermeticDeps["foundation"]>["hermesFetch"]
 > = async () => Response.json({ tag_name: fixtureLatestHermesTag(BUILD_VERSIONS.hermes_ref) });
 
-const FIXTURE_PREFLIGHT: Pick<HermeticDeps, "localTailscale" | "verifyTailscaleOauth"> = {
+const FIXTURE_PREFLIGHT: Pick<
+  HermeticDeps,
+  "localTailscale" | "localTailnetDns" | "verifyTailscaleOauth"
+> = {
+  // Both resolvers answer: the fixture laptop uses Tailscale's DNS, and no query is sent.
+  localTailnetDns: async (name) => ({ name, via_tailscale: true, via_system: true }),
   localTailscale: async () => ({
     ok: true,
     installed: true,

@@ -47,6 +47,7 @@ function healthy(): DoctorFacts {
       tailnet: "hermetic.ts.net",
       https_certificates: true,
       detail: "tailscale: hermetic.ts.net, HTTPS certificates on",
+      dns: { name: "fxtr0001-atlas.hermetic.ts.net", via_tailscale: true, via_system: true },
     },
     network: {
       mode: "nat",
@@ -348,6 +349,23 @@ describe("the local machine checks", () => {
       detail: "HTTPS Certificates is off",
     };
     expect(byId(d, "https-certificates").state).toBe("bad");
+  });
+
+  test("tailnet names: Tailscale's resolver answering and the system's not is the fault", () => {
+    const d = healthy();
+    const name = "fxtr0001-atlas.hermetic.ts.net";
+    d.local_tailscale = { ...d.local_tailscale, dns: null };
+    expect(byId(d, "tailnet-dns").state).toBe("skip");
+    d.local_tailscale = { ...d.local_tailscale, dns: { name, via_tailscale: true, via_system: true } };
+    expect(byId(d, "tailnet-dns").state).toBe("ok");
+    d.local_tailscale = { ...d.local_tailscale, dns: { name, via_tailscale: true, via_system: false } };
+    expect(byId(d, "tailnet-dns").state).toBe("bad");
+    expect(byId(d, "tailnet-dns").detail).toContain("Use Tailscale DNS");
+    d.local_tailscale = {
+      ...d.local_tailscale,
+      dns: { name, via_tailscale: false, via_system: false },
+    };
+    expect(byId(d, "tailnet-dns").state).toBe("skip");
   });
 
   test("exported credential env vars are a `warn` naming them", () => {
