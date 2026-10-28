@@ -1,9 +1,0 @@
-# Every issue goes through a form below; a blank issue is not offered.
-blank_issues_enabled: false
-contact_links:
-  - name: Report a security vulnerability
-    url: https://github.com/esopian/hermetic/security/advisories/new
-    about: Report privately, never in a public issue. See SECURITY.md.
-  - name: Documentation
-    url: https://hermeticfleet.dev/docs/
-    about: Install, setup and operating a fleet.
