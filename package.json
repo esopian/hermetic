@@ -53,14 +53,14 @@
     "mobile:ios": "cd mobile && bun run ios"
   },
   "devDependencies": {
-    "@aws-sdk/client-dynamodb": "^3.1124.0",
-    "@aws-sdk/lib-dynamodb": "^3.1124.0",
-    "@biomejs/biome": "2.5.12",
+    "@aws-sdk/client-dynamodb": "^3.1156.0",
+    "@aws-sdk/lib-dynamodb": "^3.1156.0",
+    "@biomejs/biome": "2.6.3",
     "@hermetic/cli": "workspace:*",
     "@hermetic/core": "workspace:*",
     "@hermetic/app": "workspace:*",
-    "@types/bun": "^1.4.0",
-    "bun-types": "^1.4.0",
+    "@types/bun": "^1.4.4",
+    "bun-types": "^1.4.4",
     "typescript": "^7.0.2"
   }
 }
