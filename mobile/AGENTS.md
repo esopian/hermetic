@@ -68,8 +68,17 @@ everything from `mobile/` with bun. Run `bun install` at the repo root first: Me
 iOS has no public API to ask the Tailscale app, so `src/gateway/tailscale.ts` infers it: it probes
 `https://<host>/api/health` (public, no token) on up to three listened boxes, 3 s each. DNS failure
 on every probe is `off`, every probe timing out or refused is `unreachable`, any success is `ok`, no
-listened boxes is `unknown`. Treat it as a heuristic: word the UI as one, and do not gate chat on it.
-Re-probe on foreground and after a failed request.
+listened boxes is `unknown`. Each probe also reads Tailscale's own status page at
+`http://100.100.100.100/` (`probeTunnel`: `connected`, `no_netmap`, `down`), which splits "Tailscale
+still waking" from "Tailscale up, box silent". It only chooses words, never opens the 7434 gate.
+Treat it all as a heuristic: word the UI as one, and do not gate chat on it. Re-probe on foreground and
+after a failed request.
+
+Home never shows a wait as an error: each attempt (launch, foreground, refresh, retry) has a 30 s
+grace (`src/client/connection.ts`), retried every 3 s by `FleetProvider.tsx`, during which each
+instance header draws the connection path (`src/ui/ConnectionPath.tsx`); only after it does the header
+say `no tailscale` or `not answering` and offer the fix. The fixture's `waking` Tailscale mode (Settings,
+fixture builds) walks the whole path: tunnel up after 6 s, boxes after 9 s.
 
 ## Admin the phone keeps
 

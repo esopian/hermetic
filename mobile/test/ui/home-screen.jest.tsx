@@ -32,6 +32,7 @@ async function setup(
   pinned: string[] = [],
   primary: string | null = null,
   chatViews: readonly unknown[] = [],
+  extra: Partial<FleetContextValue> = {},
 ) {
   const roster = new RosterStore(
     {
@@ -54,6 +55,7 @@ async function setup(
     probeTailscale: async () => {},
     refresh: async () => {},
     fleet: { subscribe: () => () => {}, getState: () => fleetState, agents: () => [] },
+    ...extra,
   } as unknown as FleetContextValue;
   await renderUi(
     <FleetContext.Provider value={ctx}>
@@ -173,4 +175,71 @@ test("a Bot Chat's task list tags its row, boxed beside the name, and never the 
   expect(screen.getByLabelText("Wren, tasks 1 of 3, paused")).toBeTruthy();
   expect(screen.getAllByTestId("row-tasks")).toHaveLength(2);
   expect(screen.getByLabelText("Default bot: Ops")).toBeTruthy();
+});
+
+/** The path and the row shapes are decoration: hidden from VoiceOver, so asked for explicitly. */
+const HIDDEN = { includeHiddenElements: true } as const;
+
+describe("the connection header", () => {
+  const down = swarm("atlas", [], { reachable: false, unreachable_reason: "TIMEOUT: no answer" });
+  const probe = (tunnel: "connected" | "down"): FleetContextValue["tailscale"] => ({
+    status: tunnel === "down" ? "off" : "unreachable",
+    failing: ["atlas.t.ts.net"],
+    tunnel,
+  });
+  /** An attempt started `ago` ms before now: past the quiet beat, so the path shows. */
+  const attempt = (ago: number) => ({ connection: { startedAt: Date.now() - ago } });
+
+  test("Tailscale still waking: the path, the step, and row shapes while nothing is drawn yet", async () => {
+    await setup([], ["atlas"], [], "atlas", [], { ...attempt(2_000), tailscale: probe("down") });
+    expect(screen.getByTestId("connection-path-waking", HIDDEN)).toBeTruthy();
+    expect(screen.getByLabelText("atlas, waking tailscale")).toBeTruthy();
+    expect(screen.getByText("Waking Tailscale…")).toBeTruthy();
+    expect(screen.getByTestId("home-connection-skeleton", HIDDEN)).toBeTruthy();
+    // A wait is not an error: the failed-read notice stays out of the way.
+    expect(screen.queryByText("Could not read the bots.")).toBeNull();
+  });
+
+  test("Tailscale up, the box not yet answering: reaching it", async () => {
+    await setup([down], ["atlas"], [], "atlas", [], {
+      ...attempt(4_000),
+      tailscale: probe("connected"),
+    });
+    expect(screen.getByTestId("connection-path-reaching", HIDDEN)).toBeTruthy();
+    expect(screen.getByLabelText("atlas, reaching atlas")).toBeTruthy();
+    expect(screen.getByText("Tailscale is up · asking atlas…")).toBeTruthy();
+  });
+
+  test("past the grace with Tailscale down: says so and offers the fix", async () => {
+    const retryConnection = jest.fn();
+    await setup([down], ["atlas"], [], "atlas", [], {
+      ...attempt(31_000),
+      tailscale: probe("down"),
+      retryConnection,
+    });
+    expect(screen.getByTestId("connection-path-no_tailscale", HIDDEN)).toBeTruthy();
+    expect(screen.getByLabelText("atlas, no tailscale")).toBeTruthy();
+    expect(screen.getByLabelText("Open Tailscale")).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText("Try again"));
+    expect(retryConnection).toHaveBeenCalledTimes(1);
+  });
+
+  test("past the grace with Tailscale up: the box is the one not answering, no Open Tailscale", async () => {
+    await setup([down], ["atlas"], [], "atlas", [], {
+      ...attempt(31_000),
+      tailscale: probe("connected"),
+    });
+    expect(screen.getByTestId("connection-path-no_box", HIDDEN)).toBeTruthy();
+    expect(screen.getByLabelText("atlas, not answering")).toBeTruthy();
+    expect(screen.queryByLabelText("Open Tailscale")).toBeNull();
+    expect(screen.getByLabelText("Try again")).toBeTruthy();
+  });
+
+  test("a box that answered this attempt draws no path", async () => {
+    await setup(SWARMS, ["atlas", "corvid"], [], "atlas", [], {
+      ...attempt(2_000),
+      tailscale: probe("connected"),
+    });
+    expect(screen.queryByTestId(/connection-path-/, HIDDEN)).toBeNull();
+  });
 });

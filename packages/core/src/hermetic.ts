@@ -25,6 +25,7 @@ import type { BuildIdentity, Plan, PlanRolloutInput } from "./schema/index.ts";
 import { PlanRolloutInput as PlanRolloutInputSchema, runTargetFor } from "./schema/index.ts";
 import { HEARTBEAT_INTERVAL_MS, UNREACHABLE_INTERVALS } from "./agents/state.ts";
 import { probeLocalTailscale, verifyTailscaleOauthClient } from "./fleet/preflight.ts";
+import { probeTailnetDns } from "./fleet/tailnet-dns.ts";
 import { createInit } from "./fleet/init.ts";
 import { runDoctor, type DoctorReport } from "./fleet/doctor.ts";
 import { createPlans } from "./agents/plans.ts";
@@ -130,6 +131,7 @@ export function createHermetic(deps: HermeticDeps) {
   const hermeticdVersion = deps.hermeticdVersion ?? DEFAULT_HERMETICD_VERSION;
   const hermesVersion = deps.hermesVersion ?? DEFAULT_HERMES_VERSION;
   const localTailscale = deps.localTailscale ?? (() => probeLocalTailscale());
+  const localTailnetDns = deps.localTailnetDns ?? ((name: string) => probeTailnetDns(name));
   /**
    * Absent means "this process cannot say which build it is", which reads as no
    * warning at all — never as agreement. `open.ts` wires the real one in real
@@ -378,6 +380,8 @@ export function createHermetic(deps: HermeticDeps) {
       // tailnet, so `doctor` is where an initialised fleet learns MagicDNS or
       // HTTPS Certificates got turned off.
       localTailscale,
+      // …and whether this machine resolves the agents' names through it.
+      localTailnetDns,
       // The §4.7 policy read and §5's network mode, from the modules `hermetic
       // policy` and `hermetic network` use: a fleet whose blocks or mode have
       // drifted has nowhere else to be told.

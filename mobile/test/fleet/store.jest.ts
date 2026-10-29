@@ -6,12 +6,13 @@ import {
   loadChunked,
   memoryFile,
   memoryKv,
+  rosterCacheStorage,
   SECURE_CHUNK,
   saveChunked,
 } from "../../src/fleet/store.ts";
 import { resetTunnelChecks } from "../../src/gateway/hermeticd.ts";
 import { fakeFetch, json } from "../helpers/fakes.ts";
-import { fleetView } from "../helpers/fixtures.ts";
+import { bot, fleetView, swarm } from "../helpers/fixtures.ts";
 
 const NOW = "2026-10-13T11:00:00.000Z";
 
@@ -531,5 +532,34 @@ describe("FleetStore", () => {
         now: () => NOW,
       }).load(),
     ).toBe(false);
+  });
+});
+
+describe("rosterCacheStorage", () => {
+  const snapshot = {
+    swarms: [swarm("atlas", [bot()])],
+    answeredAt: { atlas: 1_760_000_000_000 },
+  };
+
+  test("round-trips one fleet's snapshot", async () => {
+    const file = memoryFile();
+    const cache = rosterCacheStorage(file);
+    await cache.save("fxtr0001", snapshot);
+    expect(await cache.load("fxtr0001")).toEqual(snapshot);
+  });
+
+  test("another fleet's file, another version or a broken shape reads as nothing", async () => {
+    const file = memoryFile();
+    await rosterCacheStorage(file).save("fxtr0001", snapshot);
+    expect(await rosterCacheStorage(file).load("sg7k2m4p")).toBeNull();
+    expect(
+      await rosterCacheStorage(memoryFile('{"v":2,"fleet_id":"fxtr0001"}')).load("fxtr0001"),
+    ).toBeNull();
+    expect(
+      await rosterCacheStorage(memoryFile('{"v":1,"fleet_id":"fxtr0001","swarms":[{"bots":7}]}')).load(
+        "fxtr0001",
+      ),
+    ).toBeNull();
+    expect(await rosterCacheStorage(memoryFile("not json")).load("fxtr0001")).toBeNull();
   });
 });

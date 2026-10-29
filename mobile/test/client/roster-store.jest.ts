@@ -1,4 +1,5 @@
 import {
+  type RosterSnapshot,
   RosterStore,
   bucketSignal,
   compareBots,
@@ -205,6 +206,50 @@ describe("RosterStore", () => {
     up = true;
     await store.refresh();
     expect(store.getState().swarms[0]!.reachable).toBe(true);
+  });
+
+  test("a read saves what each box listed and when it answered; a cold start draws it unreachable", async () => {
+    let saved: RosterSnapshot | null = null;
+    const cache = {
+      load: jest.fn(async () => saved),
+      save: jest.fn(async (_fleet: string, snapshot: RosterSnapshot) => {
+        saved = snapshot;
+      }),
+    };
+    const first = new RosterStore(source(), null, () => 500, cache);
+    await first.setFleet("fxtr0001");
+    await first.refresh();
+    expect(first.getState().answeredAt).toEqual({ atlas: 500 });
+    expect(saved).toMatchObject({ answeredAt: { atlas: 500 }, swarms: [{ instance: "atlas" }] });
+
+    // The next launch: nothing read yet, the saved rows are drawn, every box unreachable.
+    const never = {
+      ...source(),
+      swarms: () => new Promise<{ swarms: ReturnType<typeof swarm>[] }>(() => {}),
+    };
+    const next = new RosterStore(never, null, () => 900, cache);
+    await next.setFleet("fxtr0001");
+    const state = next.getState();
+    expect(state.readAt).toBeNull();
+    expect(state.answeredAt).toEqual({ atlas: 500 });
+    expect(state.swarms.map((s) => [s.instance, s.reachable, s.bots.length])).toEqual([
+      ["atlas", false, 1],
+    ]);
+  });
+
+  test("a saved roster never replaces a read that already landed", async () => {
+    const cache = {
+      load: async () => ({
+        swarms: [swarm("atlas", [bot({ name: "old" })])],
+        answeredAt: { atlas: 1 },
+      }),
+      save: async () => {},
+    };
+    const store = new RosterStore(source(), null, () => 42, cache);
+    await store.refresh();
+    await store.setFleet("fxtr0001");
+    expect(store.getState().swarms[0]).toMatchObject({ reachable: true });
+    expect(store.getState().swarms[0]!.bots.map((b) => b.name)).toEqual(["scribe"]);
   });
 
   test("a bot waiting on the operator reads needs-you until the wait is cleared", async () => {

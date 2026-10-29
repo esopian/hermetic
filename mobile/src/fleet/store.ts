@@ -29,9 +29,9 @@
  * `/healthz` answer wins over a cached view.
  */
 import type { MobileFleetAgent, MobileFleetView } from "@hermetic/core/schema";
-import { MobileFleetView as MobileFleetViewSchema } from "@hermetic/core/schema";
+import { MobileFleetView as MobileFleetViewSchema, Swarm as SwarmSchema } from "@hermetic/core/schema";
 import { reasonOf } from "../client/errors.ts";
-import type { RosterPrefs, RosterPrefsStorage } from "../client/roster-store.ts";
+import type { RosterCacheStorage, RosterPrefs, RosterPrefsStorage } from "../client/roster-store.ts";
 import { agentHost, type FleetHosts } from "../gateway/client.ts";
 import { type FetchLike, fetchHealthz, firstFleetView } from "../gateway/hermeticd.ts";
 import { type PairedLink, readPairingLink } from "./pairing.ts";
@@ -112,6 +112,40 @@ export function rosterPrefsStorage(kv: KvStorage): RosterPrefsStorage {
       }
     },
     save: (fleetId, prefs) => kv.set(`hermetic.rail.${fleetId}`, JSON.stringify(prefs)),
+  };
+}
+
+/**
+ * The last roster read, as one JSON file per fleet. Bot names, titles and the
+ * last line of each conversation, the same class of text the inbox file keeps;
+ * a file from another fleet, another version or a shape that does not parse
+ * reads as nothing.
+ */
+export function rosterCacheStorage(file: TextFile): RosterCacheStorage {
+  return {
+    async load(fleetId) {
+      const raw = await file.read().catch(() => null);
+      if (!raw) return null;
+      try {
+        const v = JSON.parse(raw) as {
+          v?: unknown;
+          fleet_id?: unknown;
+          swarms?: unknown;
+          answeredAt?: unknown;
+        };
+        if (v.v !== 1 || v.fleet_id !== fleetId) return null;
+        const swarms = SwarmSchema.array().safeParse(v.swarms);
+        if (!swarms.success) return null;
+        const answeredAt: Record<string, number> = {};
+        if (v.answeredAt && typeof v.answeredAt === "object")
+          for (const [k, at] of Object.entries(v.answeredAt as Record<string, unknown>))
+            if (typeof at === "number" && Number.isFinite(at)) answeredAt[k] = at;
+        return { swarms: swarms.data, answeredAt };
+      } catch {
+        return null;
+      }
+    },
+    save: (fleetId, snapshot) => file.write(JSON.stringify({ v: 1, fleet_id: fleetId, ...snapshot })),
   };
 }
 

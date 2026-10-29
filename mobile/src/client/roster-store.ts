@@ -314,6 +314,22 @@ export interface RosterPrefs {
 
 export const EMPTY_ROSTER_PREFS: RosterPrefs = { pinned: [], folded: [] };
 
+/**
+ * The last roster read, kept between launches (per fleet) so a cold start
+ * draws the chats it had while Tailscale wakes, instead of an empty list.
+ * `answeredAt` is when each instance last answered (ms epoch), for "as of".
+ */
+export interface RosterSnapshot {
+  swarms: Swarm[];
+  answeredAt: Record<string, number>;
+}
+
+/** Where the snapshot lives between launches. */
+export interface RosterCacheStorage {
+  load(fleetId: string): Promise<RosterSnapshot | null>;
+  save(fleetId: string, snapshot: RosterSnapshot): Promise<void>;
+}
+
 /** Where pins and folds live between launches (per fleet). */
 export interface RosterPrefsStorage {
   load(fleetId: string): Promise<RosterPrefs | null>;
@@ -331,6 +347,12 @@ export interface RosterState {
    * did not list names a bot that box no longer has (`entryLive`).
    */
   readAt: number | null;
+  /**
+   * When each instance last answered a read (ms epoch), this launch or a
+   * saved one: the connection header reads it to tell an answer made during
+   * this attempt from rows drawn from an older read.
+   */
+  answeredAt: Readonly<Record<string, number>>;
   filter: RailFilter;
   query: string;
   prefs: RosterPrefs;
@@ -349,6 +371,7 @@ export class RosterStore {
     loading: false,
     error: null,
     readAt: null,
+    answeredAt: {},
     filter: "all",
     query: "",
     prefs: EMPTY_ROSTER_PREFS,
@@ -367,6 +390,7 @@ export class RosterStore {
     private readonly source: RosterSource,
     private readonly storage: RosterPrefsStorage | null = null,
     private readonly now: () => number = Date.now,
+    private readonly cache: RosterCacheStorage | null = null,
   ) {}
 
   getState(): RosterState {
@@ -399,7 +423,15 @@ export class RosterStore {
       pinned: stored?.pinned ?? EMPTY_ROSTER_PREFS.pinned,
       folded: stored?.folded ?? EMPTY_ROSTER_PREFS.folded,
     };
-    if (this.fleetId === fleetId) this.set({ prefs });
+    if (this.fleetId !== fleetId) return;
+    this.set({ prefs });
+    // The saved roster, only while nothing fresher has been read: every saved
+    // swarm is drawn unreachable until its box answers this launch.
+    const snapshot = await this.cache?.load(fleetId).catch(() => null);
+    if (!snapshot || this.fleetId !== fleetId || this.state.readAt !== null || this.listed.length > 0)
+      return;
+    this.listed = snapshot.swarms.map((s) => ({ ...s, reachable: false, unreachable_reason: null }));
+    this.set({ swarms: this.drawn(), answeredAt: { ...snapshot.answeredAt } });
   }
 
   /** Read swarms and listening together. A stale answer never overwrites a newer one. */
@@ -416,13 +448,17 @@ export class RosterStore {
       if (gen !== this.gen) return false;
       this.listed = keepKnownBots(swarms.swarms, this.listed);
       this.bumps = new Map([...this.bumps].filter(([, bump]) => bump.seq > mark));
+      const answeredAt = { ...this.state.answeredAt };
+      for (const s of swarms.swarms) if (s.reachable) answeredAt[s.instance] = startedAt;
       this.set({
         swarms: this.drawn(),
         listening: listening.instances,
         loading: false,
         error: null,
         readAt: startedAt,
+        answeredAt,
       });
+      this.saveSnapshot();
       return true;
     } catch (error) {
       if (gen !== this.gen) return false;
@@ -541,6 +577,7 @@ export class RosterStore {
       loading: false,
       error: null,
       readAt: null,
+      answeredAt: {},
       query: "",
       filter: "all",
     });
@@ -549,6 +586,15 @@ export class RosterStore {
   /** The last read with this phone's bumps and waiting requests folded in. */
   private drawn(): Swarm[] {
     return withWaiting(withBumps(this.listed, this.bumps), this.waiting);
+  }
+
+  /** The bots each instance last listed (no bumps, no waiting marks: those are this launch's). */
+  private saveSnapshot(): void {
+    if (!this.fleetId || !this.cache) return;
+    const swarms = this.listed.filter((s) => s.bots.length > 0);
+    void this.cache
+      .save(this.fleetId, { swarms, answeredAt: { ...this.state.answeredAt } })
+      .catch(() => {});
   }
 
   private savePrefs(prefs: RosterPrefs): void {

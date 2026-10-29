@@ -61,6 +61,15 @@ export const IGNORED_ADVISORIES: string[] = [
   // zod ^4.6.7 in core, cli and app.
   // Owner: mobile. Review by 2026-12-01, or when @expo/cli moves to zod 4.
   "GHSA-mrhx-c7xc-m3w5",
+  // GHSA-qr28-fpjm-wq7f — decode-uri-component <= 0.5.0 (quadratic replacement
+  // of percent-encoded runs). Granted for mobile/ only, where 0.2.2 comes in
+  // through expo-router -> query-string@7, which parses the app's own route and
+  // deep-link URLs: the worst case is a slow parse of a crafted link the
+  // operator taps on their own phone. The only fix, 0.5.1, is ESM-only, and
+  // query-string@7 `require`s it as a function, so an override would break
+  // every URL decode; expo-router up to 57.0.29 still pins query-string ^7.
+  // Owner: mobile. Review by 2026-12-01, or when expo-router drops query-string 7.
+  "GHSA-qr28-fpjm-wq7f",
   // GHSA-xjj6-f33q-929c — undici < 7.30.1 / < 8.12.2 (DoS on excessive
   // content-encodings). Tree: site/ only, via wrangler -> miniflare (exact pin
   // undici@7.29.1, still pinned in the latest miniflare) for the local preview,

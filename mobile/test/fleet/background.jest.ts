@@ -83,12 +83,14 @@ test("paired: refreshes the fleet view into the cache, probes Tailscale, sets th
   expect(firstProbe).toBeLessThan(firstFleet);
   expect(badges).toEqual([1]);
   expect(JSON.parse(viewCache.text() ?? "{}").agents).toHaveLength(11);
-  // Boxes only: hermeticd's /fleet and the gateways' health route.
+  // Boxes only (hermeticd's /fleet and the gateways' health route), plus Tailscale's own status page.
   expect(
-    calls.every((url) =>
-      /^(http:\/\/fxtr0001-[a-z0-9-]+\.hermetic\.ts\.net:7434\/fleet|https:\/\/fxtr0001-[a-z0-9-]+\.hermetic\.ts\.net\/api\/health)$/.test(
-        url,
-      ),
+    calls.every(
+      (url) =>
+        url === "http://100.100.100.100/" ||
+        /^(http:\/\/fxtr0001-[a-z0-9-]+\.hermetic\.ts\.net:7434\/fleet|https:\/\/fxtr0001-[a-z0-9-]+\.hermetic\.ts\.net\/api\/health)$/.test(
+          url,
+        ),
     ),
   ).toBe(true);
   // The inbox file is read, never rewritten.
