@@ -34,6 +34,10 @@ jobs:
     permissions:
       # contents: write — publishes the GitHub Release and uploads packages/app/artifacts/*
       contents: write
+      # id-token: write — mints the OIDC token Sigstore exchanges for the attestation's signing certificate
+      id-token: write
+      # attestations: write — stores the build-provenance attestation for every published artifact
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -171,23 +175,19 @@ jobs:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
         run: bun scripts/sign-update.ts packages/app/artifacts
 
+      # Build provenance for every file the release publishes: a Sigstore-signed
+      # statement that this workflow, at this commit, produced these exact bytes.
+      # Anyone can check a download with
+      # `gh attestation verify <file> --repo esopian/hermetic`. Independent of
+      # Apple's signature and the update signature, and needs no secret.
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: packages/app/artifacts/*
+
       - name: Publish the GitHub Release
         env:
           # Scoped to this job by the `permissions` block above; every other
           # job in every other workflow keeps the read-only default.
           GH_TOKEN: ${{ github.token }}
         run: gh release create "${GITHUB_REF_NAME}" packages/app/artifacts/* --generate-notes
-
-  # Deploys the marketing/docs site's landing page and download links against
-  # the release that `publish` just created. A failed site deploy does not
-  # un-publish the release — the release is the product, the site follows it
-  # — so this is its own job rather than a step of `publish`; a docs-only
-  # re-deploy later goes through `gh workflow run site.yml -f ref=<tag>`
-  # instead of cutting a new release.
-  site:
-    name: site
-    needs: publish
-    uses: ./.github/workflows/site.yml
-    with:
-      ref: ${{ github.ref_name }}
-    secrets: inherit

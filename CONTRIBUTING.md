@@ -513,7 +513,7 @@ To have an agent walk you through it, ask for a release or run `/release` (`.cla
 
 `bun run app:build:canary` (CI's `app` job, every push) builds the canary channel on every commit to prove the app still builds — it is verification, not distribution: nothing it produces is uploaded or published, and the canary channel is never what `release.yml` ships.
 
-A release also deploys the marketing/docs site (`.github/workflows/site.yml`, called after `publish`, which runs `site/scripts/deploy.ts --production`); one-time Cloudflare/GitHub setup is in `site/README.md`, and `bun run site:deploy` makes a verified preview deploy from a laptop.
+A release does not deploy the marketing/docs site. After the release publishes, deploy it by hand from the tag's checkout: `cd site && bun run deploy --production` (`site/scripts/deploy.ts`; one-time Cloudflare setup is in `site/README.md`). `bun run site:deploy` makes a verified preview deploy.
 
 ### Signing
 

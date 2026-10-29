@@ -200,8 +200,8 @@ jobs:
       - run: bun run app:build:canary
       - run: ls -R packages/app/artifacts
 
-  # Builds and checks site/ (no deploy, no secrets — that is site.yml, tag- or
-  # dispatch-triggered only). This job always runs, even when site/ did not
+  # Builds and checks site/ (no deploy, no secrets — production deploys are
+  # made by hand, site/README.md "Deploy setup"). This job always runs, even when site/ did not
   # change, so the `ci` aggregate never sees it reported `skipped` (a skipped
   # required job is a green check with a hole in it, same reasoning as the
   # `dynamodb-local` and `app` jobs above). The `changes` step below decides
