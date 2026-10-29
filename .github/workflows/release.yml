@@ -80,7 +80,7 @@ jobs:
       # shellcheck through `uvx` (pinned in scripts/lint-cfn.ts and
       # scripts/lint-sh.ts) — the same install ci.yml's lint jobs make.
       - name: Install uv (for cfn-lint and shellcheck)
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           enable-cache: true
       # `bun run check`, step by step, with its `bun test` replaced by the two
