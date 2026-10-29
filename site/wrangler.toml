@@ -1,7 +1,7 @@
 # The hermetic site as a Cloudflare Worker with static assets and no script: every request is
 # answered from dist/, with public/_headers and public/_redirects applied. Deployed only through
 # scripts/deploy.ts (previews: `wrangler versions upload --preview-alias`, production:
-# `wrangler deploy --domain <HERMETIC_SITE_URL's host>`), from a laptop or .github/workflows/site.yml.
+# `wrangler deploy --domain <HERMETIC_SITE_URL's host>`), from a laptop.
 name = "hermetic-site"
 compatibility_date = "2026-09-01"
 # The <name>.<account subdomain>.workers.dev address and per-version preview URLs, which previews
