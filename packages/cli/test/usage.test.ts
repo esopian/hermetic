@@ -44,7 +44,7 @@ function soleDocument(stdout: string): unknown {
   return JSON.parse(stdout);
 }
 
-describe.concurrent("Commander's own usage errors", () => {
+describe("Commander's own usage errors", () => {
   const usage: Array<{ label: string; argv: string[]; says: string }> = [
     { label: "an unknown command", argv: ["nope"], says: "unknown command" },
     { label: "an unknown subcommand", argv: ["agent", "nope"], says: "unknown command" },
@@ -110,7 +110,7 @@ describe.concurrent("Commander's own usage errors", () => {
  * --no-secret`, and `secrets rm` went on telling operators to run it. A pointer
  * to a command this build does not have is worse than no pointer at all.
  */
-describe.concurrent("help text names only commands this build has", () => {
+describe("help text names only commands this build has", () => {
   test("`secrets rm --help` points at commands that exist", async () => {
     const { code, stdout } = await run("secrets", "rm", "--help");
     expect(code).toBe(EXIT_OK);
@@ -131,7 +131,7 @@ describe.concurrent("help text names only commands this build has", () => {
   });
 });
 
-describe.concurrent("--json keeps stdout to one document", () => {
+describe("--json keeps stdout to one document", () => {
   test("on the success path", async () => {
     const { code, stdout, stderr } = await run("agent", "ps", "--json");
     expect(code).toBe(EXIT_OK);

@@ -61,6 +61,7 @@
     "build:preview": "bunx eas-cli@24.14.0 build --platform ios --profile preview",
     "build:production": "bunx eas-cli@24.14.0 build --platform ios --profile production",
     "submit:testflight": "bunx eas-cli@24.14.0 submit --platform ios --profile production",
+    "release:testflight": "bunx eas-cli@24.14.0 workflow:run .eas/workflows/testflight.yml",
     "eas-build-pre-install": "bun install --cwd .. --frozen-lockfile --ignore-scripts"
   },
   "private": true,

@@ -207,7 +207,7 @@ describe("cards", () => {
 });
 
 describe("activity group", () => {
-  test("settled tools: 'Tools complete · N tools', steps on open", async () => {
+  test("settled tools: 'Worked · N tools', steps on open", async () => {
     await renderUi(
       <ActivityGroup
         blocks={[
@@ -217,10 +217,22 @@ describe("activity group", () => {
         streaming={false}
       />,
     );
-    expect(screen.getByText("Tools complete")).toBeTruthy();
+    expect(screen.getByText("Worked")).toBeTruthy();
     expect(screen.getByText("2 tools")).toBeTruthy();
-    await fireEvent.press(screen.getByLabelText("Tools complete, 2 tools"));
+    await fireEvent.press(screen.getByLabelText("Worked, 2 tools"));
     expect(screen.getByText("read_file")).toBeTruthy();
+  });
+
+  test("an opened group shows its notes between the steps", async () => {
+    await renderUi(
+      <ActivityGroup
+        blocks={[{ kind: "text", markdown: "Let me look." }, tool({ status: "ok" })]}
+        streaming={false}
+      />,
+    );
+    expect(screen.queryByText("Let me look.")).toBeNull();
+    await fireEvent.press(screen.getByLabelText("Worked, 1 tool · 1 note"));
+    expect(screen.getByText("Let me look.")).toBeTruthy();
   });
 
   test("a failed tool says so", async () => {

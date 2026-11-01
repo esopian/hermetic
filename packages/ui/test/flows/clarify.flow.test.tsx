@@ -44,6 +44,17 @@ async function openScribe(): Promise<HTMLElement> {
 }
 
 /**
+ * Put `text` in the composer and press Enter. Pasted, not typed: what is under
+ * test is the clarify loop, and a render per keystroke is what a loaded machine
+ * is slowest at, enough to push a flow past bun's 5 s.
+ */
+async function send(composer: HTMLElement, text: string): Promise<void> {
+  await userEvent.click(composer);
+  await userEvent.paste(text);
+  await userEvent.keyboard("{Enter}");
+}
+
+/**
  * Hold the transcript re-read that follows a finished turn. The fixture's turn
  * runs to `done` the instant it is answered, and the page then redraws from
  * history, which no longer holds the card. Holding that read keeps the live
@@ -89,7 +100,7 @@ const holderText = () => holder()?.textContent ?? "";
 test("a batch clarify is one card, answered whole, and the same turn continues", async () => {
   const composer = await openScribe();
   const release = holdTranscript();
-  await userEvent.type(composer, "E2E_BATCH_CLARIFY{Enter}");
+  await send(composer, "E2E_BATCH_CLARIFY");
 
   const card = await theCard();
   expect(within(card).getByText("Pick a batch drink?")).toBeTruthy();
@@ -142,7 +153,7 @@ test("a batch clarify is one card, answered whole, and the same turn continues",
 test("a blocking clarify is one card, and Yes continues the turn", async () => {
   const composer = await openScribe();
   const release = holdTranscript();
-  await userEvent.type(composer, "E2E_BLOCKING_CLARIFY{Enter}");
+  await send(composer, "E2E_BLOCKING_CLARIFY");
 
   const card = await theCard();
   expect(within(card).getByText("Keep this test turn running?")).toBeTruthy();
@@ -161,7 +172,7 @@ test("a blocking clarify is one card, and Yes continues the turn", async () => {
 test("a question answered from its card is no longer open, so the next message skips nothing", async () => {
   const composer = await openScribe();
   const release = holdTranscript();
-  await userEvent.type(composer, "E2E_BLOCKING_CLARIFY{Enter}");
+  await send(composer, "E2E_BLOCKING_CLARIFY");
 
   const card = await theCard();
   await userEvent.click(within(card).getByRole("radio", { name: "Yes" }));
@@ -172,7 +183,7 @@ test("a question answered from its card is no longer open, so the next message s
   // The gateway sends no close after an ordinary answer, so only the card's
   // own release says the question is done: the next message goes out without
   // a skip, and the card is not relabelled as skipped.
-  await userEvent.type(composer, "thanks{Enter}");
+  await send(composer, "thanks");
   release();
   await waitFor(
     () => expect(harness!.calls.filter((call) => call.name === "chat.turn")).toHaveLength(2),
@@ -188,11 +199,11 @@ test("a question answered from its card is no longer open, so the next message s
 test("Enter while a batch is open queues the message and leaves the card answerable", async () => {
   const composer = await openScribe();
   const release = holdTranscript();
-  await userEvent.type(composer, "E2E_BATCH_CLARIFY{Enter}");
+  await send(composer, "E2E_BATCH_CLARIFY");
   const card = await theCard();
 
   // D4a: queueing is "after the current work", and the question is that work.
-  await userEvent.type(composer, "just pick coffee{Enter}");
+  await send(composer, "just pick coffee");
   await waitFor(() => expect(document.querySelectorAll(".ch-queue-row")).toHaveLength(1), WAIT);
   expect(harness!.calls.filter((call) => call.name === "chat.respond")).toHaveLength(0);
   expect(document.querySelector(".ch-composer-question")?.textContent).toBe(
@@ -220,10 +231,11 @@ test("Enter while a batch is open queues the message and leaves the card answera
 test("⌘Enter while a batch is open skips the card, which stays as Skipped, and the turn continues", async () => {
   const composer = await openScribe();
   const release = holdTranscript();
-  await userEvent.type(composer, "E2E_BATCH_CLARIFY{Enter}");
+  await send(composer, "E2E_BATCH_CLARIFY");
   await theCard();
 
-  await userEvent.type(composer, "just pick coffee");
+  await userEvent.click(composer);
+  await userEvent.paste("just pick coffee");
   await userEvent.keyboard("{Meta>}{Enter}{/Meta}");
 
   // The composer settles the card itself once the skip is acknowledged: the
@@ -289,7 +301,7 @@ const skippedCards = () =>
 test("a clarify nobody answers settles as Timed out, and a late choice only drafts", async () => {
   const composer = (await openScribe()) as HTMLTextAreaElement;
   const release = holdTranscript();
-  await userEvent.type(composer, "E2E_CLARIFY_TIMEOUT{Enter}");
+  await send(composer, "E2E_CLARIFY_TIMEOUT");
   const card = await theCard();
   expect(within(card).getByText("Proceed with the default plan?")).toBeTruthy();
 
@@ -314,4 +326,6 @@ test("a clarify nobody answers settles as Timed out, and a late choice only draf
   expect(harness!.calls.filter((call) => call.name === "chat.respond")).toHaveLength(0);
   release();
   await waitFor(() => expect(turnRunning()).toBe(false), WAIT);
-});
+  // The fixture's request expiry is a real second (`FIXTURE_REQUEST_TIMEOUT_MS`),
+  // and two 4 s waits on top of it can exceed bun's 5 s under load.
+}, 15_000);

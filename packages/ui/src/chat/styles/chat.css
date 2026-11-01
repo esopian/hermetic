@@ -1085,6 +1085,48 @@
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+/* A text section's wrapper (`Message`): no box of its own, so it lays out as
+   the bare blocks did. `pending` is prose still arriving: small and muted, in
+   full, until the turn settles and it restyles in place to body text. */
+.ch-text {
+  display: contents;
+}
+/* As `.ch-msg-body > *:first-child`/`:last-child`, at their weight. */
+.ch-msg-body > .ch-text:first-child > :where(:first-child) {
+  margin-top: 0;
+}
+.ch-msg-body > .ch-text:last-child > :where(:last-child) {
+  margin-bottom: 0;
+}
+.ch-msg-body .ch-text * {
+  transition:
+    font-size 0.4s ease,
+    line-height 0.4s ease,
+    color 0.4s ease,
+    margin 0.4s ease;
+}
+.ch-msg .ch-msg-body .ch-text.pending > :not(.caret) {
+  margin-bottom: 4px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: color-mix(in srgb, var(--fg2) 50%, var(--fg3));
+}
+.ch-msg .ch-msg-body .ch-text.pending :is(strong, em, a) {
+  color: inherit;
+}
+.ch-msg .ch-msg-body .ch-text.pending code {
+  font-size: 11px;
+  color: inherit;
+}
+.ch-msg .ch-msg-body .ch-text.pending .caret {
+  width: 6px;
+  height: 11px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ch-msg-body .ch-text * {
+    transition: none;
+  }
+}
 
 /* Hover actions: copy, retry, quote, permalink. Absolute so they never change
    the row's height and make the log jump as the pointer moves down it.
@@ -2626,8 +2668,7 @@ button.qj-row:hover {
   font-size: 12px;
 }
 .ch-activity > summary,
-.ch-event > summary,
-.ch-activity-step > summary {
+.ch-event > summary {
   cursor: pointer;
   min-height: 30px;
   padding: 6px 8px;
@@ -2644,7 +2685,7 @@ button.qj-row:hover {
 }
 .ch-activity-count,
 .ch-activity-usage,
-.ch-activity-step > summary > span:last-child {
+.ch-activity-step .ch-activity-dur {
   font-family: var(--mono);
   color: var(--fg3);
   font-size: 10px;
@@ -2660,17 +2701,65 @@ button.qj-row:hover {
   animation: chthink 1.8s infinite;
 }
 .ch-msg-body .ch-activity .ch-activity-list {
-  margin: 0 0 0 12px;
-  padding: 0 0 0 12px;
+  margin: 2px 0 6px 18px;
+  padding: 0;
   list-style: none;
-  border-left: 1px solid var(--line2);
 }
 .ch-msg-body .ch-activity .ch-activity-list > li {
   margin: 0;
 }
-.ch-activity-step > summary > span:last-child {
-  float: right;
-  margin-left: 12px;
+/* A step is one bare line: glyph, name, target, duration. Our own marker in
+   both engines (none), as `.fu-step` does. */
+.ch-activity-step > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  padding: 1px 4px;
+  font: 400 11px / 1.6 var(--mono);
+  color: var(--fg2);
+  white-space: nowrap;
+}
+.ch-activity-step > summary::-webkit-details-marker {
+  display: none;
+}
+.ch-activity-step > summary::marker {
+  content: "";
+}
+.ch-activity-step > summary .ch-activity-target {
+  margin-left: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  overflow-wrap: normal;
+}
+.ch-activity-step .ch-activity-dur {
+  margin-left: auto;
+  padding-left: 12px;
+}
+/* Narration the turn folded in: muted prose on a quote rule. */
+.ch-msg-body .ch-activity .ch-activity-list > li.ch-activity-note {
+  margin: 4px 0 5px;
+  padding-left: 10px;
+  max-width: 72ch;
+  border-left: 2px solid var(--line2);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--fg2);
+}
+.ch-msg-body .ch-activity-list > li.ch-activity-note > * {
+  margin: 0 0 4px;
+}
+.ch-msg-body .ch-activity-list > li.ch-activity-note > :last-child {
+  margin-bottom: 0;
+}
+.ch-msg-body .ch-activity-list > li.ch-activity-note strong {
+  color: color-mix(in srgb, var(--fg) 80%, var(--fg2));
+}
+.ch-msg-body .ch-activity-list > li.ch-activity-note code {
+  font-size: 11px;
+  padding: 0 4px;
 }
 .ch-activity-glyph {
   display: inline-block;

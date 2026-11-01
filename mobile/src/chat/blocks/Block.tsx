@@ -38,6 +38,8 @@ export interface BlockProps {
   now: number;
   /** The last prose block of a turn still arriving: draw the caret. */
   streaming?: boolean;
+  /** Prose of a turn still running that may yet become narration: muted, one step smaller. */
+  quiet?: boolean;
   /** The operator's own words: plain text, never markdown. */
   mine?: boolean;
   closed?: ClosedRequest | undefined;
@@ -53,6 +55,7 @@ function BlockImpl({
   block,
   now,
   streaming = false,
+  quiet = false,
   mine = false,
   closed,
   pending,
@@ -66,7 +69,7 @@ function BlockImpl({
       return mine ? (
         <PlainText text={markdown} />
       ) : (
-        <Markdown markdown={markdown} streaming={streaming} />
+        <Markdown markdown={markdown} streaming={streaming} quiet={quiet} />
       );
     }
     case "command":

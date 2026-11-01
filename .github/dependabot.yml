@@ -3,34 +3,51 @@
 # Dependabot proposes the bumps; the diff still gets read like any other change
 # — a pin makes an action immutable, not trustworthy.
 #
-# There is deliberately no `bun` ecosystem entry: Dependabot's support for this
-# repository's text `bun.lock` is unconfirmed, and generating a second
-# package-manager lockfile to satisfy the bot would break the
-# `bun install --frozen-lockfile` parity between CI and a laptop. Advisories
-# against the resolved tree are covered instead by `bun run audit:dependencies`.
+# Every entry groups its minor and patch bumps into one weekly PR, so a week's
+# churn is one diff to read rather than ten; a major bump still gets its own PR,
+# because that is the one that needs reading on its own. Dependabot updates the
+# text bun.lock in place (no second package-manager lockfile), so
+# `bun install --frozen-lockfile` stays the same check in CI and on a laptop.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
   # Composite actions are not discovered through the workflow entry above; the
   # directory holding the action.yml has to be listed on its own.
   - package-ecosystem: github-actions
     directory: /.github/actions/setup
     schedule:
       interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  # The root workspace: packages/* (core, cli, app, ui, agentd) share the root
+  # bun.lock. This is what ships, so `ci` proves every bump before it merges.
+  - package-ecosystem: bun
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
   # site/ is a separate toolchain (see AGENTS.md "Layout"): its own bun.lock,
-  # never installed by the root `bun install`, and never part of the workspace
-  # the root `bun install --frozen-lockfile` parity concern above is about. Its
-  # dependencies are pure build tooling (Astro, Starlight, Wrangler) with no
-  # runtime footprint in the shipped product, so a Dependabot-generated bump PR
-  # here carries none of that risk — it is read like any other diff and site's
-  # own `bun run check` proves it still builds.
+  # never installed by the root `bun install`. Its dependencies are pure build
+  # tooling (Astro, Starlight, Wrangler) with no runtime footprint in the
+  # shipped product; site's own `bun run check` proves a bump still builds.
   - package-ecosystem: bun
     directory: /site
     schedule:
       interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
   # mobile/ is the same shape (see AGENTS.md "Layout"): the Expo phone app, its
   # own bun.lock, never installed by the root `bun install`. Expo pins its SDK
   # packages to one release line (`bunx expo install` keeps them matched), so a
@@ -40,3 +57,7 @@ updates:
     directory: /mobile
     schedule:
       interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]

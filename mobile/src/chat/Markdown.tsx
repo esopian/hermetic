@@ -8,14 +8,14 @@
  * with its alt text as a mono caption, when `file-urls.ts` lets the phone load
  * it (a file on the conversation's box, or `https:`); otherwise as its alt text.
  */
-import { memo, type ReactNode, useMemo } from "react";
+import { createContext, memo, type ReactNode, useContext, useMemo } from "react";
 import { Linking, ScrollView, type TextStyle, View } from "react-native";
 import { openableHref } from "../client/chat-logic.ts";
 import { imageSourceOf } from "../client/file-urls.ts";
 import { hasImage, splitImages } from "../client/markdown-images.ts";
 import { type MdList, type MdNode, type MdSpan, parseMarkdown } from "../client/markdown.ts";
 import { useTheme } from "../theme/theme.tsx";
-import { Text } from "../ui/Text.tsx";
+import { Text, type TextProps } from "../ui/Text.tsx";
 import { Picture } from "./blocks/Picture.tsx";
 import { CodePane } from "./CodePane.tsx";
 import { collapseSpaces } from "./text-layout.ts";
@@ -29,84 +29,96 @@ const HEADING: Record<number, { size: number; line: number }> = {
   6: { size: 15, line: 21 },
 };
 
+/** Prose still arriving: one step smaller and muted, bold and code with it. */
+const Quiet = createContext(false);
+
+function MdText(props: TextProps) {
+  const quiet = useContext(Quiet);
+  return <Text {...(quiet ? ({ variant: "bodySmall", tone: "fg2" } as const) : null)} {...props} />;
+}
+
 function Spans({ spans, base }: { spans: MdSpan[]; base?: TextStyle }): ReactNode {
   const t = useTheme();
+  const quiet = useContext(Quiet);
   return spans.map((span, i) => {
     const key = `${span.type}:${i}`;
     switch (span.type) {
       case "code":
         return (
-          <Text
+          <MdText
             key={key}
             mono
-            style={[base, { fontSize: 13, backgroundColor: t.c.bg3, color: t.c.fg }]}
-          >{` ${collapseSpaces(span.text)} `}</Text>
+            style={[
+              base,
+              { fontSize: quiet ? 12 : 13, backgroundColor: t.c.bg3, color: quiet ? t.c.fg2 : t.c.fg },
+            ]}
+          >{` ${collapseSpaces(span.text)} `}</MdText>
         );
       case "math":
         return (
-          <Text key={key} mono style={[base, { fontSize: 13, fontStyle: "italic", color: t.c.fg2 }]}>
+          <MdText key={key} mono style={[base, { fontSize: 13, fontStyle: "italic", color: t.c.fg2 }]}>
             {span.text}
-          </Text>
+          </MdText>
         );
       case "strong":
         return (
-          <Text key={key} style={[base, { fontFamily: t.sans(700) }]}>
+          <MdText key={key} style={[base, { fontFamily: t.sans(700) }]}>
             {span.spans ? (
               <Spans spans={span.spans} base={{ fontFamily: t.sans(700) }} />
             ) : (
               collapseSpaces(span.text)
             )}
-          </Text>
+          </MdText>
         );
       case "em":
         return (
-          <Text key={key} style={[base, { fontStyle: "italic" }]}>
+          <MdText key={key} style={[base, { fontStyle: "italic" }]}>
             {span.spans ? (
               <Spans spans={span.spans} base={{ fontStyle: "italic" }} />
             ) : (
               collapseSpaces(span.text)
             )}
-          </Text>
+          </MdText>
         );
       case "del":
         return (
-          <Text key={key} style={[base, { textDecorationLine: "line-through", color: t.c.fg2 }]}>
+          <MdText key={key} style={[base, { textDecorationLine: "line-through", color: t.c.fg2 }]}>
             {span.spans ? <Spans spans={span.spans} /> : collapseSpaces(span.text)}
-          </Text>
+          </MdText>
         );
       case "link": {
         const href = openableHref(span.href);
         if (href === null)
           return (
-            <Text key={key} style={base}>
+            <MdText key={key} style={base}>
               {`${span.text} (${span.href})`}
-            </Text>
+            </MdText>
           );
         return (
-          <Text
+          <MdText
             key={key}
             accessibilityRole="link"
             onPress={() => void Linking.openURL(href).catch(() => {})}
             style={[base, { color: t.c.acc, textDecorationLine: "underline" }]}
           >
             {span.spans ? <Spans spans={span.spans} /> : collapseSpaces(span.text)}
-          </Text>
+          </MdText>
         );
       }
       case "cite":
         return (
-          <Text key={key} mono style={[base, { fontSize: 11, color: t.c.acc }]}>
+          <MdText key={key} mono style={[base, { fontSize: 11, color: t.c.acc }]}>
             {`[${span.n}]`}
-          </Text>
+          </MdText>
         );
       // A newline inside a paragraph: the desktop's `<br>` (`breaks` semantics).
       case "br":
-        return <Text key={key}>{"\n"}</Text>;
+        return <MdText key={key}>{"\n"}</MdText>;
       default:
         return (
-          <Text key={key} style={base}>
+          <MdText key={key} style={base}>
             {collapseSpaces(span.text)}
-          </Text>
+          </MdText>
         );
     }
   });
@@ -119,7 +131,7 @@ function List({ node, depth }: { node: MdList; depth: number }) {
       {node.items.map((item, i) => (
         <View key={i}>
           <View style={{ flexDirection: "row", gap: t.space.sm }}>
-            <Text mono tone="fg3" style={{ minWidth: node.ordered ? 22 : 12, textAlign: "right" }}>
+            <MdText mono tone="fg3" style={{ minWidth: node.ordered ? 22 : 12, textAlign: "right" }}>
               {item.checked === true
                 ? "☑"
                 : item.checked === false
@@ -129,10 +141,10 @@ function List({ node, depth }: { node: MdList; depth: number }) {
                     : depth % 2 === 0
                       ? "•"
                       : "◦"}
-            </Text>
-            <Text selectable style={{ flex: 1 }}>
+            </MdText>
+            <MdText selectable style={{ flex: 1 }}>
               <Spans spans={item.spans} />
-            </Text>
+            </MdText>
           </View>
           {item.lists?.map((list, n) => (
             <List key={n} node={list} depth={depth + 1} />
@@ -149,14 +161,14 @@ function Node({ node }: { node: MdNode }) {
     case "h": {
       const h = HEADING[Math.min(Math.max(node.level, 1), 6)] ?? { size: 15, line: 21 };
       return (
-        <Text
+        <MdText
           selectable
           accessibilityRole="header"
           weight={800}
           style={{ fontSize: h.size, lineHeight: h.line, marginTop: t.space.xs }}
         >
           <Spans spans={node.spans} />
-        </Text>
+        </MdText>
       );
     }
     case "quote":
@@ -168,9 +180,9 @@ function Node({ node }: { node: MdNode }) {
             paddingLeft: t.space.md,
           }}
         >
-          <Text selectable tone="fg2">
+          <MdText selectable tone="fg2">
             <Spans spans={node.spans} />
-          </Text>
+          </MdText>
         </View>
       );
     case "list":
@@ -205,7 +217,7 @@ function Node({ node }: { node: MdNode }) {
                       borderLeftColor: t.c.line,
                     }}
                   >
-                    <Text
+                    <MdText
                       selectable
                       variant="bodySmall"
                       weight={r === 0 ? 700 : 400}
@@ -219,7 +231,7 @@ function Node({ node }: { node: MdNode }) {
                       }}
                     >
                       <Spans spans={cell} />
-                    </Text>
+                    </MdText>
                   </View>
                 ))}
               </View>
@@ -234,16 +246,16 @@ function Node({ node }: { node: MdNode }) {
             piece.kind === "image" ? (
               <MarkdownImage key={`i${i}`} alt={piece.alt} href={piece.href} />
             ) : (
-              <Text key={`s${i}`} selectable>
+              <MdText key={`s${i}`} selectable>
                 <Spans spans={piece.spans} />
-              </Text>
+              </MdText>
             ),
           )}
         </View>
       ) : (
-        <Text selectable>
+        <MdText selectable>
           <Spans spans={node.spans} />
-        </Text>
+        </MdText>
       );
   }
 }
@@ -252,27 +264,37 @@ function MarkdownImage({ alt, href }: { alt: string; href: string }) {
   const source = imageSourceOf(href);
   if (!source)
     return (
-      <Text mono variant="caption" tone="fg3" testID="markdown-image-refused">
+      <MdText mono variant="caption" tone="fg3" testID="markdown-image-refused">
         {`image not loaded · ${alt || href}`}
-      </Text>
+      </MdText>
     );
   return <Picture source={source} alt={alt} caption />;
 }
 
-function MarkdownImpl({ markdown, streaming = false }: { markdown: string; streaming?: boolean }) {
+function MarkdownImpl({
+  markdown,
+  streaming = false,
+  quiet = false,
+}: {
+  markdown: string;
+  streaming?: boolean;
+  quiet?: boolean;
+}) {
   const t = useTheme();
   const nodes = useMemo(() => parseMarkdown(markdown), [markdown]);
   return (
-    <View style={{ gap: t.space.sm }}>
-      {nodes.map((node, i) => (
-        <Node key={`${node.type}:${i}`} node={node} />
-      ))}
-      {streaming ? (
-        <Text tone="acc" accessibilityLabel="streaming">
-          ▍
-        </Text>
-      ) : null}
-    </View>
+    <Quiet.Provider value={quiet}>
+      <View style={{ gap: quiet ? t.space.xs : t.space.sm }}>
+        {nodes.map((node, i) => (
+          <Node key={`${node.type}:${i}`} node={node} />
+        ))}
+        {streaming ? (
+          <MdText tone="acc" accessibilityLabel="streaming">
+            ▍
+          </MdText>
+        ) : null}
+      </View>
+    </Quiet.Provider>
   );
 }
 

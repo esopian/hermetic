@@ -25,7 +25,7 @@ export const SILENT_LABEL = "stayed silent";
  * count — the final answer is still the final answer — but an attachment or a
  * question does.
  */
-function finalText(blocks: readonly ChatBlockView[]): number {
+export function finalText(blocks: readonly ChatBlockView[]): number {
   const index = blocks.findLastIndex((block) => block.kind === "text");
   if (index < 0) return -1;
   return blocks.slice(index + 1).every(isActivity) ? index : -1;

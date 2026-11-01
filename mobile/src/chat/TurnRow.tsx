@@ -11,7 +11,7 @@
  */
 import { memo } from "react";
 import { View } from "react-native";
-import { activeGroup, sections } from "../client/chat-activity.ts";
+import { activeGroup, sectionKeys, sections } from "../client/chat-activity.ts";
 import { fmtCount } from "../client/chat-logic.ts";
 import { failureOf } from "../client/chat-recovery.ts";
 import { closedRequests, keepsCard, openRequests } from "../client/chat-requests.ts";
@@ -210,6 +210,11 @@ function TurnRowImpl({
   const pending = open.filter((b) => b.kind === "approval").length;
   const list = sections(blocks, streaming);
   const live = activeGroup(list, streaming, activity, waiting);
+  const keys = sectionKeys(list);
+  // The prose still arriving reads quiet until the turn settles into its answer.
+  const quietAt = streaming
+    ? list.findLastIndex((s) => !s.activity && s.blocks[0]?.kind === "text")
+    : -1;
   const meta = [
     chatTime(message.at, now),
     message.incomplete && !message.error ? "incomplete" : null,
@@ -236,7 +241,7 @@ function TurnRowImpl({
       {list.map((section, index) =>
         section.activity ? (
           <ActivityGroup
-            key={`a${index}`}
+            key={keys[index]}
             blocks={section.blocks}
             streaming={streaming && index === live && (activity !== "idle" || waiting)}
             activity={activity}
@@ -247,10 +252,11 @@ function TurnRowImpl({
           <TaskChange key={`b${index}`} block={section.blocks[0]} />
         ) : (
           <Block
-            key={`b${index}`}
+            key={keys[index]}
             block={section.blocks[0] as ChatMessage["blocks"][number]}
             now={now}
             streaming={streaming && activity === "streaming" && index === list.length - 1}
+            quiet={index === quietAt}
             closed={(() => {
               const b = section.blocks[0];
               return (b?.kind === "approval" || b?.kind === "question") && b.request_id

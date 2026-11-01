@@ -487,7 +487,7 @@ test("completed tool calls remain expandable after durable replacement, revisiti
     const step = group.querySelector<HTMLDetailsElement>(".ch-activity-step")!;
     expect(group.open).toBe(false);
     expect(step.open).toBe(false);
-    expect(group.querySelector("summary")?.textContent).toContain("Tools complete");
+    expect(group.querySelector("summary")?.textContent).toContain("Worked");
     await userEvent.click(group.querySelector("summary")!);
     expect(group.open).toBe(true);
     await userEvent.click(step.querySelector("summary")!);

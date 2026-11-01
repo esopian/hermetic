@@ -42,7 +42,7 @@
         "appName": "Hermetic",
         "ascAppId": "6823667364",
         "bundleIdentifier": "com.hermetic.mobile",
-        "groups": ["Hermetic Internal"]
+        "groups": ["Alpha Users"]
       }
     }
   }

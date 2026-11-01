@@ -105,7 +105,7 @@ function message(over: Partial<ChatMessage> = {}): ChatMessage {
   };
 }
 
-describe.concurrent("addressing", () => {
+describe("addressing", () => {
   test("a bare instance is that box's default bot", () => {
     // Every box runs a swarm of one today, and `default` is the profile that
     // *is* `$HERMES_HOME` — so this is the spelling an operator types.
@@ -127,7 +127,7 @@ describe.concurrent("addressing", () => {
   });
 });
 
-describe.concurrent("the roster", () => {
+describe("the roster", () => {
   test("the heading counts warm slots, which is the number that predicts a dead click", () => {
     expect(swarmHeading(swarm())).toBe("atlas: 1 bots, 2/3 warm slots");
   });
@@ -154,7 +154,7 @@ describe.concurrent("the roster", () => {
   });
 });
 
-describe.concurrent("the session list", () => {
+describe("the session list", () => {
   test("a portal session is its own origin and nothing more", () => {
     expect(sessionRow(session(), NOW)[2]).toBe("portal");
   });
@@ -166,7 +166,7 @@ describe.concurrent("the session list", () => {
   });
 });
 
-describe.concurrent("the transcript", () => {
+describe("the transcript", () => {
   test("a request card is one line saying how to answer it", () => {
     const card = (over: Record<string, unknown>) =>
       ({
@@ -589,7 +589,7 @@ describe.concurrent("the transcript", () => {
   });
 });
 
-describe.concurrent("the live turn", () => {
+describe("the live turn", () => {
   test("a delta is an append with no newline of its own", () => {
     // It is the middle of a sentence; a line break here would print the reply
     // one token per line.
@@ -633,7 +633,7 @@ describe.concurrent("the live turn", () => {
   });
 });
 
-describe.concurrent("watching a conversation", () => {
+describe("watching a conversation", () => {
   const snapshot = (over: Partial<Extract<ChatObserveEvent, { type: "snapshot" }>> = {}) =>
     ({
       type: "snapshot",
@@ -704,7 +704,7 @@ describe.concurrent("watching a conversation", () => {
  * code — `atlas` answers, and `heron`, whose bootstrap stopped on a failed
  * stage, never started a gateway.
  */
-describe.concurrent("against the fixture, whose boxes are canned", () => {
+describe("against the fixture, whose boxes are canned", () => {
   const HOME = mkdtempSync(join(tmpdir(), "hermetic-cli-chat-"));
 
   async function run(...args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {

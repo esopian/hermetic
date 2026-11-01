@@ -39,8 +39,8 @@ afterEach(async () => {
 
 const WAIT = { timeout: 8_000 };
 
-async function openScribe(): Promise<HTMLElement> {
-  harness = await flowHarness({ chatDelayMs: 30 });
+async function openScribe(chatDelayMs = 30): Promise<HTMLElement> {
+  harness = await flowHarness({ chatDelayMs });
   await harness.ctx.hermetic().chat.listen({ instance: "atlas", listening: true });
   await harness.ctx.chatOwner.sync();
   gotoHash("#chat/atlas/scribe");
@@ -116,18 +116,27 @@ test("a background delegation: lines keep moving after the turn, then the result
 }, 20_000);
 
 test("a steer from the modal is queued, then likely applied when the child's next call echoes it", async () => {
-  const composer = await openScribe();
+  // The steer has to be queued before the child's last tool call, and typing it
+  // races the child's real-time steps: 600 ms steps leave about two seconds.
+  const composer = await openScribe(100);
   await userEvent.type(composer, "E2E_SUBAGENT{Enter}");
   const dialog = await open(/Survey disk I\/O/);
   const field = within(dialog).getByRole("textbox", { name: "Steer this subagent" });
-  await userEvent.type(field, "only nvme1n1{Enter}");
+  // Pasted, not typed: a keystroke per render is what a loaded machine is slow at.
+  await userEvent.click(field);
+  await userEvent.paste("only nvme1n1");
+  await userEvent.keyboard("{Enter}");
   await waitFor(() => expect(calls("chat.steer")).toHaveLength(1), WAIT);
   expect(calls("chat.steer")[0]!.params).toMatchObject({ text: "only nvme1n1" });
   expect((calls("chat.steer")[0]!.params as { subagent_id?: string }).subagent_id).toMatch(
     /^sa-fixture-/,
   );
-  await waitFor(() => expect(ack()).toBe("Likely applied"), WAIT);
-  expect(screen.getByRole("dialog").textContent).toContain("steer: only nvme1n1");
+  // Together: the echoing call is replaced by the child's next step, so a
+  // second look after the ack can miss it.
+  await waitFor(() => {
+    expect(ack()).toBe("Likely applied");
+    expect(screen.getByRole("dialog").textContent).toContain("steer: only nvme1n1");
+  }, WAIT);
   // Escape closes the modal and nothing else: the turn was not stopped.
   await userEvent.keyboard("{Escape}");
   expect(screen.queryByRole("dialog")).toBeNull();

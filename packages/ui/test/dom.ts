@@ -25,5 +25,13 @@ export { REDUCED_MOTION_DEFAULT, setReducedMotion } from "./setup.ts";
 const rtl = await import("@testing-library/react");
 const ue = await import("@testing-library/user-event");
 
+// Testing Library's own default is 1 s for every `findBy*` and bare `waitFor`:
+// a first render of the portal takes longer than that on a loaded machine. A
+// wait that succeeds returns as soon as it does, so this only moves the
+// deadline, and it stays under bun's 5 s per test. The cost: a wait that
+// fails late in a test can surface as the test's timeout rather than as the
+// assertion's own message.
+rtl.configure({ asyncUtilTimeout: 4_000 });
+
 export const { act, cleanup, fireEvent, render, screen, waitFor, within } = rtl;
 export const userEvent = ue.default;

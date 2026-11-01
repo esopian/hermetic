@@ -43,12 +43,14 @@ test("a compaction says it is running, then lands and the transcript is re-read"
   const composer = await openScribe();
   await userEvent.type(composer, "/compact E2E_COMPACT_SLOW{Enter}");
 
+  // The running state lasts the fixture's 1.5 s beat; waitFor sees it on the
+  // render that draws it, so the window only bounds a page that never does.
   await waitFor(
     () => {
       expect(screen.getAllByText("Compacting context…").length).toBeGreaterThan(0);
       expect(within(strip()).getByRole("button", { name: "Compacting…" })).toBeTruthy();
     },
-    { timeout: 1_000 },
+    { timeout: 4_000 },
   );
   const turnAt = names().lastIndexOf("chat.turn");
 
@@ -65,7 +67,9 @@ test("a compaction says it is running, then lands and the transcript is re-read"
   // The answer outlives the re-read that followed the turn.
   await new Promise((resolve) => setTimeout(resolve, 200));
   expect(answer("/compact E2E_COMPACT_SLOW")).toBeTruthy();
-});
+  // 1.7 s of it is real time (the fixture's compaction beat and the settle above),
+  // and the 4 s waits around it can exceed bun's 5 s under load.
+}, 15_000);
 
 test("the Compact button runs the same turn", async () => {
   await openScribe();
