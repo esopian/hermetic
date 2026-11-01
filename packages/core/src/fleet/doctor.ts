@@ -40,6 +40,12 @@ import { settingsOf } from "../profiles/settings.ts";
 // The §4.7 preflight's own bound. `doctor` reuses the number rather than
 // picking a second one: it is the same daemon, asked the same question.
 import { PROBE_TIMEOUT_MS } from "./preflight.ts";
+import {
+  TAILNET_DNS_TIMEOUT_MS,
+  type TailnetDnsProbe,
+  type TailnetDnsReading,
+  tailnetDnsProblem,
+} from "./tailnet-dns.ts";
 // `aws/env.ts` reads `process.env` and imports no SDK, so `doctor` can report
 // the credential-environment warning of §4.7 without dragging AWS into core.
 import { detectEnvCredentialOverrides } from "../aws/env.ts";
@@ -222,6 +228,14 @@ export interface DoctorReport {
      * the healthy summary. Never a secret — `problem` never carries one (§8.3).
      */
     detail: string;
+    /**
+     * Whether this machine resolves one agent's MagicDNS name, through
+     * Tailscale's resolver and through its own (`tailnet-dns.ts`). `null`
+     * when it was not asked: the preflight already failed, or no agent has a
+     * name to ask. Tailscale answering and the system not is a finding:
+     * `ok` false, with the fix in `detail`.
+     */
+    dns: TailnetDnsReading | null;
   };
   /**
    * §5's fleet network mode, and the three ways it can be wrong.
@@ -284,6 +298,12 @@ export interface DoctorDeps {
    */
   localTailscale: () => Promise<TailscalePreflight>;
   /**
+   * The local MagicDNS check (`tailnet-dns.ts`), defaulted by the SDK closure
+   * to the real `probeTailnetDns`. Required for the same reason
+   * `localTailscale` is.
+   */
+  localTailnetDns: TailnetDnsProbe;
+  /**
    * `policy.status` (§4.7), handed in for the same reason `localTailscale` is:
    * it is a fleet read the SDK closure already owns, and `doctor` is where a
    * fleet whose policy has drifted finds out. Required, not optional — an
@@ -322,6 +342,7 @@ export async function checkLocalTailscale(
     tailnet: null,
     https_certificates: false,
     detail,
+    dns: null,
   });
 
   // `--hot` reloads modules but not the closure `createHermetic` built at boot,
@@ -365,6 +386,7 @@ export async function checkLocalTailscale(
       https_certificates: https,
       // Verbatim: the preflight's message already says what to enable and where.
       detail: preflight.problem ?? "this machine's tailscale is not usable",
+      dns: null,
     };
   }
   return {
@@ -372,7 +394,50 @@ export async function checkLocalTailscale(
     tailnet: preflight.tailnet,
     https_certificates: https,
     detail: `tailscale: ${preflight.tailnet ?? "(no tailnet)"}, HTTPS certificates on`,
+    dns: null,
   };
+}
+
+/**
+ * The name the local DNS check asks: a ready agent's MagicDNS name, else any
+ * agent's; `null` when none has one. Ready first, because a name the tailnet
+ * still lists is the one whose silence means something.
+ */
+export function tailnetDnsName(agents: readonly Agent[]): string | null {
+  const named = agents.filter((a) => !!a.tailscale_dns_name);
+  const pick = named.find((a) => a.status === "ready") ?? named[0];
+  return pick?.tailscale_dns_name?.replace(/\.$/, "") ?? null;
+}
+
+/**
+ * The local DNS check folded into the preflight's reading, bounded and never
+ * throwing, like `checkLocalTailscale`. Asked only when the preflight passed:
+ * a daemon that is not running has already said why nothing resolves.
+ */
+export async function checkTailnetDns(
+  local: DoctorReport["local_tailscale"],
+  probe: TailnetDnsProbe,
+  name: string | null,
+  timeoutMs = TAILNET_DNS_TIMEOUT_MS * 2,
+): Promise<DoctorReport["local_tailscale"]> {
+  if (!local.ok || name === null || typeof probe !== "function") return local;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let reading: TailnetDnsReading | null;
+  try {
+    reading = await Promise.race([
+      probe(name),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), timeoutMs);
+      }),
+    ]);
+  } catch {
+    reading = null;
+  } finally {
+    clearTimeout(timer);
+  }
+  if (reading === null) return local;
+  const problem = tailnetDnsProblem(reading);
+  return problem ? { ...local, ok: false, detail: problem, dns: reading } : { ...local, dns: reading };
 }
 
 /**
@@ -818,7 +883,11 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
    * future `agents.create` failing twenty minutes into provisioning. A finding,
    * because it is something wrong that only the operator can fix.
    */
-  const local_tailscale = await checkLocalTailscale(deps.localTailscale);
+  const local_tailscale = await checkTailnetDns(
+    await checkLocalTailscale(deps.localTailscale),
+    deps.localTailnetDns,
+    tailnetDnsName(agents),
+  );
   if (!local_tailscale.ok) findings.push(local_tailscale.detail);
 
   const devices = await backend.tailscale.listDevices();

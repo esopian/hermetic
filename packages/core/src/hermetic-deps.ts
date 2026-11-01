@@ -23,6 +23,7 @@ import type { HermeticdCandidate } from "./release/artifacts.ts";
 import type { HermesMirrorFn } from "./release/hermes-mirror.ts";
 import type { BrowserMirrorFn } from "./release/browser-mirror.ts";
 import type { GitBuildInfo } from "./release/git.ts";
+import type { TailnetDnsProbe } from "./fleet/tailnet-dns.ts";
 import type { FetchLike } from "./aws/tailscale.ts";
 import type { BedrockCatalog } from "./aws/bedrock.ts";
 import type { FoundationDeps } from "./fleet/foundation/index.ts";
@@ -199,6 +200,12 @@ export interface HermeticDeps {
    * fleet.
    */
   localTailscale?: () => Promise<TailscalePreflight>;
+  /**
+   * `doctor`'s local MagicDNS check (`fleet/tailnet-dns.ts`), overridable for
+   * the same reason: the real one sends DNS queries. It defaults to the real
+   * probe, never to "skip".
+   */
+  localTailnetDns?: TailnetDnsProbe;
   verifyTailscaleOauth?: (secret: string) => Promise<TailscaleOauthCheck>;
   /**
    * §3.6's Hermes source mirror, overridable for the same reason the two probes

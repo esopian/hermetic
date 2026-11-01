@@ -50,13 +50,15 @@ export function documentFile(name: string): TextFile {
   };
 }
 
-/** One fleet's view cache and inbox (`none` before any pairing), under `prefix`. */
+/** One fleet's view cache, inbox and last roster (`none` before any pairing), under `prefix`. */
 export function fleetFiles(prefix = ""): (fleetId: string | null) => {
   viewCache: TextFile;
   inboxFile: TextFile;
+  rosterFile: TextFile;
 } {
   return (fleetId) => ({
     viewCache: documentFile(`${prefix}hermetic-fleet-view.${fleetId ?? "none"}.json`),
     inboxFile: documentFile(`${prefix}hermetic-inbox.${fleetId ?? "none"}.json`),
+    rosterFile: documentFile(`${prefix}hermetic-roster.${fleetId ?? "none"}.json`),
   });
 }
