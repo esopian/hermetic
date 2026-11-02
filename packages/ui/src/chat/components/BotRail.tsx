@@ -168,13 +168,17 @@ export function BotRail({
           </span>
           <span className="ch-conv-right">
             <span className="ch-time">{railTime(bot.last_message_at, now)}</span>
-            {bot.needs_action || unread > 0 ? (
-              <span className={`ch-unread${bot.needs_action ? " needs-action" : ""}`}>
-                {bot.needs_action ? "!" : unread}
+            {progress || bot.needs_action || unread > 0 ? (
+              <span className="ch-conv-flags">
+                {progress ? <RailTaskBar {...progress} /> : null}
+                {bot.needs_action || unread > 0 ? (
+                  <span className={`ch-unread${bot.needs_action ? " needs-action" : ""}`}>
+                    {bot.needs_action ? "!" : unread}
+                  </span>
+                ) : null}
               </span>
             ) : null}
           </span>
-          {progress ? <RailTaskBar {...progress} /> : null}
         </button>
         {/* A sibling, not a child: a button inside a button is not a button. */}
         <button
