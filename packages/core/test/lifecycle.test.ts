@@ -2284,7 +2284,7 @@ describe("doctor", () => {
     // `devices:core` (§6.5).
     expect(report.findings).toEqual(["lumen is ready but has not heartbeated recently"]);
     expect(report.tailscale.stale.map((s) => s.note)).toEqual([
-      "corvid: the node is fxtr0001-corvid-2.hermetic.ts.net, not fxtr0001-corvid.hermetic.ts.net: a stale device holds the name; delete it in the Tailscale admin console (Machines → corvid) — hermetic agent recreate corvid will remove it — until then fxtr0001-corvid.hermetic.ts.net resolves to the dead node (tailscale_stale_device)",
+      "corvid: the node is fxtr0001-corvid-2.hermetic.ts.net, not fxtr0001-corvid.hermetic.ts.net: a stale device holds the name; delete it in the Tailscale admin console (Machines → corvid), then `hermetic agent recreate corvid` so the node takes its own name back — or skip the console: the recreate removes the dead device itself — until then fxtr0001-corvid.hermetic.ts.net resolves to the dead node (tailscale_stale_device)",
     ]);
     expect(report.ok).toBe(false);
     expect(report.heartbeats.find((h) => h.name === "lumen")!.unreachable).toBe(true);

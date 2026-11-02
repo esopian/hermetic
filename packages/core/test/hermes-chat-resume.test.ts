@@ -26,6 +26,7 @@ import {
   PROMPT_SUBMIT_RESULT,
   SESSION_CREATE_RESULT,
   SESSION_ID,
+  STORED_SESSION_ID,
 } from "./fixtures/hermes-frames.ts";
 
 // A conversation's socket outlives its turn now (`hermes-chat-session-socket.ts`);
@@ -761,6 +762,83 @@ describe("hermes-chat · turn continuation", () => {
 });
 
 /* ── giving up, and being stopped ─────────────────────────────────────────── */
+
+/* ── a /btw answer that lands on the reconnect ────────────────────────────── */
+
+describe("hermes-chat · btw across a turn's reconnect", () => {
+  const ANSWER = { task_id: "btw_r", question: "what now?", text: "the side answer" };
+  const SINCE = { latest_seq: 43, truncated: false, epoch: EPOCH };
+  const reconnects: [string, Dial][] = [
+    [
+      "replayed by session.events.since",
+      {
+        results: {
+          "session.resume": { session_id: SESSION_ID, running: true },
+          "session.events.since": {
+            ...SINCE,
+            events: [
+              replayEvent("btw.complete", 42, ANSWER),
+              replayEvent("message.complete", 43, { status: "complete" }),
+            ],
+          },
+        },
+      },
+    ],
+    [
+      "live on the new socket",
+      {
+        results: {
+          "session.resume": { session_id: SESSION_ID, running: true },
+          "session.events.since": { ...SINCE, latest_seq: 41, events: [] },
+        },
+        after: {
+          "session.events.since": [
+            eventFrame("btw.complete", 42, ANSWER),
+            eventFrame("message.complete", 43, { status: "complete" }),
+          ],
+        },
+      },
+    ],
+  ];
+
+  for (const [how, reconnect] of reconnects) {
+    test(`mid-turn, the held socket drops after prompt.btw; the answer arrives ${how}`, async () => {
+      const opened = opening([eventFrame("message.delta", 41, { text: "one " })]);
+      const h = harness([
+        {
+          ...opened,
+          results: { ...opened.results, "prompt.btw": { task_id: "btw_r" } },
+          dropAfter: ["prompt.btw"],
+        },
+        reconnect,
+      ]);
+      const adapter = createHermesChat(h.deps);
+      const turn = adapter.send(BOX, "d", "go")[Symbol.asyncIterator]();
+      const frames: ChatFrame[] = [];
+      for (let step = await turn.next(); !step.done; step = await turn.next()) {
+        frames.push(ChatFrame.parse(step.value));
+        if (step.value.type === "delta") break;
+      }
+      const asked = adapter.btw?.(BOX, "d", "what now?", { session: STORED_SESSION_ID });
+      for (let step = await turn.next(); !step.done; step = await turn.next())
+        frames.push(ChatFrame.parse(step.value));
+
+      expect(await asked).toEqual({
+        task_id: "btw_r",
+        question: "what now?",
+        answer: "the side answer",
+        error: false,
+      });
+      // Asked on the turn's own socket, answered after the pump moved to a new one.
+      expect(h.sockets[0]?.methods()).toContain("prompt.btw");
+      expect(h.sockets).toHaveLength(2);
+      expect(h.sockets[1]?.methods()).not.toContain("prompt.btw");
+      expect(blocks(frames).filter((b) => b.kind === "unknown")).toEqual([]);
+      expect(dones(frames)).toHaveLength(1);
+      expect(reconnectStates(frames)).toEqual(["running", "done"]);
+    });
+  }
+});
 
 describe("hermes-chat · turn continuation, abandoned", () => {
   test("a reconnect that never lands spends its budget and stops", async () => {

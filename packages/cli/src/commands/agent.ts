@@ -389,7 +389,7 @@ export function register(program: Command): void {
         if (ctx.flags.json) await outJson(agent);
         else
           await out(
-            `${renderStatus(agent, ctx.config.fleet_id, ctx.config.fleet_name ?? undefined)}\n`,
+            `${renderStatus(agent, ctx.config.fleet_id, ctx.config.fleet_name ?? undefined, ctx.config.tailnet ?? undefined)}\n`,
           );
       }),
   );
@@ -592,7 +592,9 @@ export function register(program: Command): void {
           await outJson(agent);
           return;
         }
-        await out(`${renderStatus(agent, ctx.config.fleet_id, ctx.config.fleet_name ?? undefined)}\n`);
+        await out(
+          `${renderStatus(agent, ctx.config.fleet_id, ctx.config.fleet_name ?? undefined, ctx.config.tailnet ?? undefined)}\n`,
+        );
         if (agent.pending !== null && agent.pending !== undefined) {
           await err(
             `saved — pending apply: profile ${agent.pending.profile_id} r${agent.pending.profile_revision}, model ${agent.pending.model}. ` +

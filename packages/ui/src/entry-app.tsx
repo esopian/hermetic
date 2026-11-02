@@ -65,6 +65,8 @@ import "./chat/styles/routines.css";
 import "./chat/styles/chat-inspector.css";
 // The composer's slash-command list.
 import "./chat/styles/chat-slash.css";
+// The /btw side question: spotlight card, undo strip, composer cue.
+import "./chat/styles/chat-btw.css";
 import "./styles/listening.css";
 import "./styles/drawer.css";
 import "./styles/create.css";

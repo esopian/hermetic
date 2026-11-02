@@ -63,6 +63,8 @@
  * | `hermes-chat-peer.ts` | Bot Mode's two raw transports |
  * | `hermes-chat-observe.ts` | a socket that only listens → `ChatObserveHint` |
  * | `hermes-chat-subagent-control.ts` | one delegated child's steer and stop |
+ * | `hermes-chat-btw.ts` | `/btw` side questions and their answers |
+ * | `hermes-chat-branch.ts` | a conversation continued as a seeded new session |
  *
  * Delegated children are folded by per-session ledgers
  * (`hermes-chat-subagent-ledgers.ts`) that the client owns rather than any
@@ -90,6 +92,8 @@ import { createChatSessions } from "./hermes-chat-sessions.ts";
 import { createSubagentControl } from "./hermes-chat-subagent-control.ts";
 import { createSubagentLedgers } from "./hermes-chat-subagent-ledgers.ts";
 import { createChatTurn } from "./hermes-chat-turn.ts";
+import { createSideQuestions } from "./hermes-chat-btw.ts";
+import { createBranches } from "./hermes-chat-branch.ts";
 import { fileRequestLookup } from "./hermes-chat-file-requests.ts";
 import {
   createIdleBus,
@@ -101,6 +105,7 @@ import { disposeChatRequestPools as disposeRequestPools } from "./hermes-chat-po
 export { CHAT_ERROR_CODES, SLOT_WAIT_MS, WARM_SLOTS_PER_GATEWAY } from "./hermes-chat-types.ts";
 export type {
   BoxAddress,
+  ChatBtwAnswer,
   ChatFetch,
   ChatSocket,
   ChatSteerStatus,
@@ -195,7 +200,15 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
   const sockets = createSessionSockets({
     connect: connection.connect,
     onIdleEvent: idle.publish,
+    // `/btw` answers arrive as events on whichever socket holds the session.
+    onEvent: (event) => side.observe(event),
     ...(deps.sessionTuning !== undefined ? { tuning: deps.sessionTuning } : {}),
+  });
+  const side = createSideQuestions({ sockets, conversation: canonical.conversation });
+  const branches = createBranches({
+    connect: connection.connect,
+    conversation: canonical.conversation,
+    history: history.history,
   });
   const observation = createChatObserve({ connect: connection.connect, subagents, idle });
   const live = createLiveUsage({ rpc: peer.botModeRpc });
@@ -208,6 +221,7 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
     conversation: canonical.conversation,
     subagents,
     sockets,
+    sideAnswer: side.observe,
     ...(deps.resumeTuning !== undefined ? { resumeTuning: deps.resumeTuning } : {}),
     ...(deps.listFileRequests !== undefined
       ? { fileRequests: fileRequestLookup(deps.listFileRequests, deps.now) }
@@ -230,6 +244,8 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
     send: turn.send,
     abort: turn.abort,
     steer: turn.steer,
+    btw: side.ask,
+    branch: branches.branch,
     subagentSteer: children.steer,
     subagentInterrupt: children.interrupt,
     observe: observation.observe,

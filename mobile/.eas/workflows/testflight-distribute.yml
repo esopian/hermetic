@@ -1,0 +1,43 @@
+# Send each build uploaded to App Store Connect to TestFlight testers: add it
+# to Alpha Users with RELEASE_NOTES.md's "What to test" as the tester notes, and
+# submit it for Beta App Review. testflight.yml's upload triggers it, and so does
+# a hand upload with `bun run submit:testflight`.
+#
+# It addresses the build by its App Store Connect id (`asc_build_id`), which the
+# EAS free plan allows. See RELEASING.md, "Automated TestFlight".
+name: TestFlight distribute
+
+on:
+  app_store_connect:
+    build_upload:
+      states:
+        - complete
+
+jobs:
+  notes:
+    name: Read What to Test
+    outputs:
+      what_to_test: ${{ steps.notes.outputs.what_to_test }}
+    steps:
+      - uses: eas/checkout
+      - id: notes
+        # The "## What to test" section of RELEASE_NOTES.md, up to the next
+        # heading; App Store Connect caps the field at 4,000 characters.
+        run: |
+          file="$(ls mobile/RELEASE_NOTES.md RELEASE_NOTES.md 2>/dev/null | head -n 1 || true)"
+          notes="$(awk '/^## What to test/{on=1; next} /^## /{on=0} on' "${file:-RELEASE_NOTES.md}" | sed '/./,$!d' | head -c 4000)"
+          if [ -z "$notes" ]; then
+            echo "RELEASE_NOTES.md has no '## What to test' section" >&2
+            exit 1
+          fi
+          set-output what_to_test "$notes"
+
+  testflight:
+    name: Distribute to TestFlight
+    type: testflight
+    needs: [notes]
+    params:
+      asc_build_id: ${{ app_store_connect.build_upload.build.id }}
+      external_groups: ["Alpha Users"]
+      changelog: ${{ needs.notes.outputs.what_to_test }}
+      submit_beta_review: true

@@ -135,6 +135,8 @@ export type RequestName =
   | "chat.commands"
   | "chat.abort"
   | "chat.steer"
+  | "chat.btw"
+  | "chat.branch"
   // Machinery, listed with the core methods it sits between: the one-shot
   // "watch again" (`app/src/handlers/chat.ts`, `observeResume`). The public
   // `chat.observe` is the *subscription* and answers a `stream_id`, which is

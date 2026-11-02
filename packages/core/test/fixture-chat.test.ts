@@ -686,3 +686,73 @@ describe("steer", () => {
     expect(await own.steer?.(where, "default", "x")).toBe("idle");
   });
 });
+
+describe("fixture chat · /btw", () => {
+  const instant = fixtureChatClient({ delayMs: 0, sleep: () => Promise.resolve() });
+
+  test("answers a side question mid-turn, echoing it, without disturbing the turn", async () => {
+    const turn = instant.send(box("atlas"), "default", "hi")[Symbol.asyncIterator]();
+    await turn.next();
+    const first = await instant.btw?.(box("atlas"), "default", "  what are you doing?  ");
+    expect(first).toMatchObject({ question: "what are you doing?", error: false });
+    expect(first?.task_id).toMatch(/^btw_\d+$/);
+    expect(first?.answer).toContain("what are you doing?");
+    const second = await instant.btw?.(box("atlas"), "default", "and now?");
+    expect(second?.task_id).not.toBe(first?.task_id);
+    const rest: Frame[] = [];
+    for (let step = await turn.next(); !step.done; step = await turn.next()) rest.push(step.value);
+    expect(rest.at(-1)?.type).toBe("done");
+  });
+
+  test("E2E_BTW_ERROR answers the way upstream reports a failed side question", async () => {
+    expect(await instant.btw?.(box("atlas"), "default", "E2E_BTW_ERROR please")).toMatchObject({
+      answer: "error: fixture side question failed",
+      error: true,
+    });
+  });
+
+  test("an empty question is refused, and the beat honours the caller's signal", async () => {
+    await expect(instant.btw?.(box("atlas"), "default", "   ")).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
+    const stuck = fixtureChatClient({ delayMs: 0, sleep: () => new Promise<void>(() => {}) });
+    const ac = new AbortController();
+    const asked = stuck.btw?.(box("atlas"), "default", "q", { signal: ac.signal });
+    ac.abort();
+    await expect(asked).rejects.toMatchObject({ code: "ABORTED" });
+  });
+});
+
+describe("fixture chat · branch", () => {
+  test("a branch is a listed session whose transcript ends with the Q&A and takes a turn", async () => {
+    const own = fixtureChatClient({ delayMs: 0, sleep: () => Promise.resolve() });
+    const made = await own.branch?.(box("atlas"), "default", {
+      question: "what changed?",
+      answer: "nothing yet",
+    });
+    expect(made?.parent_session).toBe("sx-atlas-portal");
+    const session = made?.session ?? "";
+    const rows = await own.history(box("atlas"), "default", { session });
+    expect(rows).toHaveLength(made?.messages ?? -1);
+    expect(rows.slice(-2).map((m) => [m.role, m.blocks])).toEqual([
+      ["user", [{ kind: "text", markdown: "what changed?" }]],
+      ["bot", [{ kind: "text", markdown: "nothing yet" }]],
+    ]);
+    expect(rows.some((m) => m.role === "system")).toBe(false);
+    const listed = await own.sessions(box("atlas"), "default");
+    expect(listed.find((s) => s.id === session)?.title).toBe("Branch of gp3 write cache on granite");
+    for await (const _ of own.send(box("atlas"), "default", "go on", { session })) {
+      /* drain */
+    }
+    expect((await own.history(box("atlas"), "default", { session })).length).toBeGreaterThan(
+      rows.length,
+    );
+  });
+
+  test("a parent with nothing to branch is refused", async () => {
+    const own = fixtureChatClient({ delayMs: 0, sleep: () => Promise.resolve() });
+    await expect(
+      own.branch?.(box("atlas"), "default", { session: "sx-nothing-here" }),
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+  });
+});

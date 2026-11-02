@@ -329,6 +329,25 @@ export interface HermesChatClient {
    */
   steer?(box: BoxAddress, bot: string, text: string, opts?: SendOptions): Promise<ChatSteerStatus>;
   /**
+   * Ask a side question about the conversation (`/btw`): upstream's
+   * `prompt.btw`, answered from a snapshot of the session by its own model
+   * call, with history untouched and a running turn left running
+   * (`hermes-chat-btw.ts`). Optional: a client without it has no `/btw`.
+   */
+  btw?(box: BoxAddress, bot: string, text: string, opts?: SendOptions): Promise<ChatBtwAnswer>;
+  /**
+   * Continue a conversation as a new session (`hermes-chat-branch.ts`): a
+   * `session.create` seeded with the parent's visible history up to `until`,
+   * then the side question and answer when given. Optional; `chat.ts` refuses
+   * with `CHAT_PROTOCOL` when absent.
+   */
+  branch?(
+    box: BoxAddress,
+    bot: string,
+    input: ChatBranchRequest,
+    opts?: SendOptions,
+  ): Promise<ChatBranched>;
+  /**
    * Steer one delegated child (`subagent.steer`), apart from any turn: it
    * needs no running parent turn and writes nothing into the transcript
    * (`hermes-chat-subagent-control.ts`). Optional; `chat.ts` refuses with
@@ -365,6 +384,35 @@ export type SubagentSteerStatus = "queued" | "rejected";
  * running turn was found to steer, and none was started.
  */
 export type ChatSteerStatus = "redirected" | "queued" | "rejected" | "idle";
+
+/**
+ * A `/btw` answer: the `btw.complete` event's `task_id`, `question` and `text`
+ * (as `answer`, kept exactly as sent). `error` is true when the gateway's text
+ * began `"error: "`, which is how upstream reports a failed side question.
+ */
+export interface ChatBtwAnswer {
+  task_id: string;
+  question: string;
+  answer: string;
+  error: boolean;
+}
+
+/** What to branch: `session` is the parent (default the canonical conversation). */
+export interface ChatBranchRequest {
+  session?: string | null | undefined;
+  until?: string | null | undefined;
+  /** Cut after the row with this id, when the history has it. */
+  until_message?: string | null | undefined;
+  question?: string | null | undefined;
+  answer?: string | null | undefined;
+}
+
+/** A branch made: the new stored session, its parent, and how many messages seeded it. */
+export interface ChatBranched {
+  session: string;
+  parent_session: string;
+  messages: number;
+}
 
 /* ── constants that encode something upstream decided ─────────────────────── */
 

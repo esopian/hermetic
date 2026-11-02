@@ -1,11 +1,14 @@
 /**
  * Home: one open screen. A top bar of square buttons (Settings on the left,
- * Search and New chat on the right), a slim Tailscale strip only when the
- * probe says something is wrong, the hero (every bot pinned on this phone, or
+ * Search and New chat on the right), the hero (every bot pinned on this phone, or
  * with none pinned each listened instance's default bot, the primary's first),
  * then one quiet section per listened instance with the rest of its
  * bots, the primary's first — needs-you, unread, most recent, name
- * (`primaryHomeRows` over `homeRows`). Paired with no primary picked yet, it
+ * (`primaryHomeRows` over `homeRows`). While the phone is still reaching an
+ * instance (a cold start waking Tailscale, a return to the foreground), that
+ * instance's header draws the connection path, phone → Tailscale → box, with a
+ * caption under it; once the attempt's grace runs out it says where the path
+ * stopped and offers the fix (`src/client/connection.ts`). Paired with no primary picked yet, it
  * sends the operator to the picker instead. Unread and needs-you live on the bots
  * themselves; there is no inbox screen. Long-press any bot for its menu; tap a
  * section header to fold it. Pull to refresh; polled every 60 s while in front.
@@ -13,7 +16,7 @@
 import type { Bot } from "@hermetic/core/chat-client";
 import { FlashList } from "@shopify/flash-list";
 import { Redirect, router, useFocusEffect } from "expo-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   type NativeScrollEvent,
   type NativeSyntheticEvent,
@@ -25,12 +28,14 @@ import { showBotMenu } from "../src/bots/botMenu.ts";
 import { HOME_ROW_HEIGHT, HomeBotRow, ROW_AVATAR } from "../src/bots/HomeBotRow.tsx";
 import { HERO_SOLO, HomeHero } from "../src/bots/HomeHero.tsx";
 import { primaryHomeRows } from "../src/bots/primary-home.ts";
+import { type ConnectionShown, connectionCaption, connectionWord } from "../src/client/connection.ts";
 import {
   failedBots,
   type HomeItem,
   type HomeRow,
   type HomeSection,
   homeItems,
+  homeTime,
   needsBots,
   sectionState,
 } from "../src/client/home-rows.ts";
@@ -40,13 +45,44 @@ import { useFleetContext } from "../src/fleet/FleetProvider.tsx";
 import { useFleetAgents, useFleetState, useInbox, useRoster } from "../src/fleet/hooks.ts";
 import { useTheme } from "../src/theme/theme.tsx";
 import { statusColor } from "../src/theme/tokens.ts";
-import { TailscaleBanner } from "../src/ui/Banner.tsx";
+import { openTailscale } from "../src/ui/Banner.tsx";
+import { ConnectionPath } from "../src/ui/ConnectionPath.tsx";
 import { haptic } from "../src/ui/haptics.ts";
-import { Button, Icon, IconButton, Kicker, Screen, Skeleton, Text } from "../src/ui/index.ts";
+import {
+  Button,
+  Icon,
+  IconButton,
+  Kicker,
+  Screen,
+  Skeleton,
+  StatusSquare,
+  Text,
+} from "../src/ui/index.ts";
 import { useNow } from "../src/ui/useNow.ts";
+import { useConnection } from "../src/ui/useConnection.ts";
 import { usePullRefresh } from "../src/ui/usePullRefresh.ts";
 
 const POLL_MS = 60_000;
+const EMPTY: readonly string[] = [];
+const NO_ANSWERS: Readonly<Record<string, number>> = {};
+
+/**
+ * How old a section's rows are, when they come from a read before this
+ * attempt (a saved roster, or the last read before a return to the
+ * foreground): the time its box last answered. `null` when it answered this
+ * attempt or has no rows.
+ */
+function asOfText(
+  section: HomeSection,
+  answeredAt: Readonly<Record<string, number>>,
+  startedAt: number | null,
+  now: number,
+): string | null {
+  const at = answeredAt[section.instance];
+  if (at === undefined || section.rows.length === 0) return null;
+  if (startedAt !== null && at >= startedAt) return null;
+  return homeTime(new Date(at).toISOString(), now) || null;
+}
 
 const chatHref = (bot: Pick<Bot, "instance" | "name">) =>
   `/chat/${encodeURIComponent(bot.instance)}/${encodeURIComponent(bot.name)}` as const;
@@ -57,8 +93,8 @@ export default function Home() {
     client,
     status: pairing,
     tailscale,
-    probing,
-    probeTailscale,
+    connection = null,
+    retryConnection,
     refresh,
     primary = null,
     needsPrimary,
@@ -97,7 +133,34 @@ export default function Home() {
       primary,
     );
   }, [state, inbox, client, primary]);
-  const items = useMemo(() => homeItems(layout.sections), [layout]);
+  const listened = state?.listening ?? EMPTY;
+  const answeredAt = state?.answeredAt ?? NO_ANSWERS;
+  const shown = useConnection({
+    attempt: connection,
+    probe: tailscale,
+    instances: listened,
+    answeredAt,
+  });
+  // An instance still being reached that the roster has nothing for yet gets
+  // its header anyway, so the path has somewhere to draw.
+  const sections = useMemo(() => {
+    const have = new Set(layout.sections.map((s) => s.instance));
+    const waiting = listened
+      .filter((i) => !have.has(i) && shown.get(i))
+      .map(
+        (instance): HomeSection => ({
+          instance,
+          reachable: false,
+          reason: null,
+          folded: false,
+          rows: [],
+          needs: false,
+          unread: 0,
+        }),
+      );
+    return [...layout.sections, ...waiting];
+  }, [layout, listened, shown]);
+  const items = useMemo(() => homeItems(sections), [sections]);
   const agentStatus = useMemo(() => new Map(agents.map((a) => [a.name, a.status ?? null])), [agents]);
 
   const open = useCallback(
@@ -149,12 +212,10 @@ export default function Home() {
   }, [client, refresh]);
   const { refreshing, onRefresh } = usePullRefresh(client ? read : null);
 
-  // The strip comes back whenever the probe's answer changes.
-  const probe = tailscale?.status ?? null;
-  const [dismissed, setDismissed] = useState<string | null>(null);
-  useEffect(() => {
-    if (dismissed !== null && dismissed !== probe) setDismissed(null);
-  }, [probe, dismissed]);
+  const retry = useCallback(() => {
+    haptic.light();
+    retryConnection?.();
+  }, [retryConnection]);
 
   // A hairline under the top bar, only once the list has scrolled under it.
   const [scrolled, setScrolled] = useState(false);
@@ -163,8 +224,8 @@ export default function Home() {
   }, []);
 
   const homeExtra = useMemo(
-    () => ({ now, conversationTasks, taskViews }),
-    [now, conversationTasks, taskViews],
+    () => ({ now, conversationTasks, taskViews, shown }),
+    [now, conversationTasks, taskViews, shown],
   );
   const renderItem = useCallback(
     ({ item, index }: { item: HomeItem; index: number }) =>
@@ -172,7 +233,10 @@ export default function Home() {
         <SectionHeader
           section={item.section}
           agentStatus={agentStatus.get(item.section.instance) ?? null}
+          connection={shown.get(item.section.instance) ?? null}
+          asOf={asOfText(item.section, answeredAt, connection?.startedAt ?? null, now)}
           onToggle={fold}
+          onRetry={retry}
         />
       ) : (
         <HomeBotRow
@@ -195,7 +259,21 @@ export default function Home() {
           onLongPress={() => menu(item.row)}
         />
       ),
-    [fleetId, now, open, menu, fold, agentStatus, items, conversationTasks, taskViews],
+    [
+      fleetId,
+      now,
+      open,
+      menu,
+      fold,
+      retry,
+      agentStatus,
+      items,
+      conversationTasks,
+      taskViews,
+      shown,
+      answeredAt,
+      connection,
+    ],
   );
 
   if (pairing === "unpaired") return <Redirect href="/pair" />;
@@ -206,8 +284,8 @@ export default function Home() {
   // Never read yet (and not failed) is loading, so the empty state never flashes before the first read.
   const loading = !state?.readAt && !state?.error;
   const error = state?.readAt ? null : (state?.error ?? null);
-  // The strip explains a failed read only while it is on screen; once dismissed, the error does.
-  const banded = (probe === "off" || probe === "unreachable") && dismissed !== probe;
+  // A header drawing the connection path already says why nothing answered.
+  const explained = [...shown.values()].some((s) => s !== null);
 
   // Whose bots the hero shows: the pins, or the defaults (only the primary's, when it is alone).
   const heroIsPrimary =
@@ -226,11 +304,11 @@ export default function Home() {
         onPress={(row) => open(row.bot)}
         onLongPress={menu}
       />
-    ) : loading ? (
+    ) : loading && !explained && items.length === 0 ? (
       <HomeSkeleton />
     ) : null;
 
-  const empty = loading ? null : error && !banded ? (
+  const empty = loading ? null : error && !explained ? (
     <View style={{ paddingHorizontal: t.space.xl, paddingVertical: t.space.xl, gap: t.space.md }}>
       <Text weight={700} tone="bad">
         Could not read the bots.
@@ -263,17 +341,6 @@ export default function Home() {
           <IconButton icon="plus" label="New chat" onPress={() => router.push("/new-chat")} />
         </View>
       </View>
-      {dismissed === probe ? null : (
-        <TailscaleBanner
-          status={probe}
-          busy={probing}
-          onRetry={() => {
-            haptic.light();
-            void probeTailscale().then(() => client?.roster.refresh());
-          }}
-          onDismiss={() => setDismissed(probe)}
-        />
-      )}
       {state && listening === 0 && !loading ? (
         <EmptyHome />
       ) : (
@@ -303,69 +370,186 @@ export default function Home() {
 /**
  * A quiet band over one instance's bots: a status square, the instance name as
  * a kicker, its state when its box is not answering, and (folded) a dot when
- * something inside is unread. Tap folds a reachable instance.
+ * something inside is unread. Tap folds a reachable instance. While the phone
+ * is still reaching the instance, the band draws the connection path instead
+ * of the fold chevron, with a caption under it, and once the attempt gives up,
+ * the fix.
  */
 function SectionHeader({
   section,
   agentStatus,
+  connection,
+  asOf,
   onToggle,
+  onRetry,
 }: {
   section: HomeSection;
   agentStatus: string | null;
+  connection: ConnectionShown;
+  asOf: string | null;
   onToggle: (instance: string) => void;
+  onRetry: () => void;
 }) {
   const t = useTheme();
-  const { word, status } = sectionState(section.reachable, agentStatus);
+  const settled = sectionState(section.reachable, agentStatus);
   const hidden = section.folded && (section.needs || section.unread > 0);
+  // A stopped or bootstrapping box says so; "not answering" only when the fleet view has nothing better.
+  const telling = settled.word !== null && settled.word !== "unreachable";
+  const word = connection
+    ? connection === "no_box" && telling
+      ? settled.word
+      : connectionWord(connection, section.instance)
+    : settled.word;
+  const square =
+    connection === "waking" || connection === "reaching"
+      ? { color: t.c.acc, pulse: true }
+      : connection === "connected"
+        ? { color: t.c.ok, pulse: false }
+        : connection === "no_tailscale" || connection === "no_box"
+          ? { color: t.c.bad, pulse: false }
+          : { ...statusColor(t.c, settled.status), pulse: false };
+  const failed = connection === "no_tailscale" || connection === "no_box";
+  const caption = connection
+    ? connectionCaption({ shown: connection, instance: section.instance, asOf })
+    : null;
+  return (
+    <View testID={connection ? `home-connection-${section.instance}` : undefined}>
+      <Pressable
+        testID={`home-section-${section.instance}`}
+        // A fold toggle, so a button with its state; the look stays a quiet header.
+        accessibilityRole="button"
+        accessibilityState={{ expanded: !section.folded, disabled: !section.reachable }}
+        accessibilityLabel={[
+          section.instance,
+          word,
+          section.folded ? "folded" : null,
+          section.needs ? "a bot needs you" : section.unread > 0 ? `${section.unread} unread` : null,
+        ]
+          .filter(Boolean)
+          .join(", ")}
+        accessibilityHint={
+          section.reachable ? (section.folded ? "Tap to show" : "Tap to fold") : undefined
+        }
+        accessibilityLiveRegion={connection ? "polite" : "none"}
+        disabled={!section.reachable}
+        onPress={() => onToggle(section.instance)}
+        style={({ pressed }) => ({
+          flexDirection: "row",
+          alignItems: "center",
+          gap: t.space.sm,
+          minHeight: t.touch.min,
+          marginTop: t.space.md,
+          paddingHorizontal: t.space.lg + t.space.xs,
+          backgroundColor: t.c.bg2,
+          borderBottomWidth: failed ? t.border.control : 0,
+          borderBottomColor: t.c.bad,
+          opacity: pressed ? 0.6 : 1,
+        })}
+      >
+        <StatusSquare size={8} color={square.color} pulse={square.pulse} />
+        <Kicker numberOfLines={1} style={{ flexShrink: 1 }}>
+          {section.instance}
+        </Kicker>
+        {word ? (
+          <Text mono variant="caption" tone="fg3" numberOfLines={1} style={{ flexShrink: 1 }}>
+            {`· ${word}`}
+          </Text>
+        ) : null}
+        <View style={{ flex: 1 }} />
+        {hidden ? (
+          <View style={{ width: 8, height: 8, backgroundColor: section.needs ? t.c.warn : t.c.acc }} />
+        ) : null}
+        {connection ? (
+          <ConnectionPath shown={connection} />
+        ) : section.reachable ? (
+          <View style={{ transform: [{ rotate: section.folded ? "180deg" : "-90deg" }] }}>
+            <Icon name="back" size={12} color={t.c.fg3} />
+          </View>
+        ) : null}
+      </Pressable>
+      {failed ? (
+        <View
+          style={{
+            flexDirection: "row",
+            gap: t.space.lg,
+            paddingLeft: t.space.lg + t.space.xs + 8 + t.space.sm,
+            backgroundColor: t.c.bg2,
+          }}
+        >
+          {connection === "no_tailscale" ? (
+            <HeaderAction label="Open Tailscale" onPress={() => void openTailscale()} />
+          ) : null}
+          <HeaderAction label="Try again" onPress={onRetry} />
+        </View>
+      ) : null}
+      {caption ? (
+        <Text
+          mono
+          variant="caption"
+          tone="fg2"
+          style={{
+            paddingHorizontal: t.space.lg + t.space.xs,
+            paddingTop: t.space.sm,
+            paddingBottom: t.space.xs,
+          }}
+        >
+          {caption}
+        </Text>
+      ) : null}
+      {connection && connection !== "connected" && section.rows.length === 0 ? <RowSkeletons /> : null}
+    </View>
+  );
+}
+
+/** A text-only action under a header that gave up: 44pt tall, accent label. */
+function HeaderAction({ label, onPress }: { label: string; onPress: () => void }) {
+  const t = useTheme();
   return (
     <Pressable
-      testID={`home-section-${section.instance}`}
-      // A fold toggle, so a button with its state; the look stays a quiet header.
       accessibilityRole="button"
-      accessibilityState={{ expanded: !section.folded, disabled: !section.reachable }}
-      accessibilityLabel={[
-        section.instance,
-        word,
-        section.folded ? "folded" : null,
-        section.needs ? "a bot needs you" : section.unread > 0 ? `${section.unread} unread` : null,
-      ]
-        .filter(Boolean)
-        .join(", ")}
-      accessibilityHint={
-        section.reachable ? (section.folded ? "Tap to show" : "Tap to fold") : undefined
-      }
-      disabled={!section.reachable}
-      onPress={() => onToggle(section.instance)}
+      accessibilityLabel={label}
+      onPress={onPress}
       style={({ pressed }) => ({
-        flexDirection: "row",
-        alignItems: "center",
-        gap: t.space.sm,
         minHeight: t.touch.min,
-        marginTop: t.space.md,
-        paddingHorizontal: t.space.lg + t.space.xs,
-        backgroundColor: t.c.bg2,
+        justifyContent: "center",
         opacity: pressed ? 0.6 : 1,
       })}
     >
-      <View style={{ width: 8, height: 8, backgroundColor: statusColor(t.c, status).color }} />
-      <Kicker numberOfLines={1} style={{ flexShrink: 1 }}>
-        {section.instance}
-      </Kicker>
-      {word ? (
-        <Text mono variant="caption" tone="fg3" numberOfLines={1}>
-          {`· ${word}`}
-        </Text>
-      ) : null}
-      <View style={{ flex: 1 }} />
-      {hidden ? (
-        <View style={{ width: 8, height: 8, backgroundColor: section.needs ? t.c.warn : t.c.acc }} />
-      ) : null}
-      {section.reachable ? (
-        <View style={{ transform: [{ rotate: section.folded ? "180deg" : "-90deg" }] }}>
-          <Icon name="back" size={12} color={t.c.fg3} />
-        </View>
-      ) : null}
+      <Text variant="bodySmall" weight={700} tone="acc">
+        {label}
+      </Text>
     </Pressable>
+  );
+}
+
+/** Row shapes under a header still being reached with nothing to draw yet. */
+function RowSkeletons() {
+  const t = useTheme();
+  return (
+    <View
+      testID="home-connection-skeleton"
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+    >
+      {[0, 1, 2].map((i) => (
+        <View
+          key={i}
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            gap: t.space.lg,
+            paddingHorizontal: t.space.lg + t.space.xs,
+            height: HOME_ROW_HEIGHT,
+          }}
+        >
+          <Skeleton width={ROW_AVATAR} height={ROW_AVATAR} />
+          <View style={{ flex: 1, gap: t.space.sm }}>
+            <Skeleton width="40%" height={12} />
+            <Skeleton width="80%" height={10} />
+          </View>
+        </View>
+      ))}
+    </View>
   );
 }
 

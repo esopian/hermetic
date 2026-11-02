@@ -220,6 +220,29 @@ export function useSendQueue({
   );
 
   /**
+   * A row taken out of the queue (a queued row asked as a `/btw`) put back
+   * where it stood, files and all: `ahead` and `behind` are the ids that were
+   * queued before and after it when it left. It goes in front of the first of
+   * `behind` still queued; with none left, after those of `ahead` still
+   * queued (the queue drains from the top, so that is usually none).
+   */
+  const restoreQueued = useCallback(
+    (row: QueuedMessage, ahead: readonly string[], behind: readonly string[], target = selection) => {
+      if (!target) return;
+      const key = queueKeyOf(target);
+      setQueues((previous) => {
+        const rows = (previous.get(key) ?? []).filter((r) => r.id !== row.id);
+        const follower = rows.findIndex((r) => behind.includes(r.id));
+        const at = follower >= 0 ? follower : rows.filter((r) => ahead.includes(r.id)).length;
+        const next = new Map(previous);
+        next.set(key, [...rows.slice(0, at), row, ...rows.slice(at)]);
+        return next;
+      });
+    },
+    [selection],
+  );
+
+  /**
    * One queued message goes out each time the conversation falls idle.
    *
    * One at a time and in order, because the box runs one turn per conversation
@@ -455,6 +478,8 @@ export function useSendQueue({
         queueMessage: (text: string, files?: readonly SentAttachment[]) =>
           queueMessage(text, target, files),
         unqueue: (id: string) => unqueue(id, target),
+        restoreQueued: (row: QueuedMessage, ahead: readonly string[], behind: readonly string[]) =>
+          restoreQueued(row, ahead, behind, target),
         sendMessage: (text: string, files?: readonly SentAttachment[]) =>
           sendMessage(text, target, files),
         stopTurn: () => stopTarget(target),
@@ -462,13 +487,24 @@ export function useSendQueue({
         sendQueuedNow: (id: string) => sendQueuedNow(id, target),
       };
     },
-    [queues, parkedAt, queueMessage, unqueue, sendMessage, stopTarget, sendNow, sendQueuedNow],
+    [
+      queues,
+      parkedAt,
+      queueMessage,
+      unqueue,
+      restoreQueued,
+      sendMessage,
+      stopTarget,
+      sendNow,
+      sendQueuedNow,
+    ],
   );
 
   return {
     queued,
     queueMessage,
     unqueue,
+    restoreQueued,
     queueParked,
     sendMessage,
     stopTurn,

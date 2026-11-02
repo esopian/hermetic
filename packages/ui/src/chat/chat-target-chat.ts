@@ -8,6 +8,7 @@
  * call, as it was inline in `ChatProvider`.
  */
 import type { useConversations } from "./chat-conversations.ts";
+import type { useBtw } from "./chat-btw.ts";
 import type { useSendQueue } from "./chat-queue.ts";
 import { targetDestination } from "./chat-target-destination.ts";
 import type { Chat, ChatSelection } from "./chat-types.ts";
@@ -16,6 +17,7 @@ export function chatForTarget(
   value: Chat,
   conversations: ReturnType<typeof useConversations>,
   queueFor: ReturnType<typeof useSendQueue>["forTarget"],
+  btwFor: ReturnType<typeof useBtw>["forTarget"],
   target: ChatSelection,
   onSelect?: (target: ChatSelection) => void,
 ): Chat {
@@ -73,6 +75,8 @@ export function chatForTarget(
     unqueue: queue.unqueue,
     sendNow: queue.sendNow,
     sendQueuedNow: queue.sendQueuedNow,
+    restoreQueued: queue.restoreQueued,
+    btw: btwFor(target),
     queueParked: queue.queueParked,
     subagents: conversations.subagents.forTarget(target),
     attachments: conversations.attachments.forTarget(target),

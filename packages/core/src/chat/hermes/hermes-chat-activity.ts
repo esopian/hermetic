@@ -158,9 +158,11 @@ export function hermesActivity(
             level(payload.level),
           )
         : null;
+    // Answered by `chat.btw` (`hermes-chat-btw.ts`), not as a notice in a turn.
+    case "btw.complete":
+      return null;
     case "review.summary":
     case "background.complete":
-    case "btw.complete":
     case "preview.restart.complete":
       return text(payload.text)
         ? make(

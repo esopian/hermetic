@@ -45,6 +45,8 @@ import {
   ChatRespondInput,
   ChatAbortInput,
   ChatSteerInput,
+  ChatBtwInput,
+  ChatBranchInput,
   ChatListeningInput,
   ChatListenInput,
   ChatHistoryInput,
@@ -56,6 +58,7 @@ import {
   ChatSwarmsInput,
   agentDashboardUrl,
   cloudName,
+  legacyCloudNames,
 } from "../schema/index.ts";
 import type {
   Agent,
@@ -350,6 +353,31 @@ export interface ChatSteerResult {
   status: ChatSteerStatus;
 }
 
+/**
+ * A `/btw` answer (§9.2): the question as the gateway echoed it, the answer
+ * (or an `error: …` line with `error` set), and the task id that matched them.
+ */
+export interface ChatBtwResult {
+  instance: string;
+  bot: string;
+  task_id: string;
+  question: string;
+  answer: string;
+  error: boolean;
+}
+
+/**
+ * A conversation continued as a new session (§9.2): the new stored session,
+ * the parent it branched from, and how many messages seeded it.
+ */
+export interface ChatBranchResult {
+  instance: string;
+  bot: string;
+  session: string;
+  parent_session: string;
+  messages: number;
+}
+
 /* ── the surface ──────────────────────────────────────────────────────────── */
 
 export function createChat(deps: ChatDeps) {
@@ -470,7 +498,12 @@ export function createChat(deps: ChatDeps) {
     requireListening(fleet.fleet_id, instance);
     return {
       instance: agent.name,
-      baseUrl: agentDashboardUrl(agent, fleet.tailnet, cloudName(fleet.fleet_id, agent.name)),
+      baseUrl: agentDashboardUrl(
+        agent,
+        fleet.tailnet,
+        cloudName(fleet.fleet_id, agent.name),
+        legacyCloudNames(fleet.fleet_name, agent.name),
+      ),
       // §9.2: a bot's avatar is seeded from `fleet_id/instance/bot`, so that a
       // rename does not change its face and two fleets' `default@atlas` do not
       // wear the same one. The adapter reaches boxes, not tables, so the fleet
@@ -501,7 +534,12 @@ export function createChat(deps: ChatDeps) {
         : [await getAgent(parsed.instance)];
     const boxOf = (agent: Agent): BoxAddress => ({
       instance: agent.name,
-      baseUrl: agentDashboardUrl(agent, fleet.tailnet, cloudName(fleet.fleet_id, agent.name)),
+      baseUrl: agentDashboardUrl(
+        agent,
+        fleet.tailnet,
+        cloudName(fleet.fleet_id, agent.name),
+        legacyCloudNames(fleet.fleet_name, agent.name),
+      ),
       fleet_id: fleet.fleet_id,
     });
     const settled = await Promise.allSettled(
@@ -806,6 +844,44 @@ export function createChat(deps: ChatDeps) {
     return { instance: parsed.instance, bot: parsed.bot, status };
   }
 
+  /**
+   * Ask a side question from a snapshot of the conversation (`/btw`, §9.2).
+   *
+   * Runs at once beside a running turn and takes no chat fence: nothing is
+   * written into the box's history. Question and answer are masked like any
+   * other transcript text.
+   */
+  async function btw(input: unknown, opts: ChatOptions = {}): Promise<ChatBtwResult> {
+    const parsed = parse(ChatBtwInput, input, "chat btw");
+    validateName(parsed.instance);
+    const view = mask();
+    const box = await address(parsed.instance);
+    if (!hermes.btw) throw new HermeticError("CHAT_PROTOCOL", "This gateway does not support /btw");
+    opts.signal?.throwIfAborted();
+    const answer = await hermes.btw(box, parsed.bot, parsed.text, {
+      signal: opts.signal,
+      ...(parsed.session != null ? { session: parsed.session } : {}),
+    });
+    return view.deep({ instance: parsed.instance, bot: parsed.bot, ...answer });
+  }
+
+  /**
+   * Continue a conversation as a new session (§9.2), usually from a `/btw`
+   * card: the parent's visible history up to `until`, then the side question
+   * and answer. The parent is read, never resumed, so a running turn keeps it.
+   */
+  async function branch(input: unknown, opts: ChatOptions = {}): Promise<ChatBranchResult> {
+    const parsed = parse(ChatBranchInput, input, "chat branch");
+    validateName(parsed.instance);
+    const view = mask();
+    const box = await address(parsed.instance);
+    if (!hermes.branch)
+      throw new HermeticError("CHAT_PROTOCOL", "This gateway cannot seed a branch session");
+    opts.signal?.throwIfAborted();
+    const made = await hermes.branch(box, parsed.bot, parsed, { signal: opts.signal });
+    return view.deep({ instance: parsed.instance, bot: parsed.bot, ...made });
+  }
+
   const observation = createChatObserveWiring({
     deps,
     hermes,
@@ -930,6 +1006,18 @@ export function createChat(deps: ChatDeps) {
       sealed(() =>
         watched(parse(ChatSteerInput, input, "chat steer").instance, opts, (request) =>
           steer(input, request),
+        ),
+      ),
+    btw: (input: unknown, opts: ChatOptions = {}) =>
+      sealed(() =>
+        watched(parse(ChatBtwInput, input, "chat btw").instance, opts, (request) =>
+          btw(input, request),
+        ),
+      ),
+    branch: (input: unknown, opts: ChatOptions = {}) =>
+      sealed(() =>
+        watched(parse(ChatBranchInput, input, "chat branch").instance, opts, (request) =>
+          branch(input, request),
         ),
       ),
     /**

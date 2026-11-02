@@ -20,6 +20,7 @@ function report(overrides: Partial<PolicyReport> = {}): PolicyReport {
     ],
     etag: '"policy-1"',
     diff: null,
+    exposure: [],
     ...overrides,
   };
 }
@@ -73,5 +74,38 @@ describe("renderPolicy", () => {
     const lines = renderPolicy(report()).split("\n");
     expect(lines.length).toBe(6);
     expect(lines[0]).toContain("read + write (policy_file)");
+  });
+
+  /**
+   * §5.2: the operator's own rules that let a box out, under the table, by key
+   * and index only — and nothing at all for a clean or unreadable policy.
+   */
+  test("exposure findings print under the blocks, one line each", () => {
+    const text = renderPolicy(
+      report({
+        exposure: [
+          {
+            rule: "grants",
+            index: 0,
+            severity: "high",
+            summary:
+              "grants[0] lets agent boxes reach nodes other than tag:hermetic (matched through autogroup:tagged)",
+          },
+          {
+            rule: "nodeAttrs",
+            index: 2,
+            severity: "info",
+            summary: "nodeAttrs[2] allows Funnel on agent boxes",
+          },
+        ],
+      }),
+    );
+    const lines = text.split("\n");
+    expect(lines[6]).toContain("exposure       2 findings, 1 high");
+    expect(lines[7]).toBe(
+      "  high         grants[0] lets agent boxes reach nodes other than tag:hermetic (matched through autogroup:tagged)",
+    );
+    expect(lines[8]).toBe("  info         nodeAttrs[2] allows Funnel on agent boxes");
+    expect(renderPolicy(report({ exposure: null }))).not.toContain("exposure");
   });
 });

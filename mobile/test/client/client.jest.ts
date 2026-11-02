@@ -546,7 +546,8 @@ describe("createHermeticClient", () => {
     await s.fleet.setListeningAll();
     s.fetched.length = 0;
     await s.client.tailscale.probe();
-    expect(s.fetched.map((c) => c.url)).toEqual([
+    // Tailscale's own status page is asked beside the boxes (`probeTunnel`).
+    expect(s.fetched.map((c) => c.url).filter((u) => u !== "http://100.100.100.100/")).toEqual([
       "https://fxtr0001-corvid-2.hermetic.ts.net/api/health",
       "https://fxtr0001-atlas.hermetic.ts.net/api/health",
     ]);

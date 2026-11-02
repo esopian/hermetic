@@ -39,7 +39,12 @@ import {
 import { failureHeadline } from "./chat-logic.ts";
 import { ConversationStore, type ConversationTarget, type TurnWhere } from "./conversation-store.ts";
 import { markConversationRead } from "./read.ts";
-import { botKey, type RosterPrefsStorage, RosterStore } from "./roster-store.ts";
+import {
+  botKey,
+  type RosterCacheStorage,
+  type RosterPrefsStorage,
+  RosterStore,
+} from "./roster-store.ts";
 import { realTimers, type Timers } from "./timers.ts";
 
 /* ── alerts ─────────────────────────────────────────────────────────────── */
@@ -189,6 +194,8 @@ export interface HermeticClientOptions {
   /** The adapter to use instead of a live one (fixture mode: core's `fixtureChatClient`). */
   chat?: HermesChatClient;
   rosterPrefs?: RosterPrefsStorage;
+  /** The last roster read, kept between launches (`RosterCacheStorage`). */
+  rosterCache?: RosterCacheStorage;
   /** Called with every alert that should be shown; the RN layer draws or schedules it. */
   onAlert?: (alert: Alert) => void;
   /** Whether alerts may carry message text (the phone's previews preference). */
@@ -472,7 +479,12 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
     where.session === null ||
     chat.view(where).sessions.find((s) => s.id === where.session)?.kind === "canonical";
 
-  const roster = new RosterStore(transport, options.rosterPrefs ?? null);
+  const roster = new RosterStore(
+    transport,
+    options.rosterPrefs ?? null,
+    Date.now,
+    options.rosterCache ?? null,
+  );
   // A request open in a followed turn marks its bot needs-you on home until it
   // is answered or its turn ends, whether or not its thread has been read.
   const offWaiting = chat.subscribe(() => {

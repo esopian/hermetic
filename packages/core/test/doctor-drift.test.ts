@@ -1,9 +1,10 @@
 import { testHermetic } from "./helpers.ts";
-import { describe, expect, test } from "bun:test";
+import { describe, expect, jest, test } from "bun:test";
 import { FIXTURE_CONFIG, MemoryBackend, seedFixtureFleet } from "../src/backend/memory.ts";
-import { checkLocalTailscale } from "../src/fleet/doctor.ts";
+import { checkLocalTailscale, checkTailnetDns, tailnetDnsName } from "../src/fleet/doctor.ts";
+import type { TailnetDnsProbe } from "../src/fleet/tailnet-dns.ts";
 import { TAILSCALE_ADMIN_DNS_URL, parseTailscaleStatus } from "../src/fleet/preflight.ts";
-import type { TailscalePreflight } from "../src/schema/index.ts";
+import type { Agent, TailscalePreflight } from "../src/schema/index.ts";
 
 /**
  * §4.8: these describe a fleet the account's directory knows about — an
@@ -381,8 +382,8 @@ describe("doctor: tailscale drift", () => {
     // was never re-scoped, and the one an operator may prefer anyway.
     expect(stale.note).toContain("Machines → atlas");
     // But this fixture *can* read devices, so the client has `devices:core`
-    // and the note offers the command that clears it (§6.5).
-    expect(stale.note).toContain("hermetic agent recreate atlas will remove it");
+    // and the note says the recreate clears the device on its own (§6.5).
+    expect(stale.note).toContain("the recreate removes the dead device itself");
     expect(report.findings.join(" ")).not.toContain("tailscale_stale_device");
     // The findings are what they would have been without the rename: the seeded
     // stale heartbeat, and nothing else. Renaming only the row cannot cause
@@ -393,8 +394,9 @@ describe("doctor: tailscale drift", () => {
 
   /**
    * The other half of the same sentence: a fleet that cannot read the device
-   * list cannot delete one either, so the note must not promise a command that
-   * would only warn.
+   * list cannot delete one either, so the note must not promise that the
+   * recreate removes it. The recreate is still named, because hermetic no longer
+   * follows a `-<n>` name (§6.1) and only a fresh node takes the canonical one.
    */
   test("without the devices scope the note keeps the admin console as the only fix", async () => {
     const { backend, hermetic } = seeded();
@@ -404,7 +406,7 @@ describe("doctor: tailscale drift", () => {
     const report = await hermetic.doctor();
     const stale = report.tailscale.stale.find((s) => s.agent === "atlas")!;
     expect(stale.note).toContain("Machines → atlas");
-    expect(stale.note).not.toContain("agent recreate");
+    expect(stale.note).not.toContain("removes the dead device itself");
   });
 
   /**
@@ -660,9 +662,17 @@ describe("doctor: this machine's tailscale", () => {
     );
   }
 
-  function withProbe(localTailscale: () => Promise<TailscalePreflight>) {
+  function withProbe(
+    localTailscale: () => Promise<TailscalePreflight>,
+    localTailnetDns?: TailnetDnsProbe,
+  ) {
     const backend = seedFixtureFleet(new MemoryBackend({ directory: "seeded" }));
-    return testHermetic({ backend, config: FIXTURE_CONFIG, localTailscale });
+    return testHermetic({
+      backend,
+      config: FIXTURE_CONFIG,
+      localTailscale,
+      ...(localTailnetDns ? { localTailnetDns } : {}),
+    });
   }
 
   test("HTTPS certificates off is a finding, verbatim, with the admin DNS link", async () => {
@@ -691,14 +701,94 @@ describe("doctor: this machine's tailscale", () => {
   test("a healthy tailnet is reported, and is not a finding", async () => {
     const report = await withProbe(async () => status()).doctor();
 
-    expect(report.local_tailscale).toEqual({
+    expect(report.local_tailscale).toMatchObject({
       ok: true,
       tailnet: "acme.ts.net",
       https_certificates: true,
       detail: "tailscale: acme.ts.net, HTTPS certificates on",
+      dns: { via_tailscale: true, via_system: true },
     });
     expect(report.findings.join(" ")).not.toContain("HTTPS certificates");
     expect(report.findings.join(" ")).not.toContain(TAILSCALE_ADMIN_DNS_URL);
+  });
+
+  test("Tailscale's resolver answers and the system's does not: a finding naming the DNS setting", async () => {
+    const asked: string[] = [];
+    const report = await withProbe(
+      async () => status(),
+      async (name) => {
+        asked.push(name);
+        return { name, via_tailscale: true, via_system: false };
+      },
+    ).doctor();
+
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatch(/\.ts\.net$/);
+    expect(report.local_tailscale.ok).toBe(false);
+    expect(report.local_tailscale.dns).toEqual({
+      name: asked[0]!,
+      via_tailscale: true,
+      via_system: false,
+    });
+    expect(report.local_tailscale.detail).toContain("not using its DNS");
+    expect(report.local_tailscale.detail).toContain("--accept-dns=true");
+    expect(report.findings).toContain(report.local_tailscale.detail);
+    expect(report.ok).toBe(false);
+  });
+
+  test("neither resolver answering is left to the fleet reads: no DNS finding", async () => {
+    const report = await withProbe(
+      async () => status(),
+      async (name) => ({ name, via_tailscale: false, via_system: false }),
+    ).doctor();
+
+    expect(report.local_tailscale.ok).toBe(true);
+    expect(report.findings.join(" ")).not.toContain("not using its DNS");
+  });
+
+  test("a failed preflight does not ask DNS at all", async () => {
+    const probe = jest.fn(async (name: string) => ({ name, via_tailscale: true, via_system: false }));
+    const report = await withProbe(async () => status({ BackendState: "Stopped" }), probe).doctor();
+
+    expect(probe).not.toHaveBeenCalled();
+    expect(report.local_tailscale.dns).toBeNull();
+  });
+
+  test("a DNS probe that hangs or throws leaves the preflight's reading as it was", async () => {
+    const local = await checkLocalTailscale(async () => status());
+    expect(await checkTailnetDns(local, () => new Promise(() => {}), "a.acme.ts.net", 10)).toEqual(
+      local,
+    );
+    expect(
+      await checkTailnetDns(
+        local,
+        async () => {
+          throw new Error("resolver gone");
+        },
+        "a.acme.ts.net",
+      ),
+    ).toEqual(local);
+    expect(
+      await checkTailnetDns(
+        local,
+        async () => ({ name: "x", via_tailscale: true, via_system: false }),
+        null,
+      ),
+    ).toEqual(local);
+  }, 1000);
+
+  test("the name asked is a ready agent's, trailing dot dropped", () => {
+    const agent = (name: string, status: string, dns: string | null) =>
+      ({ name, status, tailscale_dns_name: dns }) as unknown as Agent;
+    expect(
+      tailnetDnsName([
+        agent("a", "stopped", "a.acme.ts.net"),
+        agent("b", "ready", "b.acme.ts.net."),
+        agent("c", "ready", null),
+      ]),
+    ).toBe("b.acme.ts.net");
+    expect(tailnetDnsName([agent("a", "stopped", "a.acme.ts.net")])).toBe("a.acme.ts.net");
+    expect(tailnetDnsName([agent("c", "ready", null)])).toBeNull();
   });
 
   test("a probe that throws is a finding, not the end of doctor", async () => {
