@@ -58,6 +58,35 @@ export type PolicyBlockReport = z.infer<typeof PolicyBlockReport>;
 export const PolicyManagedState = z.enum(["absent", "current", "drifted", "unavailable"]);
 export type PolicyManagedState = z.infer<typeof PolicyManagedState>;
 
+/**
+ * How much a finding matters. `high` is reach an agent box should not have:
+ * a rule that lets it out to the rest of the tailnet, SSH out of it, or routes
+ * it can advertise and have approved without a human. `info` is worth knowing
+ * but not reach in itself — a Funnel attribute, or a rule whose addresses may
+ * or may not belong to a box.
+ */
+export const PolicyExposureSeverity = z.enum(["high", "info"]);
+export type PolicyExposureSeverity = z.infer<typeof PolicyExposureSeverity>;
+
+/**
+ * One rule in the operator's own policy that lets a `tag:hermetic` box reach
+ * beyond what hermetic needs (§5.2 "What the rest of the policy lets a box do").
+ * Informational: hermetic never edits the rule and `doctor` never reports it.
+ *
+ * The rule is named by its top-level key and position and nothing else. The
+ * policy can name people, so `summary` is built from a fixed vocabulary and
+ * never quotes a selector, a group member or an address from the document.
+ */
+export const PolicyExposure = z.object({
+  /** The policy key the rule sits in: `acls`, `grants`, `ssh`, `autoApprovers.routes`, … */
+  rule: z.string(),
+  /** The rule's zero-based position under that key, or null for a finding about the whole file. */
+  index: z.number().int().nonnegative().nullable(),
+  severity: PolicyExposureSeverity,
+  summary: z.string(),
+});
+export type PolicyExposure = z.infer<typeof PolicyExposure>;
+
 export const PolicyReport = z.object({
   scope: PolicyScope,
   /**
@@ -84,5 +113,12 @@ export const PolicyReport = z.object({
    * document from outside those ranges.
    */
   diff: z.string().nullable(),
+  /**
+   * Rules outside hermetic's blocks that let an agent box reach further than
+   * hermetic needs (`fleet/policy-exposure.ts`). An empty array is a policy
+   * that was read and found clean; null is a policy that could not be read or
+   * parsed, so a missing scope never reads as a clean bill.
+   */
+  exposure: z.array(PolicyExposure).nullable(),
 });
 export type PolicyReport = z.infer<typeof PolicyReport>;

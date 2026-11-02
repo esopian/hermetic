@@ -21,11 +21,12 @@ import {
   useState,
 } from "react";
 import { type Alert, createHermeticClient, type HermeticClient } from "../client/client.ts";
+import { CONNECT_GRACE_MS, CONNECT_RETRY_MS, type ConnectionAttempt } from "../client/connection.ts";
 import type { ConversationTarget } from "../client/conversation-store.ts";
 import type { PhoneFilesFactory } from "../gateway/files.ts";
 import type { FetchLike } from "../gateway/hermeticd.ts";
 import type { OpenSocket } from "../gateway/socket.ts";
-import type { TailscaleProbe, TailscaleStatus } from "../gateway/tailscale.ts";
+import type { TailscaleProbe } from "../gateway/tailscale.ts";
 import { entryLive, InboxStore } from "../inbox/store.ts";
 import { usePrefs } from "../prefs/prefs.tsx";
 import {
@@ -37,7 +38,7 @@ import {
   presentsLocally,
   routeFor,
 } from "./alerts.ts";
-import type { FixtureControls } from "./fixture-types.ts";
+import type { FixtureControls, FixtureTailscaleMode } from "./fixture-types.ts";
 import type { FleetEntry } from "./fleets.ts";
 import type { PairedLink } from "./pairing.ts";
 import {
@@ -56,6 +57,7 @@ import {
   FleetStore,
   type KvStorage,
   listenedEntry,
+  rosterCacheStorage,
   rosterPrefsStorage,
   type TextFile,
 } from "./store.ts";
@@ -86,6 +88,8 @@ export interface FleetDeps {
   recordKey?: string | null;
   viewCache: TextFile;
   inboxFile: TextFile;
+  /** The last roster read (`rosterCacheStorage`); absent, nothing is kept between launches. */
+  rosterFile?: TextFile;
   fetch: FetchLike;
   openSocket: OpenSocket;
   /** The adapter to use instead of a live one (fixture mode). */
@@ -120,6 +124,14 @@ export interface FleetContextValue {
   tailscale: TailscaleProbe | null;
   probing: boolean;
   probeTailscale(): Promise<void>;
+  /**
+   * The current connection attempt (a launch, a return to the foreground, a
+   * refresh or a retry): home's header measures its grace window from it
+   * (`src/client/connection.ts`). `null` before the first.
+   */
+  connection: ConnectionAttempt | null;
+  /** Start a new attempt: probe, read the bots, and keep asking through the grace window. */
+  retryConnection(): void;
   /** The in-app banner currently showing (foreground alerts). */
   banner: Alert | null;
   dismissBanner(): void;
@@ -163,7 +175,7 @@ export interface FleetContextValue {
    */
   focusConversation(target: ConversationTarget | null): void;
   /** Fixture builds only; `null` in every real build. */
-  fixture: (FixtureControls & { setTailscale(s: Exclude<TailscaleStatus, "unknown">): void }) | null;
+  fixture: (FixtureControls & { setTailscale(s: FixtureTailscaleMode): void }) | null;
 }
 
 /** The other paired fleets (`FleetSwitch.tsx`): this provider is the active one's. */
@@ -263,6 +275,43 @@ export function FleetProvider({
     }
   }, []);
 
+  /**
+   * A new connection attempt. Inside its grace window the phone asks again
+   * every `CONNECT_RETRY_MS` (Tailscale, then the bots) until every listened
+   * box has answered a read made during it, so a tunnel that wakes late is
+   * noticed seconds after it does, not at the next foreground.
+   */
+  const [connection, setConnection] = useState<ConnectionAttempt | null>(null);
+  const attemptRef = useRef<ConnectionAttempt | null>(null);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stopRetrying = useCallback(() => {
+    if (retryTimer.current) clearTimeout(retryTimer.current);
+    retryTimer.current = null;
+  }, []);
+  const beginAttempt = useCallback(() => {
+    stopRetrying();
+    const attempt: ConnectionAttempt = { startedAt: Date.now() };
+    attemptRef.current = attempt;
+    setConnection(attempt);
+    const tick = () => {
+      retryTimer.current = null;
+      const c = clientRef.current;
+      if (!c || attemptRef.current !== attempt) return;
+      if (Date.now() - attempt.startedAt >= CONNECT_GRACE_MS) return;
+      const roster = c.roster.getState();
+      const answered =
+        roster.readAt !== null &&
+        roster.readAt >= attempt.startedAt &&
+        roster.listening.length > 0 &&
+        roster.swarms.filter((s) => roster.listening.includes(s.instance)).every((s) => s.reachable);
+      if (answered) return;
+      void probe().then(() => c.roster.refresh());
+      retryTimer.current = setTimeout(tick, CONNECT_RETRY_MS);
+    };
+    retryTimer.current = setTimeout(tick, CONNECT_RETRY_MS);
+  }, [probe, stopRetrying]);
+  useEffect(() => stopRetrying, [stopRetrying]);
+
   /** Tailscale first (its HTTPS answers open the off-tunnel gate for those hosts), then `/fleet`. */
   const probeThenRefresh = useCallback(async (): Promise<boolean> => {
     await probe();
@@ -289,6 +338,7 @@ export function FleetProvider({
       ...(deps.chat ? { chat: deps.chat } : {}),
       now: () => nowRef.current(),
       rosterPrefs: rosterPrefsStorage(deps.secure),
+      ...(deps.rosterFile ? { rosterCache: rosterCacheStorage(deps.rosterFile) } : {}),
       previews: () => previewsRef.current,
       onAlert: (alert) => {
         // Local delivery off, or inside quiet hours: the inbox still has the entry.
@@ -304,6 +354,7 @@ export function FleetProvider({
     setClient(next);
     setStatus("paired");
     next.setPhase(deps.appState.current() === "active" ? "active" : "background");
+    beginAttempt();
     void next.roster.refresh();
     void probeThenRefresh();
     void deps.background?.register();
@@ -314,7 +365,7 @@ export function FleetProvider({
       onOpenRef.current(route);
     }
     return next;
-  }, [deps, fleet, inbox, pushSync, probeThenRefresh]);
+  }, [deps, fleet, inbox, pushSync, probeThenRefresh, beginAttempt]);
 
   // Boot: the notification handlers, the inbox, any stored pairing.
   useEffect(() => {
@@ -455,6 +506,7 @@ export function FleetProvider({
           for (const content of await deps.notifier.presented().catch(() => []))
             ingestPush(inbox, content, nowRef.current(), pushFleet());
         })();
+        beginAttempt();
         void probeThenRefresh();
         void c.roster.refresh();
         if (pushSync.enabled()) void pushSync.sync().then(setPush);
@@ -473,7 +525,7 @@ export function FleetProvider({
       off();
       clear();
     };
-  }, [deps, inbox, pushSync, pushFleet, probeThenRefresh]);
+  }, [deps, inbox, pushSync, pushFleet, probeThenRefresh, beginAttempt]);
 
   /**
    * shortcut: push and the badge follow the active fleet only (the fleet left
@@ -524,15 +576,19 @@ export function FleetProvider({
     setClient(null);
     setBanner(null);
     setTailscale(null);
+    stopRetrying();
+    attemptRef.current = null;
+    setConnection(null);
     const leaving = fleet.getState().link?.payload.fleet_id ?? null;
     await fleet.signOut();
     await inbox.clear();
+    await deps.rosterFile?.remove().catch(() => {});
     await deps.background?.unregister();
     await deps.notifier.setBadge(0);
     // The next paired fleet, if any, remounts the app in front.
     if (leaving) await switcherRef.current?.remove(leaving);
     setStatus("unpaired");
-  }, [deps, fleet, inbox, pushSync]);
+  }, [deps, fleet, inbox, pushSync, stopRetrying]);
 
   const [primary, setPrimaryState] = useState<string | null>(() => fleet.getState().primary);
   const [needsPrimary, setNeedsPrimary] = useState(() => fleet.needsPrimary());
@@ -558,8 +614,16 @@ export function FleetProvider({
   const refresh = useCallback(async () => {
     const c = clientRef.current;
     if (!c) return;
+    beginAttempt();
     await Promise.all([probeThenRefresh(), c.roster.refresh()]);
-  }, [probeThenRefresh]);
+  }, [probeThenRefresh, beginAttempt]);
+
+  const retryConnection = useCallback(() => {
+    const c = clientRef.current;
+    if (!c) return;
+    beginAttempt();
+    void probe().then(() => c.roster.refresh());
+  }, [probe, beginAttempt]);
 
   const setPushEnabled = useCallback(
     async (on: boolean) => {
@@ -601,12 +665,13 @@ export function FleetProvider({
     if (!controls) return null;
     return {
       ...controls,
-      setTailscale: (s: Exclude<TailscaleStatus, "unknown">) => {
+      // A new attempt, so the home header walks the path the picked mode shows.
+      setTailscale: (s: FixtureTailscaleMode) => {
         controls.tailscale.set(s);
-        void probe();
+        retryConnection();
       },
     };
-  }, [deps, probe]);
+  }, [deps, retryConnection]);
 
   const value = useMemo<FleetContextValue>(
     () => ({
@@ -617,6 +682,8 @@ export function FleetProvider({
       tailscale,
       probing,
       probeTailscale: probe,
+      connection,
+      retryConnection,
       banner,
       dismissBanner,
       pair,
@@ -643,6 +710,8 @@ export function FleetProvider({
       tailscale,
       probing,
       probe,
+      connection,
+      retryConnection,
       banner,
       dismissBanner,
       pair,

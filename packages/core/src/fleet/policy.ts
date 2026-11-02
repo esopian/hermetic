@@ -42,6 +42,7 @@ import {
   type ManagedBlock,
 } from "./hujson.ts";
 import { probePolicyScope } from "./policy-scope.ts";
+import { policyExposureOf } from "./policy-exposure.ts";
 import { HermeticError } from "../errors.ts";
 import { FLEET_KEY, HERMETICD_RPC_PORT } from "../schema/index.ts";
 import type {
@@ -587,6 +588,7 @@ export function createPolicy(deps: PolicyDeps) {
         })),
         etag: null,
         diff: null,
+        exposure: null,
       };
     }
     const { scope, reason } = await scopeOf(current.text);
@@ -612,6 +614,11 @@ export function createPolicy(deps: PolicyDeps) {
             write.map((b) => b.key),
           )
         : null,
+      /**
+       * §5.2: what the operator's own rules let a box do. Read from the whole
+       * document, reported by key and index only, and never written to.
+       */
+      exposure: policyExposureOf(current.text),
     };
   }
 

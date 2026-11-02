@@ -3,9 +3,9 @@
 Fill this record for the exact candidate before distributing it. These are draft notes, not a claim
 that a new TestFlight build has been uploaded.
 
-- Version / build: pending
-- Git revision: pending
-- EAS production build UUID: pending
+- Version / build: 0.1.0 (7)
+- Git revision: 5f94785
+- EAS production build UUID: 8fb15be7-b7a6-46db-b063-c79b1296126d
 - Device / iOS: pending
 - Acceptance record: pending
 
@@ -14,13 +14,24 @@ that a new TestFlight build has been uploaded.
 - Hermetic app icon and branded launch artwork.
 - More accessible controls, readable text and support for narrow iPhones.
 - A support report that can be reviewed and shared without conversation or fleet identifiers.
+- Agent narration between tool calls folds into the turn's work group.
 
 ## What to test
 
-Cold launch in light and dark mode. Pair with a test fleet, open a chat, type with the keyboard,
-background the app and return. Try VoiceOver, large text and Reduce Motion. Review the support report
-in Settings and confirm the version/build match this candidate. Check push delivery and notification
-taps with Tailscale connected.
+Agent turns in chat read differently. The short notes an agent writes between tool calls ("Let me
+check X:") now fold into the turn's work group instead of sitting between one-tool rows, so a
+finished turn shows one collapsed "Worked" group and then the answer.
+
+- Ask an agent something that takes several tool calls. While it runs, the group's status line
+  quotes its latest note, and the paragraph still streaming shows small and muted.
+- When the turn finishes, the answer should restyle to normal text and stay outside the group.
+  Open the group: notes show as muted quoted prose, tools as one-line rows, with a "N tools · M
+  notes" count.
+- Open or close a group while a turn is running; it should keep your choice when the turn settles.
+- A turn that shares a file or kanban card should split into two groups around the card.
+- Plain question-and-answer turns should look as before once they finish.
+
+Also check that multi-fleet switching, the board and task lists from the last build still work.
 
 ## Known limitations
 

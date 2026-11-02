@@ -181,7 +181,8 @@ Show the user, in one message:
 - The commits going out: the range, and any unpushed commits on `master`.
 - The drafted notes, including operator actions.
 - What happens next: commit `chore: release v<x.y.z>` and tag `v<x.y.z>` are pushed to `origin`,
-  `release.yml` builds and publishes (about ten minutes), the site deploys after it, and **the tag
+  `release.yml` builds and publishes (about ten minutes), the site is then deployed by hand
+  (`cd site && bun run deploy --production` from the tag), and **the tag
   cannot be taken back**.
 
 Then ask one question with `AskUserQuestion`. The options are the recommended version first, marked

@@ -227,16 +227,8 @@ passed.
   otherwise. A preview build, whose address is unknown until the upload returns it, is stamped with
   the dev fallback in `astro.config.ts`.
 
-In CI, a pushed `v*` tag runs `release.yml`'s `publish` job, then its `site` job, which calls
-`.github/workflows/site.yml`; that runs `bun scripts/deploy.ts --production --yes` with the tag in
-`HERMETIC_RELEASE_TAG` (`tests/ci-contract.test.ts` holds it to that one command, with no relaxing
-flag). On GitHub Actions the script folds subprocess output into log groups, raises failures as
-annotations and writes the deployed URLs to the job summary. To redeploy an already-released tag
-(a docs fix, without cutting a new release):
+Production deploys are made by hand, from the release tag's checkout, after `release.yml`
+publishes it: `bun run deploy --production`. No workflow deploys the site.
 
-```
-gh workflow run site.yml -f ref=vX.Y.Z
-```
-
-One-time Cloudflare/GitHub environment setup (first deploy, API token, secrets, variables):
+One-time Cloudflare setup (first deploy, domain):
 `site/README.md` "Deploy setup".

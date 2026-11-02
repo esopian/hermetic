@@ -46,13 +46,6 @@ export const IGNORED_ADVISORIES: string[] = [
   // (3.0.3 is the latest on npm), so an override cannot fix it.
   // Owner: mobile. Review by 2026-12-01, or when braces ships a fix.
   "GHSA-vfj7-8cjw-p6xm",
-  // GHSA-86w9-cpqp-85rv — node-forge <= 1.4.0 (RSA PKCS#1 v1.5 signature
-  // verification accepts extra DigestAlgorithm elements). Tree: mobile/, via
-  // @expo/cli and @expo/code-signing-certificates. Runs on the developer's
-  // machine in the Expo CLI (dev-server code signing); not shipped in the app
-  // bundle. No patched release exists (1.4.0 is the latest on npm).
-  // Owner: mobile. Review by 2026-12-01, or when node-forge ships a fix.
-  "GHSA-86w9-cpqp-85rv",
   // GHSA-mrhx-c7xc-m3w5 — zod < 4.6.6 (unbounded issue accumulation on large
   // arrays exhausts memory). Granted for mobile/ only, where zod@3.25.76 comes
   // in through @expo/cli (dev-server and build tooling on the developer's
@@ -61,6 +54,15 @@ export const IGNORED_ADVISORIES: string[] = [
   // zod ^4.6.7 in core, cli and app.
   // Owner: mobile. Review by 2026-12-01, or when @expo/cli moves to zod 4.
   "GHSA-mrhx-c7xc-m3w5",
+  // GHSA-qr28-fpjm-wq7f — decode-uri-component <= 0.5.0 (quadratic replacement
+  // of percent-encoded runs). Granted for mobile/ only, where 0.2.2 comes in
+  // through expo-router -> query-string@7, which parses the app's own route and
+  // deep-link URLs: the worst case is a slow parse of a crafted link the
+  // operator taps on their own phone. The only fix, 0.5.1, is ESM-only, and
+  // query-string@7 `require`s it as a function, so an override would break
+  // every URL decode; expo-router up to 57.0.29 still pins query-string ^7.
+  // Owner: mobile. Review by 2026-12-01, or when expo-router drops query-string 7.
+  "GHSA-qr28-fpjm-wq7f",
   // GHSA-xjj6-f33q-929c — undici < 7.30.1 / < 8.12.2 (DoS on excessive
   // content-encodings). Tree: site/ only, via wrangler -> miniflare (exact pin
   // undici@7.29.1, still pinned in the latest miniflare) for the local preview,

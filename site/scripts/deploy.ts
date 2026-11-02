@@ -1,6 +1,6 @@
 // Builds site/ and deploys it to Cloudflare as a Worker with static assets (wrangler.toml), then
-// checks over HTTP that the deployment serves this build. The one deploy path: run by hand from a
-// laptop and by .github/workflows/site.yml.
+// checks over HTTP that the deployment serves this build. The one deploy path, run by hand from a
+// laptop.
 //
 //   bun run deploy                         preview, aliased after the current git branch
 //   bun run deploy --branch review-cost    preview under a named alias
@@ -316,7 +316,7 @@ async function preflight(): Promise<Plan> {
     if (production && site === null) {
       throw new DeployError(
         "HERMETIC_SITE_URL is not set",
-        "production is served on your domain: set HERMETIC_SITE_URL=https://<domain> (CI: the site-production variable)",
+        "production is served on your domain: set HERMETIC_SITE_URL=https://<domain>",
       );
     }
     if (production && site !== null && new URL(site).hostname.endsWith(".workers.dev")) {
@@ -340,13 +340,13 @@ async function credentials(plan: Plan): Promise<void> {
     if (CI && (token === undefined || token.length === 0)) {
       throw new DeployError(
         "CLOUDFLARE_API_TOKEN is not set",
-        "CI deploys need the site-production environment secrets",
+        "a CI deploy needs CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in its environment",
       );
     }
     if (CI && (env["CLOUDFLARE_ACCOUNT_ID"] ?? "").length === 0) {
       throw new DeployError(
         "CLOUDFLARE_ACCOUNT_ID is not set",
-        "CI deploys need the site-production environment secrets",
+        "a CI deploy needs CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in its environment",
       );
     }
     if (token === undefined) {

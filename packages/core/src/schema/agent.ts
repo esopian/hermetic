@@ -6,7 +6,9 @@ export {
   agentDesktopClientUrl,
   agentHostnameMismatch,
   staleDeviceNote,
+  trustedDnsName,
 } from "../shared/naming.ts";
+export type { HostnameMismatch } from "../shared/naming.ts";
 export { ROOT_GIB_MIN, ROOT_GIB_MAX, DEFAULT_ROOT_GIB } from "../shared/box.ts";
 import { PROVIDER_IDS } from "../shared/providers.ts";
 import { SIZE_IDS } from "../shared/sizes.ts";
