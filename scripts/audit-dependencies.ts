@@ -72,14 +72,6 @@ export const IGNORED_ADVISORIES: string[] = [
   // top-level one would put unifont on a major it does not accept.
   // Owner: site. Review by 2026-12-01, or when miniflare moves past 7.29.1.
   "GHSA-xjj6-f33q-929c",
-  // GHSA-qr28-fpjm-wq7f — decode-uri-component <= 0.5.0 (quadratic DoS on
-  // runs of percent-encoded input). Tree: mobile/, via expo-router ->
-  // query-string@7, which accepts only ^0.2.2. Ships in the phone app, where it
-  // parses deep-link and route query strings: the worst case is the app
-  // stalling on a crafted link the user opens. The only fix is 0.5.1, ESM-only,
-  // which query-string 7 is not built for.
-  // Owner: mobile. Review by 2026-12-01, or when expo-router moves past query-string 7.
-  "GHSA-qr28-fpjm-wq7f",
 ];
 
 /**
