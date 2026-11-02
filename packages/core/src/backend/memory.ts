@@ -88,8 +88,10 @@ const FIXTURE_CDP_VERSION = "Chrome/153.0.8010.12";
 /**
  * The fixture tailnet's policy file, in the shape an operator's really is:
  * a header comment, groups, an owner for `tag:hermetic` they pasted by hand
- * before creating the OAuth client (§4.7 step 4), and two rules of their own
- * that hermetic must give back byte for byte.
+ * before creating the OAuth client (§4.7 step 4), and rules of their own
+ * that hermetic must give back byte for byte. One of them — the metrics grant
+ * from `autogroup:tagged` — is the exposure §5.2 reports: it lets every agent
+ * box out to the build fleet, because a box is a tagged node too.
  */
 
 const FIXTURE_POLICY = `// Tailnet policy for hermetic.ts.net.
@@ -108,6 +110,11 @@ const FIXTURE_POLICY = `// Tailnet policy for hermetic.ts.net.
   "acls": [
     // The build fleet, nothing to do with hermetic.
     { "action": "accept", "src": ["group:ops"], "dst": ["tag:build:22"] },
+  ],
+
+  "grants": [
+    // Every tagged service pushes metrics to the build fleet's collector.
+    { "src": ["autogroup:tagged"], "dst": ["tag:build"], "ip": ["tcp:9090"] },
   ],
 
   "ssh": [

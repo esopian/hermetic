@@ -86,13 +86,14 @@ describe("agents.desktop", () => {
     expect(asked[0]?.fleet_id).toBe(fleetItem.fleet_id);
   });
 
-  test("uses the name the node actually answers on, not the canonical one", async () => {
+  test("does not follow a -<n> name the row reports", async () => {
     // `corvid` came back as `fxtr0001-corvid-2`: the device cleanup for its
-    // predecessor did not run, so MagicDNS still points the canonical name at a
-    // terminated box. A token scraped there would be a token for a corpse.
+    // predecessor did not run. hermetic no longer follows that name, because a
+    // sibling called `corvid-2` would wear the same one and any box can write
+    // the row (§6.1, `trustedDnsName`); doctor names the stale device instead.
     const { desktop } = harness();
     const attach = await desktop.attach({ name: "corvid" });
-    expect(attach.url).toBe("https://fxtr0001-corvid-2.hermetic.ts.net/");
+    expect(attach.url).toBe("https://fxtr0001-corvid.hermetic.ts.net/");
   });
 
   test("falls back to the canonical spelling for a box that never reported one", async () => {

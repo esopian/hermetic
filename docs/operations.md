@@ -62,6 +62,23 @@ The diff you are shown is only hermetic's own blocks — the marker lines and wh
 
 If you keep the policy in git, run `hermetic init --create --skip-policy` and paste from `hermetic policy` instead — the snippet and the managed blocks are generated from the same source, so they cannot say different things.
 
+### Containing a compromised agent (October 2026)
+
+On 2026-10-25 a researcher published "Tailworm", a set of findings in Tailscale and headscale that had not been coordinated with Tailscale and were unpatched at the time. Their chain is: an authorized Tailscale SSH session gains root on the target through port forwarding; a broad SSH grant then carries that to every server the device may reach; and, on a tailnet without Tailnet Lock, a captured auth key enrolls an attacker's machine as a tagged server. Root on the box adds nothing for hermetic, because the `hermes` account already has passwordless sudo. What matters is how far one compromised agent, or one stolen operator session, can reach from there. Until Tailscale ships a fix, check the following.
+
+- **Your own policy must not let agents reach the rest of the tailnet.** Tailscale's default policy allows everything (`"src": ["*"], "dst": ["*:*"]`, and leaving out both `acls` and `grants` means the same). An agent box is a tagged node running an AI agent with root, and its security group allows any outbound traffic, so on such a tailnet it can open connections to every device you own. Replace allow-all with explicit rules. hermetic itself only needs members to reach `tag:hermetic` on 22, 443 and 7434. `hermetic policy` lists rules that let `tag:hermetic` reach anything else.
+- **No `ssh` rule, `autoApprovers` entry or `hosts` alias should give `tag:hermetic`, `autogroup:tagged` or `*` a source, route or exit node.** hermetic writes none of these; check that nothing else does.
+- **Treat the fleet as one blast radius.** Every agent box in a fleet shares one instance role, which can read every agent's SSM slots (each agent's provider key, and a new agent's join key until it is used), read every agent's rendered config, and write every agent's row. Agent-scoped roles are planned. Until they land, a compromised agent means every provider key in that fleet is exposed.
+- **Host names from the row are checked, not trusted.** A box reports its own tailnet name, and because any box can write any row, hermetic uses a reported name only when it is one hermetic gives that agent, in the fleet's own tailnet. Anything else is ignored: the terminal, chat, dashboard and desktop links use the canonical `<fleet id>-<agent>` name instead, the phone is sent no name for that agent, and `hermetic doctor` reports it as `tailscale_untrusted_name`. A Tailscale `-2` suffix is no longer followed either, since a sibling named `<agent>-2` would wear the same name; delete the stale device and recreate the agent. The check compares against the fleet's tailnet, which is itself stored on the `_fleet` item that the shared role also lets a box rewrite; the desktop terminal additionally refuses any host outside the laptop's own tailnet, but the other links rely on `_fleet` until agent-scoped roles land.
+- **Keep Tailscale current.** Agent boxes enable Tailscale's auto-updater on every run of stage 01; a box that has not run it since foundation v11 may not have it. Update laptops and phones as soon as a fix ships. The heartbeat reports each box's `tailscale_version` in `hermetic agent status`.
+
+If you suspect an agent:
+
+1. `hermetic agent destroy <name>`. Destroy deletes the agent's tailnet device only when it is offline and its name matches the row, so afterwards check the Tailscale admin console for any `tag:hermetic` device that is still online or that no agent row names, and delete it there.
+2. Rotate every provider key the fleet uses (`hermetic providers update <profile> --api-key-stdin`), then recreate the agents that use it.
+3. If the laptop itself is suspect, rotate the OAuth client (below).
+4. Review the `_fleet` history for `policy.apply` events you did not make. Treat events and log tails from the suspect fleet as forgeable: any box could have written them.
+
 ## Rotate the Tailscale OAuth client
 
 Tailscale cannot change the scopes of a client that already exists, so widening the fleet's client — from `auth_keys` alone to `auth_keys` + `devices:core`, or onto `policy_file` so hermetic can keep the tailnet policy current — is always a new client plus a rotation.

@@ -214,22 +214,50 @@ describe("agent status · the tailnet name", () => {
  */
 describe("agent status · the URLs", () => {
   /** Every line with this label, since `desktop` is one per browser. */
-  function lines(a: AgentView, label: string): string[] {
-    return renderStatus(a)
+  function lines(a: AgentView, label: string, tailnet = "hermetic.ts.net"): string[] {
+    return renderStatus(a, "fxtr0001", "main", tailnet)
       .split("\n")
       .filter((l) => l.startsWith(`${label} `))
       .map((l) => l.slice(label.length).trim());
   }
 
   test("both, addressed at the name the node actually holds", () => {
-    const a = agent({ tailscale_dns_name: "atlas-2.hermetic.ts.net" });
-    expect(lines(a, "dashboard")).toEqual(["https://atlas-2.hermetic.ts.net/"]);
+    const a = agent({ tailscale_dns_name: "fxtr0001-atlas.hermetic.ts.net" });
+    expect(lines(a, "dashboard")).toEqual(["https://fxtr0001-atlas.hermetic.ts.net/"]);
     // The trailing slash: `/vnc` alone resolves the client's links at the root.
-    expect(lines(a, "desktop")).toEqual(["https://atlas-2.hermetic.ts.net/vnc/"]);
+    expect(lines(a, "desktop")).toEqual(["https://fxtr0001-atlas.hermetic.ts.net/vnc/"]);
+  });
+
+  test("a node wearing a name hermetic used to hand out is addressed at it", () => {
+    const a = agent({ tailscale_dns_name: "main-atlas.hermetic.ts.net" });
+    expect(lines(a, "dashboard")).toEqual(["https://main-atlas.hermetic.ts.net/"]);
+  });
+
+  /**
+   * Any box can write any agent's row, so a name hermetic never gives this
+   * agent — a sibling's, another tailnet's, a `-<n>` that a sibling called
+   * `atlas-2` would also wear — is never printed as somewhere to go.
+   */
+  test("a reported name hermetic does not give this agent prints no URL", () => {
+    for (const forged of [
+      "fxtr0001-atlas-2.hermetic.ts.net",
+      "fxtr0001-corvid.hermetic.ts.net",
+      "fxtr0001-atlas.attacker.ts.net",
+      "example.com",
+    ]) {
+      const a = agent({ tailscale_dns_name: forged });
+      expect(lines(a, "dashboard")).toEqual([]);
+      expect(lines(a, "desktop")).toEqual([]);
+    }
+  });
+
+  test("a fleet whose tailnet is unknown prints no URL", () => {
+    const a = agent({ tailscale_dns_name: "fxtr0001-atlas.hermetic.ts.net" });
+    expect(lines(a, "dashboard", "")).toEqual([]);
   });
 
   test("an agent with no browser gets no desktop line — `browser off` says why", () => {
-    const a = agent({ browsers: [], tailscale_dns_name: "atlas.hermetic.ts.net" });
+    const a = agent({ browsers: [], tailscale_dns_name: "fxtr0001-atlas.hermetic.ts.net" });
     expect(lines(a, "desktop")).toEqual([]);
     expect(lines(a, "dashboard")).toHaveLength(1);
   });
@@ -245,8 +273,8 @@ describe("agent status · the URLs", () => {
   });
 
   test("the root dot Tailscale reports does not reach the URL", () => {
-    const a = agent({ tailscale_dns_name: "atlas.hermetic.ts.net." });
-    expect(lines(a, "desktop")).toEqual(["https://atlas.hermetic.ts.net/vnc/"]);
+    const a = agent({ tailscale_dns_name: "fxtr0001-atlas.hermetic.ts.net." });
+    expect(lines(a, "desktop")).toEqual(["https://fxtr0001-atlas.hermetic.ts.net/vnc/"]);
   });
 });
 

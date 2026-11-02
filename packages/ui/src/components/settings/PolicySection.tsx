@@ -58,6 +58,62 @@ const BLOCK_TONE: Record<PolicyReport["blocks"][number]["state"], SqTone> = {
   skipped: "off",
 };
 
+/**
+ * §5.2: the operator's own rules that let an agent box reach further than
+ * hermetic needs. Informational — hermetic never edits them and `doctor` never
+ * reports them — so the block reads as a list, not a call to action. Nothing
+ * when the policy was not read: the Status callout has already said so, and an
+ * empty list there would read as a clean bill.
+ */
+export function ExposureBlock({ exposure }: { exposure: PolicyReport["exposure"] }) {
+  if (exposure === null) return null;
+  return (
+    <Block title="What your rules let a box do">
+      {exposure.length === 0 ? (
+        <div className="st-cell-sm">
+          No rule outside hermetic&apos;s blocks lets an agent box reach past{" "}
+          <span className="mono">tag:hermetic</span>.
+        </div>
+      ) : (
+        <>
+          <Callout tone="info">
+            These rules are yours, and hermetic leaves them as you wrote them. Each lets an agent box —
+            an AI with root on its own machine — reach further than hermetic needs. Rules are named by
+            key and position in the policy file.
+          </Callout>
+          <table className="st-list">
+            <thead>
+              <tr>
+                <th aria-label="Severity" />
+                <th>Rule</th>
+                <th>Severity</th>
+                <th>What it allows</th>
+              </tr>
+            </thead>
+            <tbody>
+              {exposure.map((e) => (
+                <tr key={`${e.rule}:${e.index ?? "-"}:${e.summary}`}>
+                  <td className="st-c-sq">
+                    <Sq tone={e.severity === "high" ? "warn" : "off"} />
+                  </td>
+                  <td>
+                    <b className="mono">
+                      {e.rule}
+                      {e.index === null ? "" : `[${e.index}]`}
+                    </b>
+                  </td>
+                  <td className="mono st-cell-sm">{e.severity}</td>
+                  <td className="st-cell-sm">{e.summary}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </Block>
+  );
+}
+
 const DESC = "The tailnet ACL blocks hermetic manages, and whether the policy file still says them.";
 
 /**
@@ -174,6 +230,8 @@ export function PolicyPanel({
           </tbody>
         </table>
       </Block>
+
+      <ExposureBlock exposure={report.exposure} />
     </SettingsPage>
   );
 }
