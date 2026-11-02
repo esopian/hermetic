@@ -283,6 +283,12 @@
   gap: 5px;
   flex: none;
 }
+/* The task meter and the unread badge share the line under the timestamp. */
+.ch-conv-flags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .ch-time {
   font-family: var(--mono);
   font-size: 10px;

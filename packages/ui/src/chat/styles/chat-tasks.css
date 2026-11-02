@@ -327,29 +327,36 @@
   padding-right: 26px;
 }
 
-/* The rail row's bar, on its bottom edge under the text column. Placed on the
-   row's grid from the text column to its end, so it follows every row
-   variant's padding (.in-bucket, .in-section, the soft skin); an
-   absolutely positioned grid child takes that area as its containing block,
-   and its auto rows reach the padding edge. */
-.ch-conv {
-  position: relative;
-}
+/* The rail row's meter, beside its timestamp: the fraction and one fixed-size
+   pip per item, so a long list stays legible and never draws on the row edge. */
 .tl-rail {
-  position: absolute;
-  grid-column: 2 / -1;
-  left: 0;
-  right: 0;
-  bottom: 0;
-}
-.tl-rail-bar {
-  gap: 1px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--fg2);
 }
 .tl-rail-bar i {
-  height: 3px;
+  flex: none;
+  width: 4px;
+  height: 4px;
 }
-.tl-rail.paused .tl-rail-bar {
-  opacity: 0.45;
+.tl-rail-bar.many {
+  gap: 1px;
+}
+.tl-rail-bar.many i {
+  width: 3px;
+}
+.tl-rail.paused {
+  color: var(--fg3);
+}
+.tl-rail.paused .tl-rail-bar i.active {
+  background: var(--fg3);
+}
+.tl-rail.finished {
+  color: var(--ok);
 }
 .tl-rail.finished .tl-rail-bar i {
   background: var(--ok);

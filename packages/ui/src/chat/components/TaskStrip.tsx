@@ -154,11 +154,28 @@ export function TaskStrip({ tasks }: { tasks: TaskList }) {
   );
 }
 
-/** A rail row's progress: a 3px bar along its bottom edge, its counts in the title. */
+/** Past this many items the rail drops the pips and keeps the fraction. */
+const RAIL_PIP_MAX = 20;
+
+/**
+ * A rail row's progress, beside its timestamp: the fraction (`✓ 7/7` once
+ * finished) and one pip per item, its counts in the title.
+ */
 export function RailTaskBar({ snapshot, life }: { snapshot: TodoSnapshotLike; life: TodoLifecycle }) {
+  const { done, total } = todoFraction(snapshot);
+  const finished = life.rail === "finished";
   return (
     <span className={`tl-rail ${life.rail}`} title={taskTitle(snapshot, life)}>
-      <TaskBar snapshot={snapshot} pulse={life.pulse} className="tl-rail-bar" />
+      <span className="tl-rail-frac mono" aria-hidden="true">
+        {finished ? `✓ ${done}/${total}` : `${done}/${total}`}
+      </span>
+      {total > RAIL_PIP_MAX ? null : (
+        <TaskBar
+          snapshot={snapshot}
+          pulse={life.pulse}
+          className={`tl-rail-bar${total > 10 ? " many" : ""}`}
+        />
+      )}
       {/* The row is a button named from its content; a title alone is not read. */}
       <span className="sr-only">, tasks {taskTitle(snapshot, life)}</span>
     </span>
