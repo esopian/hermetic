@@ -130,6 +130,8 @@ export interface ChatTurnDeps {
    * session — and the background processes it owns — between them.
    */
   sockets: SessionSockets;
+  /** Where a `/btw` answer the turn reads, live or replayed, goes (`hermes-chat-btw.ts`). */
+  sideAnswer?: ((event: Record<string, unknown>) => void) | undefined;
 }
 
 /** What a caller may tune about a turn's reconnect. */
@@ -896,6 +898,12 @@ export function createChatTurn(deps: ChatTurnDeps) {
       }
       // A task list that does not parse is no list, and no card either.
       if (type === "todo.updated") {
+        trace?.drop("internal");
+        continue;
+      }
+      // A `/btw` answer is `chat.btw`'s, never this turn's; a replayed one only reaches it here.
+      if (type === "btw.complete") {
+        deps.sideAnswer?.(ev);
         trace?.drop("internal");
         continue;
       }

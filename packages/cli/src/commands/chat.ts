@@ -22,6 +22,8 @@ import { Command as Cmd } from "commander";
 import {
   ChatAbortInput,
   ChatSteerInput,
+  ChatBtwInput,
+  ChatBranchInput,
   ChatListeningInput,
   ChatListenInput,
   ChatHistoryInput,
@@ -54,6 +56,7 @@ import { err, out, outJson } from "../io.ts";
 import { onOff } from "./inbox.ts";
 import { formatAge, renderTable } from "../table.ts";
 import { declare } from "../declare.ts";
+import { EXIT_FAILURE } from "../exit-codes.ts";
 import { stageForTurn } from "./files.ts";
 
 const listeningSchema = declare("chat.listening", "chat listening", ChatListeningInput);
@@ -66,6 +69,8 @@ const commandsSchema = declare("chat.commands", "chat commands", ChatCommandsInp
 const sendSchema = declare("chat.send", "chat", ChatSendInput);
 const abortSchema = declare("chat.abort", "chat abort", ChatAbortInput);
 const steerSchema = declare("chat.steer", "chat steer", ChatSteerInput);
+const btwSchema = declare("chat.btw", "chat btw", ChatBtwInput);
+const branchSchema = declare("chat.branch", "chat branch", ChatBranchInput);
 const observeSchema = declare("chat.observe", "chat watch", ChatObserveInput);
 
 /* ── addressing ───────────────────────────────────────────────────────────── */
@@ -980,6 +985,64 @@ export function register(program: Command): void {
             }\n`,
           );
         else await out(`${botAddress(result.instance, result.bot)}: ${STEER_TEXT[result.status]}\n`);
+      }),
+  );
+
+  chat.addCommand(
+    globals(new Cmd("btw"))
+      .description(
+        "ask a bot a side question from a snapshot of its conversation, beside any running turn",
+      )
+      .argument("<target>", "`<instance>` or `<instance>/<bot>`")
+      .argument("<question...>", "the question")
+      .option("--session <id>", "the session whose conversation to ask about")
+      .action(
+        async (target: string, question: string[], opts: Record<string, unknown>, cmd: Command) => {
+          const ctx = await openCtx(cmd);
+          const input = validate(
+            btwSchema,
+            defined({ ...parseBotRef(target), session: opts["session"], text: question.join(" ") }),
+          );
+          const result = await ctx.hermetic.chat.btw(input, { signal: ctx.signal });
+          if (ctx.flags.json) await outJson(result);
+          else if (result.error) await err(`${result.answer}\n`);
+          else await out(`${result.answer}\n`);
+          // An `error: …` answer is the gateway's refusal of the question: the command failed.
+          if (result.error) process.exitCode = EXIT_FAILURE;
+        },
+      ),
+  );
+
+  chat.addCommand(
+    globals(new Cmd("branch"))
+      .description(
+        "continue a bot's conversation as a new session, optionally ending with a side question and its answer",
+      )
+      .argument("<target>", "`<instance>` or `<instance>/<bot>`")
+      .option("--session <id>", "the session to branch from")
+      .option("--until <iso>", "leave out messages stamped after this time")
+      .option("--until-message <id>", "leave out messages after the one with this id")
+      .option("--question <text>", "a side question to append (needs --answer)")
+      .option("--answer <text>", "its answer (needs --question)")
+      .action(async (target: string, opts: Record<string, unknown>, cmd: Command) => {
+        const ctx = await openCtx(cmd);
+        const input = validate(
+          branchSchema,
+          defined({
+            ...parseBotRef(target),
+            session: opts["session"],
+            until: opts["until"],
+            until_message: opts["untilMessage"],
+            question: opts["question"],
+            answer: opts["answer"],
+          }),
+        );
+        const result = await ctx.hermetic.chat.branch(input, { signal: ctx.signal });
+        if (ctx.flags.json) await outJson(result);
+        else
+          await out(
+            `${result.session}\nbranched from ${result.parent_session} with ${result.messages} messages\n`,
+          );
       }),
   );
 

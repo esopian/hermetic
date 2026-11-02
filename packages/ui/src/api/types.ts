@@ -175,6 +175,8 @@ export type ChatUsageView = NonNullable<ChatMessageView["usage"]>;
 export type ChatFailureView = NonNullable<ChatMessageView["failure"]>;
 export type ChatAbortResult = BridgeResult<"chat.abort">;
 export type ChatSteerResult = BridgeResult<"chat.steer">;
+export type ChatBtwResult = BridgeResult<"chat.btw">;
+export type ChatBranchResult = BridgeResult<"chat.branch">;
 export type ChatResumeResult = BridgeResult<"chat.observe.resume">;
 
 /** One frame of a live turn, as the app's chat handler names its events. */

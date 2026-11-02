@@ -31,6 +31,8 @@ import type {
   HermesChatDeps,
 } from "../src/chat/hermes/hermes-chat.ts";
 import { createLiveUsage, LIVE_USAGE_DEADLINE_MS } from "../src/chat/hermes/hermes-chat-live-usage.ts";
+import { createSideQuestions } from "../src/chat/hermes/hermes-chat-btw.ts";
+import type { SessionSockets, SharedRpc } from "../src/chat/hermes/hermes-chat-session-socket.ts";
 import { DURABLE_TOOL_ROWS, SESSION_HISTORY_PARAM_KEYS } from "./fixtures/hermes-history-contract.ts";
 import { HermeticError } from "../src/errors.ts";
 import { HERMES_INTERNAL_EVENTS } from "../src/shared/hermes-internal-events.ts";
@@ -1353,6 +1355,161 @@ describe("hermes-chat · steer", () => {
     });
     expect(h.sockets[0]?.isClosed()).toBe(false);
     await turn.return?.();
+  });
+});
+
+describe("hermes-chat · btw", () => {
+  const RESUMED = { session_id: SESSION_ID, running: false, info: {} };
+  const answered = (task: string, text: string, question = "what changed?"): string =>
+    eventFrame("btw.complete", 0, { task_id: task, question, text });
+  const ON = { session: "durable-research" };
+
+  test("an unheld conversation is resumed, asked over prompt.btw, answered, and stays held", async () => {
+    const h = harness({
+      results: { "session.resume": RESUMED },
+      sequence: { "prompt.btw": [{ task_id: "btw_1" }, { task_id: "btw_2" }] },
+      // Both answers after each reply: the second is early for its question, then a duplicate.
+      after: { "prompt.btw": [answered("btw_1", "nothing yet"), answered("btw_2", "still nothing")] },
+    });
+    const adapter = createHermesChat(h.deps);
+    expect(await adapter.btw?.(BOX, "research", "  what changed?  ", ON)).toEqual({
+      task_id: "btw_1",
+      question: "what changed?",
+      answer: "nothing yet",
+      error: false,
+    });
+    const calls = h.sockets[0]?.sent ?? [];
+    expect(calls.filter((c) => c.method !== "client.capabilities")).toMatchObject([
+      {
+        method: "session.resume",
+        params: {
+          session_id: "durable-research",
+          profile: "research",
+          source: "hermetic",
+          defer_history: true,
+          omit_messages: true,
+        },
+      },
+      { method: "prompt.btw", params: { session_id: SESSION_ID, text: "what changed?" } },
+    ]);
+    expect(calls.some((c) => c.method === "slash.exec")).toBe(false);
+    // The socket is the conversation's hold now: the next question reuses it, unresumed.
+    expect(await adapter.btw?.(BOX, "research", "what changed?", ON)).toMatchObject({
+      task_id: "btw_2",
+      answer: "still nothing",
+    });
+    expect(h.sockets).toHaveLength(1);
+    expect(h.sockets[0]?.sent.filter((c) => c.method === "session.resume")).toHaveLength(1);
+    expect(h.sockets[0]?.isClosed()).toBe(false);
+  });
+
+  test("mid-turn it rides the turn's socket; the turn draws no notice for it and completes", async () => {
+    const h = harness({
+      results: {
+        "session.resume": RESUMED,
+        "prompt.submit": PROMPT_SUBMIT_RESULT,
+        "prompt.btw": { task_id: "btw_7" },
+      },
+      after: { "prompt.btw": [answered("btw_7", "the answer"), RECORDED_MESSAGE_COMPLETE] },
+    });
+    const adapter = createHermesChat(h.deps);
+    const turn = adapter.send(BOX, "research", "go", ON)[Symbol.asyncIterator]();
+    const frames: ChatFrame[] = [];
+    for (const _ of [1, 2]) {
+      const step = await turn.next();
+      if (!step.done) frames.push(step.value);
+    }
+    expect(await adapter.btw?.(BOX, "research", "what changed?", ON)).toMatchObject({
+      task_id: "btw_7",
+      answer: "the answer",
+      error: false,
+    });
+    // No second socket, no second resume: that would take the session from the turn.
+    expect(h.sockets).toHaveLength(1);
+    expect(h.sockets[0]?.sent.filter((c) => c.method === "session.resume")).toHaveLength(1);
+    for (let step = await turn.next(); !step.done; step = await turn.next()) frames.push(step.value);
+    expect(JSON.stringify(frames)).not.toContain("btw");
+    expect(blocks(frames).filter((b) => b.kind === "unknown")).toEqual([]);
+    expect(frames.at(-1)).toMatchObject({ type: "done" });
+  });
+
+  test("a failed side question is the gateway's error text, flagged", async () => {
+    const h = harness({
+      results: { "session.resume": RESUMED, "prompt.btw": { task_id: "btw_2" } },
+      after: { "prompt.btw": [answered("btw_2", "error: model unavailable")] },
+    });
+    expect(await createHermesChat(h.deps).btw?.(BOX, "research", "what changed?", ON)).toEqual({
+      task_id: "btw_2",
+      question: "what changed?",
+      answer: "error: model unavailable",
+      error: true,
+    });
+  });
+
+  test("an answer that beats the prompt.btw reply is still matched by its task id", async () => {
+    const h = harness({
+      results: { "session.resume": RESUMED, "prompt.btw": { task_id: "btw_3" } },
+      before: { "prompt.btw": [answered("btw_9", "someone else's"), answered("btw_3", "early")] },
+    });
+    expect(await createHermesChat(h.deps).btw?.(BOX, "research", "what changed?", ON)).toMatchObject({
+      task_id: "btw_3",
+      answer: "early",
+    });
+  });
+
+  test("refusals: empty text, no conversation, no task id, and a gateway without prompt.btw", async () => {
+    const none = harness({ results: { "session.list": { sessions: [] } } });
+    const quiet = createHermesChat(none.deps);
+    await expect(quiet.btw?.(BOX, "default", "  ")).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(quiet.btw?.(BOX, "default", "what?")).rejects.toMatchObject({
+      code: "VALIDATION",
+      message: expect.stringContaining("send a message first"),
+    });
+    const blank = harness({ results: { "session.resume": RESUMED } });
+    await expect(
+      createHermesChat(blank.deps).btw?.(BOX, "research", "what?", ON),
+    ).rejects.toMatchObject({ code: "CHAT_PROTOCOL" });
+    const old = harness({
+      results: { "session.resume": RESUMED },
+      errors: { "prompt.btw": { code: -32601, message: "Method not found" } },
+    });
+    await expect(createHermesChat(old.deps).btw?.(BOX, "research", "what?", ON)).rejects.toMatchObject({
+      code: "CHAT_PROTOCOL",
+      message: "This gateway does not support /btw",
+    });
+    expect(old.sockets[0]?.sent.some((c) => c.method === "slash.exec")).toBe(false);
+  });
+
+  /** A side-question set over one fake held socket whose `prompt.btw` names `btw_x`. */
+  function heldSide(timeoutMs?: number) {
+    const rpc = {
+      request: (method: string) => Promise.resolve(method === "prompt.btw" ? { task_id: "btw_x" } : {}),
+    } as unknown as SharedRpc;
+    const sockets = { peek: () => ({ rpc, runtime: "rt" }) } as unknown as SessionSockets;
+    return createSideQuestions({ sockets, conversation: () => Promise.resolve(null), timeoutMs });
+  }
+
+  test("an answer that never comes times out, and its waiter is gone", async () => {
+    const side = heldSide(20);
+    await expect(side.ask(BOX, "research", "what?", ON)).rejects.toMatchObject({
+      code: "CHAT_UNREACHABLE",
+      message: expect.stringContaining("/btw"),
+    });
+    expect(side.pending()).toBe(0);
+  });
+
+  test("the caller's signal ends the wait, and its waiter is gone", async () => {
+    const side = heldSide();
+    const ac = new AbortController();
+    const asked = side.ask(BOX, "research", "what?", { ...ON, signal: ac.signal });
+    for (let i = 0; i < 20 && side.pending() === 0; i += 1) await Promise.resolve();
+    expect(side.pending()).toBe(1);
+    ac.abort();
+    await expect(asked).rejects.toMatchObject({ code: "ABORTED" });
+    expect(side.pending()).toBe(0);
+    // The late answer lands harmlessly.
+    side.observe({ type: "btw.complete", payload: { task_id: "btw_x", text: "late" } });
+    expect(side.pending()).toBe(0);
   });
 });
 

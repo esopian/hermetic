@@ -28,7 +28,7 @@ import { Composer } from "../src/chat/components/Composer.tsx";
 
 afterEach(cleanup);
 
-function setup() {
+function setup(extra: Partial<ChatApi> = {}) {
   let current!: Chat;
   const turns: ChatTurnHandlers[] = [];
   /** Every prompt this browser actually put on the wire, in order. */
@@ -57,6 +57,7 @@ function setup() {
       if (abortHangs) await new Promise<void>(() => {});
       return { aborted: true } as never;
     },
+    ...extra,
   };
 
   function Harness() {
@@ -314,6 +315,37 @@ describe("the send queue", () => {
     await h.end();
     await h.settle();
     expect(h.sent).toEqual(["first"]);
+  });
+
+  test("a queued row has no btw action where this tree cannot ask one", async () => {
+    await queuedBehindATurn();
+    expect(
+      screen.queryAllByRole("button", { name: "Ask queued message as a side question" }),
+    ).toHaveLength(0);
+    expect(document.querySelector(".ch-queue-status")?.textContent ?? "").not.toContain("btw");
+  });
+
+  test("Back to queue puts a row back ahead of the first row behind it still queued", async () => {
+    // A side question that never answers, so the card stays pending.
+    const h = setup({ askBtw: () => new Promise<never>(() => {}) });
+    await h.open();
+    await h.say("first");
+    await waitFor(() => expect(h.current.sending).toBe(true));
+    for (const text of ["A", "X", "B", "C"]) await h.say(text);
+    const texts = () => Array.from(h.rows(), (row) => row.querySelector(".ch-queue-text")?.textContent);
+    await waitFor(() => expect(texts()).toEqual(["A", "X", "B", "C"]));
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Ask queued message as a side question" })[1]!,
+    );
+    await waitFor(() => expect(texts()).toEqual(["A", "B", "C"]));
+    // Two turns end: A and B go out, so X's old index and its next row are both gone.
+    await h.end();
+    await waitFor(() => expect(h.sent).toEqual(["first", "A"]));
+    await h.end();
+    await waitFor(() => expect(h.sent).toEqual(["first", "A", "B"]));
+    await waitFor(() => expect(texts()).toEqual(["C"]));
+    fireEvent.click(screen.getByRole("button", { name: "↩ Back to queue" }));
+    await waitFor(() => expect(texts()).toEqual(["X", "C"]));
   });
 
   test("a queued message can be taken back before it goes out", async () => {

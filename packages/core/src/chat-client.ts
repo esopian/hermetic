@@ -32,6 +32,7 @@ export { createHermesChat } from "./chat/hermes/hermes-chat.ts";
 export { DIRECT_DIAL_HEADERS } from "./chat/hermes/hermes-chat-types.ts";
 export type {
   BoxAddress,
+  ChatBtwAnswer,
   ChatSocket,
   ChatSteerStatus,
   HermesChatClient,

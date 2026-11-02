@@ -53,6 +53,21 @@ describe("pinned Hermes activity", () => {
     );
   });
 
+  test("a /btw answer is no notice; the other finished-work events still are", () => {
+    const done = { task_id: "t1", question: "q", text: "the answer" };
+    expect(hermesActivity("btw.complete", done)).toBeNull();
+    expect(hermesActivity("background.complete", done)).toMatchObject({
+      key: "background.complete:t1",
+      title: "Background work finished",
+      state: "done",
+      detail: "the answer",
+    });
+    expect(hermesActivity("preview.restart.complete", done)).toMatchObject({
+      title: "Background work finished",
+    });
+    expect(hermesActivity("review.summary", done)).toMatchObject({ title: "Review finished" });
+  });
+
   test("unfamiliar or malformed activity keeps the unknown fallback", () => {
     expect(hermesActivity("message.error", { message: "not in the pinned contract" })).toBeNull();
     expect(

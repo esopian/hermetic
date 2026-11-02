@@ -140,6 +140,8 @@ export type {
 export type {
   ChatAbortResult,
   ChatDeps,
+  ChatBtwResult,
+  ChatBranchResult,
   ChatSteerResult,
   ChatSteerStatus,
   ChatHistoryResult,
