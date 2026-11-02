@@ -54,12 +54,15 @@ import {
   sendTurn,
   steerSubagent,
   steerTurn,
+  askBtw,
+  branchChat,
   stopSubagent,
 } from "../api/index.ts";
 import type { ChatBlockView, ChatFrameView, ChatMessageView, SwarmView } from "../api/index.ts";
 import { useConversations } from "./chat-conversations.ts";
 import { devtap } from "./devtap.ts";
 import { useSendQueue } from "./chat-queue.ts";
+import { useBtw } from "./chat-btw.ts";
 import { NO_ATTACHMENTS } from "./chat-attachments.ts";
 import type { SentAttachment } from "./chat-attachments.ts";
 export type { QueuedMessage } from "./chat-queue.ts";
@@ -160,6 +163,8 @@ const LIVE_API: ChatApi = {
   sendTurn,
   abortTurn,
   steerTurn,
+  askBtw,
+  branchChat,
   steerSubagent,
   stopSubagent,
   getDoctor,
@@ -746,6 +751,7 @@ export function ChatProvider({
     queued,
     queueMessage,
     unqueue,
+    restoreQueued,
     queueParked,
     sendMessage,
     stopTurn,
@@ -775,6 +781,9 @@ export function ChatProvider({
     abortTo: (target) => conversations.abort(target),
     steerTo: (text, target) => conversations.steer(text, target),
   });
+
+  /* ── `/btw` side questions (§9.2): a temporary card per conversation, `chat-btw.ts` ── */
+  const { forTarget: btwFor } = useBtw({ api: apiRef, view: conversations.view, timing: chatTiming });
 
   /**
    * Opening a thread retracts the badge this browser raised for it.
@@ -1085,6 +1094,8 @@ export function ChatProvider({
       unqueue,
       sendNow: (text, files) => sendNow(text, undefined, files),
       sendQueuedNow,
+      restoreQueued: (row, ahead, behind) => restoreQueued(row, ahead, behind),
+      btw: selection ? btwFor(selection) : null,
       queueParked,
       now,
       subagents,
@@ -1144,6 +1155,8 @@ export function ChatProvider({
       unqueue,
       sendNow,
       sendQueuedNow,
+      restoreQueued,
+      btwFor,
       queueParked,
       now,
       chatTiming,
@@ -1164,7 +1177,7 @@ export function ChatProvider({
     [showThread, watchQueueTarget],
   );
   const targetChat = (target: ChatSelection, onSelect?: (target: ChatSelection) => void): Chat =>
-    chatForTarget(value, conversations, queueForTarget, target, onSelect);
+    chatForTarget(value, conversations, queueForTarget, btwFor, target, onSelect);
   return (
     <TargetScopeContext.Provider
       value={{ chat: targetChat, ensure: conversations.ensure, showThread: showScopedThread }}

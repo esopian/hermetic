@@ -32,16 +32,18 @@ import { useChatIfAvailable } from "../chat-state.tsx";
 import { useContext, useEffect, useRef, useState } from "react";
 import { summarize } from "../chat-attachments.ts";
 import type { SentAttachment } from "../chat-attachments.ts";
+import type { QueuedMessage } from "../chat-queue.ts";
 import { AttachTray, NO_FILES_COPY, attachSummary } from "./AttachTray.tsx";
 import { botCandidate } from "../chat-mentions.ts";
 import type { MentionBot } from "../chat-mentions.ts";
 import { useFleetIfAvailable } from "../../state/state.tsx";
 import { MentionList, useMentionPicker } from "./MentionPicker.tsx";
 import { SlashList, useSlashPicker } from "./SlashPicker.tsx";
-import { slashQuery } from "@hermetic/core/shared";
+import { looksLikeSlashCommand, parseSlashCommand, slashQuery } from "@hermetic/core/shared";
 import { useSlashCatalog } from "../use-slash-catalog.ts";
 import { composerHint, destinationNotice, originClass, sendLabel } from "../chat-logic.ts";
 import { RedactedText } from "./RedactedText.tsx";
+import { BtwCue, BtwSpotlight, BtwUndoStrip } from "./BtwSpotlight.tsx";
 import { BotResponses } from "./BotResponses.tsx";
 import { useFocusOnReturn } from "../../lib/focus.ts";
 import { useAutosize } from "../autosize.ts";
@@ -234,6 +236,52 @@ export function Composer({
   );
 
   /**
+   * `/btw <question>` with no files: asked at once beside any running turn,
+   * never queued, steered or sent as a turn; it opens the spotlight card
+   * (`chat-btw.ts`). With files it stays a turn's, which refuses a command
+   * with files. `false` when the line is not one, or this store cannot ask it.
+   */
+  const btw = chat?.btw ?? null;
+  const takeBtw = (body: string): boolean => {
+    if (!enabled || items.length > 0 || !btw) return false;
+    if (!looksLikeSlashCommand(body) || parseSlashCommand(body).name !== "btw") return false;
+    if (!btw.ask(parseSlashCommand(body).arg, { draft: "" })) return false;
+    setText("");
+    return true;
+  };
+  /** The draft reads as a side question: the cue and the dashed box say it is not queued. */
+  const btwDraft = btw?.canAsk === true && items.length === 0 && /^\/btw\s/.test(text);
+  /**
+   * Esc and an open side-question card, in this order:
+   * (a) an open slash or mention list closes first (`slash`/`picker.onKeyDown`);
+   * (b) else Esc with focus in the card discards it (`BtwSpotlight`'s own handler);
+   * (c) else Esc here discards the card when the draft is empty or unchanged
+   *     since the card opened — `data-owns-escape` keeps the shell's capture
+   *     handler from stopping the turn first;
+   * (d) otherwise Esc keeps its meaning: it stops a running turn.
+   * With no card open nothing changes.
+   */
+  const escDiscards = btw?.card != null && (text.trim() === "" || text === btw.card.draft);
+  /** A queued row asked as a side question: out of the queue, back on Back to queue. */
+  const askQueued = (row: QueuedMessage) => {
+    if (!btw || !chat) return;
+    const index = queued.findIndex((r) => r.id === row.id);
+    const ids = queued.map((r) => r.id);
+    const from = { row, ahead: ids.slice(0, Math.max(0, index)), behind: ids.slice(index + 1) };
+    // Out of the queue only once the side question was taken.
+    if (btw.ask(row.text, { draft: text, from })) chat.unqueue(row.id);
+  };
+  /** Quote into message: the draft replaced by the quote (which carries it), caret at the end. */
+  const quoteIn = (next: string) => {
+    setText(next);
+    const el = input.current;
+    if (el) {
+      el.focus({ preventScroll: true });
+      setTimeout(() => el.setSelectionRange?.(next.length, next.length), 0);
+    }
+  };
+
+  /**
    * Enter sends, or queues. §9.2 gives a conversation one active turn and says
    * sending waits — so a second message is *held*, not refused and not fired
    * at a busy session. A held message leaves any open question alone: it is
@@ -246,6 +294,7 @@ export function Composer({
   const submit = (line?: string) => {
     const body = (line ?? text).trim();
     if (!enabled || filesBlock || !hasContent) return;
+    if (takeBtw(body)) return;
     if (working && !chat) return;
     const sent = files?.take() ?? [];
     if (working) {
@@ -292,6 +341,7 @@ export function Composer({
    */
   const submitNow = () => {
     const body = text.trim();
+    if (takeBtw(body)) return;
     if (!canQueue || !chat || !hasContent || filesBlock) {
       submit();
       return;
@@ -331,6 +381,18 @@ export function Composer({
 
   return (
     <div className="ch-composer">
+      {btw?.card && chat ? (
+        <BtwSpotlight
+          key={btw.card.id}
+          chat={chat}
+          btw={btw}
+          card={btw.card}
+          working={working}
+          onQuote={quoteIn}
+        />
+      ) : null}
+      {btw ? <BtwUndoStrip btw={btw} draft={text} /> : null}
+      {btwDraft ? <BtwCue /> : null}
       {notice ? (
         // Undismissible by construction: there is no control here to dismiss it
         // with, and it is re-derived from the session on every render.
@@ -380,6 +442,12 @@ export function Composer({
                 {parkedQueue
                   ? "paused · ↑ sends one now, or send a message to resume"
                   : "sends when the agent is free"}
+                {btw?.canAsk ? (
+                  <>
+                    {" · "}
+                    <AsideIcon size={12} /> Ask an aside now
+                  </>
+                ) : null}
               </span>
             </header>
             <ul>
@@ -416,6 +484,22 @@ export function Composer({
                   >
                     <Icon d={["M4 7h16", "M10 11v6", "M14 11v6", "M6 7l1 13h10l1-13", "M9 7V4h6v3"]} />
                   </button>
+                  {btw?.canAsk ? (
+                    <button
+                      type="button"
+                      className="ch-queue-act ch-btw-q-act"
+                      disabled={Boolean(row.attachments?.length)}
+                      title={
+                        row.attachments?.length
+                          ? "A side question cannot carry files: this one stays a queued message"
+                          : "Ask an aside now"
+                      }
+                      aria-label="Ask queued message as a side question"
+                      onClick={() => askQueued(row)}
+                    >
+                      <AsideIcon size={14} />
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className="ch-queue-act"
@@ -447,13 +531,14 @@ export function Composer({
           the input natively; the textarea's own `aria-label` still names it.
         */}
         {files ? <AttachTray files={files} /> : null}
-        <label className="ch-input-box">
+        <label className={btwDraft ? "ch-input-box ch-btw-box" : "ch-input-box"}>
           <textarea
             ref={input}
             className="ch-input"
             aria-label={placeholder}
             {...picker.inputProps}
             {...slash.inputProps}
+            {...(escDiscards ? { "data-owns-escape": "" } : {})}
             // Focus gone elsewhere: a list left open would float over whatever took it.
             onBlur={() => {
               picker.inputProps.onBlur?.();
@@ -492,6 +577,12 @@ export function Composer({
                 e.preventDefault();
                 if (e.metaKey || e.ctrlKey) submitNow();
                 else submit();
+                return;
+              }
+              // Esc discards an open side-question card first, by the order above (c).
+              if (e.key === "Escape" && escDiscards) {
+                e.preventDefault();
+                btw?.discard();
                 return;
               }
               // Esc stops the turn. `preventDefault` is load-bearing rather than
@@ -638,6 +729,28 @@ export function isFilePaste(
   if (!text) return true;
   const names = new Set(pasted.map((f) => f.name));
   return text.split(/\r?\n/).every((line) => names.has(line.trim()));
+}
+
+/**
+ * The queue row's "ask an aside" glyph: a → whose shaft is dashed. It points
+ * sideways where send now points up, and the dashes are the temporary card's.
+ */
+function AsideIcon({ size }: { size: number }) {
+  return (
+    <svg
+      className="ch-btw-glyph"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      aria-hidden="true"
+    >
+      <path d="M4 12h10" strokeDasharray="2.6 2.4" />
+      <path d="M14 7l5 5-5 5" strokeLinecap="square" />
+    </svg>
+  );
 }
 
 /** A 14px stroked glyph, drawn like the rest of the chat's inline icons. */

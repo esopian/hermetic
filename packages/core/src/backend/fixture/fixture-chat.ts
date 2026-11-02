@@ -44,8 +44,11 @@ import type { FixtureKanbanStore } from "./fixture-kanban.ts";
 // a card the portal never coalesces with the real one.
 import { CHAT_RECONNECT_BLOCK_KEY } from "../../chat/hermes/hermes-chat-types.ts";
 import { OBSERVE_RECONNECT_ATTEMPTS } from "../../chat/chat-observe.ts";
+import { untilAbort } from "../../chat/hermes/hermes-chat-rpc.ts";
+import { createFixtureBranches } from "./fixture-chat-branch.ts";
 import type {
   BoxAddress,
+  ChatBtwAnswer,
   ChatSteerStatus,
   HermesChatClient,
   HermesChatOptions,
@@ -331,6 +334,9 @@ function* turn(message: string): Generator<SequencedFrame> {
 export const fixtureSessionToken = (instance: string): string =>
   `FIXTURE-HERMES-SESSION-TOKEN-${instance}`;
 
+/** How long a fixture side question (`/btw`) takes to answer. */
+export const FIXTURE_BTW_MS = 800;
+
 export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClient {
   const delayMs = opts.delayMs ?? 0;
   const sleep =
@@ -422,6 +428,7 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
   const flightKey = (instance: string, bot: string): string => `${instance} ${bot}`;
   /** Steers delivered, so each one's user row has an id of its own. */
   let steers = 0;
+  let sideQuestions = 0;
 
   /** The refusal the real adapter raises for a box whose dashboard does not answer. */
   const unanswered = (instance: string): HermeticError => {
@@ -433,7 +440,15 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
     );
   };
 
-  return {
+  const branches = createFixtureBranches({
+    history: (box, bot, historyOpts) => client.history(box, bot, historyOpts),
+    canonicalOf,
+    rows: sentRows,
+    mint,
+    titleOf: (session) => FIXTURE_CHAT_SESSIONS.find((s) => s.id === session)?.title,
+  });
+
+  const client: HermesChatClient = {
     token(box: BoxAddress, _opts?: HermesChatOptions): Promise<string> {
       // A box the roster calls unreachable refuses here too, with the code the
       // real adapter raises for the same box: `agent desktop --fixture` is worth
@@ -470,11 +485,12 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
 
     sessions(box: BoxAddress, bot: string, _opts?: HermesChatOptions): Promise<Session[]> {
       if (!reachable(box.instance)) return Promise.resolve([]);
-      return Promise.resolve(
-        FIXTURE_CHAT_SESSIONS.filter((s) => s.instance === box.instance && s.bot === bot).map((s) => ({
-          ...s,
-        })),
-      );
+      return Promise.resolve([
+        ...FIXTURE_CHAT_SESSIONS.filter((s) => s.instance === box.instance && s.bot === bot).map(
+          (s) => ({ ...s }),
+        ),
+        ...branches.list(box.instance, bot),
+      ]);
     },
 
     history(box: BoxAddress, bot: string, opts: HistoryOptions = {}): Promise<ChatMessage[]> {
@@ -998,10 +1014,33 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
       return Promise.resolve("redirected");
     },
 
+    /**
+     * A side question, answered after a beat from nothing but the question:
+     * independent of any turn, so it answers mid-turn as a real gateway does.
+     * `E2E_BTW_ERROR` answers the way upstream reports a failed one.
+     */
+    async btw(box, _bot, text, opts = {}): Promise<ChatBtwAnswer> {
+      const question = text.trim();
+      if (!question) throw new HermeticError("VALIDATION", "/btw needs a question");
+      if (!reachable(box.instance)) throw unanswered(box.instance);
+      const task_id = `btw_${++sideQuestions}`;
+      await untilAbort(sleep(FIXTURE_BTW_MS), opts.signal, "chat.btw");
+      const answer = question.includes("E2E_BTW_ERROR")
+        ? "error: fixture side question failed"
+        : `A fixture's side answer to: ${question}`;
+      return { task_id, question, answer, error: answer.startsWith("error: ") };
+    },
+
+    async branch(box, bot, input) {
+      if (!reachable(box.instance)) throw unanswered(box.instance);
+      return await branches.branch(box, bot, input);
+    },
+
     /** A delegated child's steer and stop (`fixture-chat-subagent.ts`). */
     subagentSteer: (box, bot, subagentId, text) =>
       Promise.resolve(subagents.steer(box.instance, bot, subagentId, text)),
     subagentInterrupt: (box, bot, subagentId) =>
       Promise.resolve(subagents.interrupt(box.instance, bot, subagentId)),
   };
+  return client;
 }

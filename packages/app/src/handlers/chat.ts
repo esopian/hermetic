@@ -32,6 +32,8 @@
 import {
   ChatAbortInput,
   ChatSteerInput,
+  ChatBtwInput,
+  ChatBranchInput,
   ChatHistoryInput,
   ChatCommandsInput,
   ChatListenInput,
@@ -70,6 +72,8 @@ export const chatCommandsSchema = declareRpc("chat.commands", ChatCommandsInput)
 export const chatSendSchema = declareRpc("chat.send", ChatSendInput);
 export const chatAbortSchema = declareRpc("chat.abort", ChatAbortInput);
 export const chatSteerSchema = declareRpc("chat.steer", ChatSteerInput);
+export const chatBtwSchema = declareRpc("chat.btw", ChatBtwInput);
+export const chatBranchSchema = declareRpc("chat.branch", ChatBranchInput);
 /**
  * §9.2: a continuous watch on one conversation. It is a declared
  * method rather than machinery because there *is* a core method behind it, and
@@ -117,6 +121,8 @@ export const chatListenBody = withTarget(chatListenSchema);
 export const chatSendBody = withTarget(chatSendSchema);
 export const chatAbortBody = withTarget(chatAbortSchema);
 export const chatSteerBody = withTarget(chatSteerSchema);
+export const chatBtwBody = withTarget(chatBtwSchema);
+export const chatBranchBody = withTarget(chatBranchSchema);
 
 /** A subscription to the fan-in takes nothing: it is every conversation this server owns. */
 export const ChatSubscribeRequest = z.object({});
@@ -188,6 +194,18 @@ export async function commands(ctx: HandlerContext, params: unknown) {
 export async function abort(ctx: HandlerContext, params: unknown) {
   const { hermetic: h, input } = requireTarget(ctx.state, parseInput(chatAbortBody, params));
   return await h.chat.abort(input, { signal: ctx.signal });
+}
+
+/** §9.2: `/btw`, a side question beside any running turn. Fleet-guarded like `steer`. */
+export async function btw(ctx: HandlerContext, params: unknown) {
+  const { hermetic: h, input } = requireTarget(ctx.state, parseInput(chatBtwBody, params));
+  return await h.chat.btw(input, { signal: ctx.signal });
+}
+
+/** §9.2: continue a conversation as a new seeded session. Fleet-guarded like `btw`. */
+export async function branch(ctx: HandlerContext, params: unknown) {
+  const { hermetic: h, input } = requireTarget(ctx.state, parseInput(chatBranchBody, params));
+  return await h.chat.branch(input, { signal: ctx.signal });
 }
 
 /** §9.2: a message into the running turn, without stopping it. Fleet-guarded like `abort`. */
@@ -445,6 +463,8 @@ export const chatHandlers = {
   "chat.send": sendEntry,
   "chat.abort": abort,
   "chat.steer": steer,
+  "chat.btw": btw,
+  "chat.branch": branch,
   "chat.observe": (ctx: HandlerContext, params: unknown, sink?: StreamSink) =>
     observe(ctx, params, requireSink(sink)),
   [CHAT_TURN]: turnEntry,

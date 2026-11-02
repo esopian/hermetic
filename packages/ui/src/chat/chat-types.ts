@@ -18,11 +18,14 @@ import type {
   SessionView,
   steerSubagent,
   steerTurn,
+  askBtw,
+  branchChat,
   stopSubagent,
   SwarmView,
 } from "../api/index.ts";
 import type { ConversationActivity, TurnActivity } from "./chat-activity.ts";
 import type { Observation } from "./chat-observation.ts";
+import type { BtwControls } from "./chat-btw.ts";
 import type { QueuedMessage } from "./chat-queue.ts";
 import type { AttachmentsApi, AttachmentsControl, SentAttachment } from "./chat-attachments.ts";
 import type { TurnPrompt } from "./chat-conversation-record.ts";
@@ -264,6 +267,16 @@ export interface Chat {
   /** The same, for a row already in the queue, by its local id. A refused row stays queued. */
   sendQueuedNow: (id: string) => Promise<boolean>;
   /**
+   * Put a row taken out of the queue back, files and all, by the ids queued
+   * `ahead` of and `behind` it when it left (`chat-queue.ts`).
+   */
+  restoreQueued: (row: QueuedMessage, ahead: readonly string[], behind: readonly string[]) => void;
+  /**
+   * `/btw` side questions for this conversation: its temporary card and undo
+   * strip (`chat-btw.ts`). `null` with no conversation selected.
+   */
+  btw: BtwControls | null;
+  /**
    * The queue is parked: it is holding rather than waiting for the turn to
    * end. Stopping, a failure, a dropped turn or leaving the thread parks one,
    * and a deliberate send releases it.
@@ -288,6 +301,10 @@ export interface ChatApi {
   abortTurn: typeof abortTurn;
   /** `chat.steer`. Optional: a tree without it falls back to stopping the turn. */
   steerTurn?: typeof steerTurn;
+  /** `chat.btw`. Optional: a tree without it sends `/btw` as an ordinary line. */
+  askBtw?: typeof askBtw;
+  /** `chat.branch`. Optional: a tree without it offers no "Continue as a branch". */
+  branchChat?: typeof branchChat;
   /** `chat.steer`/`chat.abort` with `subagent_id`: one delegated child. Optional, like `steerTurn`. */
   steerSubagent?: typeof steerSubagent;
   stopSubagent?: typeof stopSubagent;

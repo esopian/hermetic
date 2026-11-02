@@ -102,6 +102,11 @@ export interface SessionSocketDeps {
   connect(box: BoxAddress, signal: AbortSignal | undefined): Promise<Rpc>;
   /** Where an event on an idle held socket goes; absent discards it. */
   onIdleEvent?: IdleEventListener | undefined;
+  /**
+   * Sees every event on every socket this instance builds — leased, held or
+   * a pump's reconnect — before it is routed; what `/btw` answers arrive by.
+   */
+  onEvent?: ((event: Record<string, unknown>) => void) | undefined;
   tuning?: SessionSocketTuning | undefined;
 }
 
@@ -177,7 +182,7 @@ const NO_HOOKS: Hooks = { idle: () => {}, ended: () => {} };
 const hooksOf = new WeakMap<Rpc, (hooks: Hooks) => void>();
 
 /** Wrap `raw` in one reader loop and per-lease taps. See `SharedRpc`. */
-export function shareRpc(raw: Rpc): SharedRpc {
+export function shareRpc(raw: Rpc, onEvent?: (event: Record<string, unknown>) => void): SharedRpc {
   type Tap = ReturnType<typeof channel<Record<string, unknown>>>;
   // A fresh socket starts attached, so the frames that arrive before its first
   // reader — `gateway.ready`, `session.info` — are buffered for it, as they
@@ -215,6 +220,11 @@ export function shareRpc(raw: Rpc): SharedRpc {
   void (async () => {
     try {
       for await (const event of raw.events) {
+        try {
+          onEvent?.(event);
+        } catch {
+          // An observer's bug must not end the socket's only reader.
+        }
         if (tap) tap.push(event);
         else hooks.idle(event);
       }
@@ -313,7 +323,7 @@ export function createSessionSockets(deps: SessionSocketDeps): SessionSockets {
    * the hold with it, or the reconnect a turn's pump hands to the hold.
    */
   async function connect(box: BoxAddress, signal: AbortSignal | undefined): Promise<SharedRpc> {
-    return shareRpc(await dialDetached((dial) => deps.connect(box, dial), signal));
+    return shareRpc(await dialDetached((dial) => deps.connect(box, dial), signal), deps.onEvent);
   }
 
   /** Drop `hold` from the map if it is still the one the map points at. */

@@ -188,6 +188,8 @@ const SURFACE: Record<PublicMethod, string> = {
   "chat.abort": "chat abort",
   // §9.2: a message into the running turn, without stopping it.
   "chat.steer": "chat steer",
+  "chat.btw": "chat btw",
+  "chat.branch": "chat branch",
   // §9.2: a watch on one conversation, which exists with no
   // outgoing message at all. It writes nothing — that is the property the whole
   // design rests on, and `chat watch` is named for it.

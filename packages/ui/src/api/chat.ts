@@ -13,6 +13,8 @@ import type {
   BridgeName,
   BridgeResult,
   ChatAbortResult,
+  ChatBranchResult,
+  ChatBtwResult,
   ChatCommandsResult,
   ChatFrameView,
   ChatHistoryResult,
@@ -169,6 +171,53 @@ export function steerTurn(
     bot,
     text,
     session,
+    target: target(),
+  });
+}
+
+/**
+ * `chat.btw` — a side question (`/btw`) answered from a snapshot of the
+ * conversation, beside any running turn and without touching it. Resolves once
+ * the answer arrives, which can take tens of seconds; `error` marks an answer
+ * that is the box's failure line rather than a reply.
+ */
+export function askBtw(
+  instance: string,
+  bot: string,
+  text: string,
+  session?: string | null,
+): Promise<ChatBtwResult> {
+  return transport().request<ChatBtwResult>("chat.btw", {
+    instance,
+    bot,
+    text,
+    session,
+    target: target(),
+  });
+}
+
+/**
+ * `chat.branch` — a new stored session seeded from this one: its visible
+ * messages up to `until`, then a side question and its answer as a
+ * user/assistant pair when both are given. The parent's turn and queue are
+ * left alone. Answers the new session's id.
+ */
+export function branchChat(
+  instance: string,
+  bot: string,
+  opts: {
+    session?: string | null;
+    until?: string | null;
+    /** The id of the last finished reply to keep; the box ignores an id it does not know. */
+    until_message?: string | null;
+    question?: string | null;
+    answer?: string | null;
+  } = {},
+): Promise<ChatBranchResult> {
+  return transport().request<ChatBranchResult>("chat.branch", {
+    instance,
+    bot,
+    ...opts,
     target: target(),
   });
 }

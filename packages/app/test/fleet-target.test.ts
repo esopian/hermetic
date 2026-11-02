@@ -172,6 +172,8 @@ const BODIES: Record<string, object> = {
   "chat.turn": { instance: "ember", bot: "default", message: "hello" },
   "chat.abort": { instance: "ember", bot: "default" },
   "chat.steer": { instance: "ember", bot: "default", text: "also check the logs" },
+  "chat.btw": { instance: "ember", bot: "default", text: "what is the plan?" },
+  "chat.branch": { instance: "ember", bot: "default" },
   /* Composer attachments: both write to a box. */
   "files.stage": {
     instance: "ember",

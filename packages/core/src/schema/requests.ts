@@ -1252,6 +1252,53 @@ export const ChatSteerInput = z.object({
 export type ChatSteerInput = z.infer<typeof ChatSteerInput>;
 
 /**
+ * `hermetic chat btw <instance>/<bot> <question…>` — Hermes' `/btw`: a side
+ * question answered from a snapshot of the conversation (§9.2).
+ *
+ * Addressed like `chat steer`, and like it runs beside a turn in flight: it is
+ * never queued, never steered into the turn, and writes nothing into history.
+ * `text` is trimmed and must say something; an empty `/btw` is the head's
+ * usage line, not a request.
+ */
+export const ChatBtwInput = z.object({
+  instance: AgentName,
+  bot: BotName,
+  session: z.string().min(1).nullish(),
+  text: z.string().trim().min(1).max(200_000),
+});
+export type ChatBtwInput = z.infer<typeof ChatBtwInput>;
+
+/**
+ * `hermetic chat branch <instance>/<bot>` — continue a conversation as a new
+ * session (§9.2), usually from a `/btw` card.
+ *
+ * The new session is seeded with the parent's visible user and assistant
+ * messages up to `until` (the snapshot the side question was answered from;
+ * messages stamped after it are left out), then with the side question and its
+ * answer as a user/assistant pair. `question` and `answer` come together or
+ * not at all; without them the branch is the history alone. `session` names
+ * the parent's stored session; absent, the bot's canonical conversation.
+ * `until_message` is the id of the last reply the side answer saw: the history
+ * is cut after that row when the box's history has it, and the id is ignored
+ * when it does not (a laptop-local row). `until` then applies, a box stamp.
+ */
+export const ChatBranchInput = z
+  .object({
+    instance: AgentName,
+    bot: BotName,
+    session: z.string().min(1).nullish(),
+    until: Iso.nullish(),
+    until_message: z.string().min(1).nullish(),
+    question: z.string().trim().min(1).max(200_000).nullish(),
+    answer: z.string().trim().min(1).max(200_000).nullish(),
+  })
+  .refine((v) => (v.question == null) === (v.answer == null), {
+    message: "question and answer go together",
+    path: ["answer"],
+  });
+export type ChatBranchInput = z.infer<typeof ChatBranchInput>;
+
+/**
  * `hermetic chat watch <instance>/<bot>` — keep watching one conversation
  * (§9.2).
  *
