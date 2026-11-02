@@ -135,7 +135,7 @@ describe("the `?` shortcut", () => {
 
   test("local policy drawer closes before Settings", async () => {
     const { user } = await mount({
-      "policy.status": { scope: "write", managed: "absent", blocks: [], etag: null },
+      "policy.status": { scope: "write", managed: "absent", blocks: [], etag: null, exposure: [] },
       "plan.policy": errorBody("OFFLINE", "Plan unavailable"),
     });
     await user.keyboard(",");

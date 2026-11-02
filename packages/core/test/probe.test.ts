@@ -1133,7 +1133,7 @@ describe("a node that did not get its canonical name", () => {
     });
     expect(v.level).toBe("warn");
     expect(v.hints).toContain(
-      "the node is atlas-2.acme.ts.net, not atlas.acme.ts.net: a stale device holds the name; delete it in the Tailscale admin console (Machines → atlas)",
+      "the node is atlas-2.acme.ts.net, not atlas.acme.ts.net: a stale device holds the name; delete it in the Tailscale admin console (Machines → atlas), then `hermetic agent recreate atlas` so the node takes its own name back",
     );
   });
 
@@ -1191,10 +1191,10 @@ describe("a node that did not get its canonical name", () => {
     expect(v.hints.join("\n")).not.toContain("Tailscale admin console");
   });
 
-  test("the laptop-side layers fetch the name the node holds, not the canonical one", async () => {
+  test("the laptop-side layers do not follow a -<n> name the row reports", async () => {
     const backend = seedFixtureFleet(new MemoryBackend());
     const atlas = backend.agents.get("atlas")!;
-    backend.agents.set("atlas", { ...atlas, tailscale_dns_name: "atlas-2.hermetic.ts.net" });
+    backend.agents.set("atlas", { ...atlas, tailscale_dns_name: "fxtr0001-atlas-2.hermetic.ts.net" });
     const asked: string[] = [];
     const hermetic = testHermetic({
       backend,
@@ -1208,14 +1208,15 @@ describe("a node that did not get its canonical name", () => {
     });
 
     const report = await hermetic.agents.probe("atlas");
-    // Both of them: a desktop URL built from the canonical name would open a
-    // VNC session onto the corpse for exactly the same reason.
+    // Both of them stay on the canonical name: a sibling called `atlas-2` would
+    // wear the reported one, and any box can write the row (`trustedDnsName`).
+    // The verdict still names the stale device, which is the actual fix.
     expect(asked.sort()).toEqual([
-      "https://atlas-2.hermetic.ts.net/",
-      "https://atlas-2.hermetic.ts.net/vnc/",
+      "https://fxtr0001-atlas.hermetic.ts.net/",
+      "https://fxtr0001-atlas.hermetic.ts.net/vnc/",
     ]);
-    expect(report.dashboard.url).toBe("https://atlas-2.hermetic.ts.net/");
-    expect(report.desktop.url).toBe("https://atlas-2.hermetic.ts.net/vnc/");
+    expect(report.dashboard.url).toBe("https://fxtr0001-atlas.hermetic.ts.net/");
+    expect(report.desktop.url).toBe("https://fxtr0001-atlas.hermetic.ts.net/vnc/");
     expect(report.verdict.hints.join("\n")).toContain("Machines → atlas");
   });
 

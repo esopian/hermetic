@@ -180,17 +180,18 @@ async function collect(frames: AsyncIterable<ChatFrame>): Promise<ChatFrame[]> {
 }
 
 describe("where the box is", () => {
-  test("the row's own tailnet name wins over the canonical one", async () => {
+  test("a row's -<n> name is not followed: chat goes to the canonical name", async () => {
     const { chat, visits } = harness();
     await chat.swarms({ instance: "corvid" });
     /**
-     * `corvid` is the fixture's recreated agent: it answers on
+     * `corvid` is the fixture's recreated agent: its row reports
      * `fxtr0001-corvid-2`, because the device cleanup for its predecessor did
-     * not run and MagicDNS still points `fxtr0001-corvid` at the dead node. A
-     * chat sent to the corpse is not a failed send — it is a send that looks
-     * like it worked and reaches a box nobody is watching.
+     * not run. Any box can write that row, and a sibling called `corvid-2`
+     * would wear the same name, so a chat — whose every message the operator
+     * types into it — is never sent anywhere but a name hermetic gives this
+     * agent (§6.1, `trustedDnsName`).
      */
-    expect(visits[0]?.baseUrl).toBe("https://fxtr0001-corvid-2.hermetic.ts.net/");
+    expect(visits[0]?.baseUrl).toBe("https://fxtr0001-corvid.hermetic.ts.net/");
   });
 
   test("a row that has never reported falls back to the canonical cloud name", async () => {

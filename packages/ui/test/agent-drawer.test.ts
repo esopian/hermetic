@@ -136,20 +136,34 @@ describe("AgentDrawer · liveness panel", () => {
 /**
  * §6.5: a recreate leaves the old device holding the canonical name, so the new
  * node comes up as `<name>-2`. The drawer is where an operator looks the agent
- * up, so it is where the real name and the cleanup have to be said.
+ * up, so it is where the cleanup has to be said. hermetic no longer follows the
+ * `-2` name (§6.1, `trustedDnsName`): a sibling called `lumen-2` would wear the
+ * same one, so every link stays on the canonical name.
  */
 describe("AgentDrawer · a node that did not get its canonical name", () => {
-  test("the header shows the real name and names the stale device", () => {
+  test("names the stale device and the way out", () => {
     const out = html(agent({ tailscale_dns_name: "lumen-2.acme.ts.net" }));
-    expect(out).toContain("lumen-2.acme.ts.net");
     expect(out).toContain("lumen.acme.ts.net is held by a stale device");
     expect(out).toContain("Tailscale admin");
+    expect(out).toContain("recreate");
   });
 
-  test("the dashboard link points at the node that answers", () => {
+  test("a -2 name is not followed: every link stays on the canonical name", () => {
     const out = html(agent({ tailscale_dns_name: "lumen-2.acme.ts.net" }));
-    expect(out).toContain("https://lumen-2.acme.ts.net/ answers");
-    expect(out).not.toContain("https://lumen.acme.ts.net/ answers");
+    expect(out).toContain("https://lumen.acme.ts.net/ answers");
+    expect(out).not.toContain("https://lumen-2.acme.ts.net/");
+  });
+
+  /**
+   * Any box may write any row, so a name hermetic never gives this agent is
+   * ignored, and the drawer says so rather than linking to it.
+   */
+  test("a name hermetic never gives this agent is ignored and called out", () => {
+    const out = html(agent({ tailscale_dns_name: "evil.attacker.ts.net" }));
+    expect(out).toContain("not a name hermetic gives it");
+    expect(out).toContain("compromised agent");
+    expect(out).toContain("https://lumen.acme.ts.net/ answers");
+    expect(out).not.toContain("https://evil.attacker.ts.net/");
   });
 
   test("a node holding its own name says nothing extra", () => {
@@ -172,7 +186,7 @@ describe("AgentDrawer · a node that did not get its canonical name", () => {
    */
   test("says nothing about a stale device until the tailnet is known", () => {
     const out = html(agent({ tailscale_dns_name: "lumen-2.acme.ts.net" }), null);
-    expect(out).toContain("lumen-2.acme.ts.net");
+    expect(out).toContain("lumen.acme.ts.net");
     expect(out).not.toContain("stale device");
   });
 });

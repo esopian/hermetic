@@ -47,6 +47,23 @@ const MANAGED_LINE: Record<PolicyReport["managed"], string> = {
   unavailable: "unknown — the policy file could not be read",
 };
 
+/**
+ * §5.2: rules of the operator's own that let an agent box reach further than
+ * hermetic needs. Printed only when there are some — a clean policy reads as
+ * the table above and nothing more, and an unreadable one has already said
+ * `unknown` on the managed line. Informational: hermetic never edits these
+ * rules, and the summaries name a rule by key and index only.
+ */
+function exposureLines(exposure: PolicyReport["exposure"]): string[] {
+  if (exposure === null || exposure.length === 0) return [];
+  const high = exposure.filter((e) => e.severity === "high").length;
+  const count = `${exposure.length} finding${exposure.length === 1 ? "" : "s"}${high > 0 ? `, ${high} high` : ""}`;
+  return [
+    `exposure       ${count} — your rules let agent boxes reach past tag:hermetic (hermetic never edits them)`,
+    ...exposure.map((e) => `  ${e.severity.padEnd(12, " ")} ${e.summary}`),
+  ];
+}
+
 export function renderPolicy(report: PolicyReport): string {
   const lines = [`scope          ${SCOPE_LINE[report.scope]}`];
   // Why the scope could not be proved `write`, when there is a reason — said
@@ -58,6 +75,7 @@ export function renderPolicy(report: PolicyReport): string {
       `  ${block.key.padEnd(12, " ")} ${block.state.padEnd(8, " ")} ${block.reason ?? STATE_NOTE[block.state] ?? ""}`,
     );
   }
+  lines.push(...exposureLines(report.exposure));
   // Only when there is something to say: an operator whose policy is current
   // should read three lines, not three lines and an empty diff header.
   if (report.diff !== null) lines.push("", report.diff);

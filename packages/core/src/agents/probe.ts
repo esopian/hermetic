@@ -36,7 +36,7 @@
  * Its own module with an explicit deps object (AGENTS.md rule 5), the same
  * shape as `volumes.ts`/`lifecycle.ts`; `hermetic.ts` only wires it.
  */
-import type { Agent, ProbeReport, ProbeRow } from "../schema/index.ts";
+import type { Agent, HostnameMismatch, ProbeReport, ProbeRow } from "../schema/index.ts";
 import {
   agentDashboardUrl,
   agentDesktopUrl,
@@ -210,7 +210,7 @@ export function verdictFor(input: {
    * mention, and lifts an otherwise-clean `ok` to `warn` so it is not silently
    * appended to a green report.
    */
-  hostname_mismatch?: { real: string; canonical: string; kind: "legacy" | "stale" } | null;
+  hostname_mismatch?: HostnameMismatch | null;
 }): ProbeVerdict {
   const { row, instance, hermeticd, dashboard } = input;
   const n = input.name ?? "<name>";
@@ -517,13 +517,14 @@ export function verdictFor(input: {
     notes.push(staleDeviceNote(n, input.hostname_mismatch));
   }
   /**
-   * Only a *stale* device warns. A `legacy` node is every box built before the
+   * Only a *stale* device or an *untrusted* name warns. A `legacy` node is every box built before the
    * naming rule last moved, which on the day of a foundation update is every
    * box in the fleet — warning on each would turn `probe` amber fleet-wide for
    * a state that is expected, correct, and cleared by ordinary recreates. The
    * note is still printed; it is information, not a fault.
    */
-  const faulty = input.hostname_mismatch?.kind === "stale";
+  const faulty =
+    input.hostname_mismatch?.kind === "stale" || input.hostname_mismatch?.kind === "untrusted";
   if (notes.length === 0) return verdict;
   return {
     ...verdict,
@@ -781,8 +782,15 @@ export function createProbe(deps: ProbeDeps) {
       timeoutMs,
       signal,
       async (combined) => {
-        const { tailnet, fleet_id } = await readFleet();
-        url = tailnet ? agentDashboardUrl(agent, tailnet, cloudName(fleet_id, agent.name)) : null;
+        const { tailnet, fleet_id, fleet_name } = await readFleet();
+        url = tailnet
+          ? agentDashboardUrl(
+              agent,
+              tailnet,
+              cloudName(fleet_id, agent.name),
+              legacyCloudNames(fleet_name, agent.name),
+            )
+          : null;
         if (!url) {
           return {
             outcome: "skip",
@@ -836,8 +844,16 @@ export function createProbe(deps: ProbeDeps) {
       timeoutMs,
       signal,
       async (combined) => {
-        const { tailnet, fleet_id } = await readFleet();
-        url = tailnet ? agentDesktopUrl(agent, tailnet, cloudName(fleet_id, agent.name)) : null;
+        const { tailnet, fleet_id, fleet_name } = await readFleet();
+        url = tailnet
+          ? agentDesktopUrl(
+              agent,
+              tailnet,
+              cloudName(fleet_id, agent.name),
+              undefined,
+              legacyCloudNames(fleet_name, agent.name),
+            )
+          : null;
         if (!url) {
           return {
             outcome: "skip",
