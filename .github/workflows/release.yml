@@ -21,7 +21,7 @@ permissions:
 jobs:
   publish:
     name: publish
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 30
     # The `release` environment holds every secret this job reads: the
     # Developer ID certificate and notary key, and UPDATE_SIGNING_KEY, the key
@@ -100,7 +100,7 @@ jobs:
       # came from the DMG's own mounted volume being sized by hdiutil's
       # estimator, not from the runner's disk (v0.1.5 failed with 110 GB
       # free) — `packages/app/hooks/post-package.ts` is what addresses that.
-      # The macos-14 image still leaves only a few GB free once Xcode,
+      # The macOS runner image leaves only a few GB free once Xcode,
       # Android and .NET are on it, and this build writes a few hundred MB of
       # sidecars, so drop the toolchains it never touches and print what is
       # left.

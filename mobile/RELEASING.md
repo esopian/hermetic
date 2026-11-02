@@ -69,30 +69,39 @@ Git commit and EAS build UUID together. Never reuse a build number for a store u
 
 ## Automated TestFlight
 
-`.eas/workflows/testflight.yml` (EAS Workflows) does steps 4 and 5 above in one run: a production
-build with the next build number, the upload, the **Alpha Users** group, the "What to test"
-section of `RELEASE_NOTES.md` as the TestFlight **What to Test** notes, and the Beta App Review
-submission. Apple's approval is the only step left; the first build of a version takes longest.
+Two EAS Workflows do steps 4 and 5 above. `.eas/workflows/testflight.yml` makes a production build
+with the next build number and uploads it to App Store Connect. That upload triggers
+`.eas/workflows/testflight-distribute.yml`, which adds the build to **Alpha Users**, sets the
+"What to test" section of `RELEASE_NOTES.md` as the TestFlight **What to Test** notes, and submits
+it for Beta App Review. Apple's approval is the only step left; the first build of a version takes
+longest.
 
-- **On a tag:** push `mobile-v<version>-<n>` (for example `git tag mobile-v0.1.0-6 && git push
-  origin mobile-v0.1.0-6`) from the commit to ship. The tag is a trigger only; EAS still assigns
+The work is split across two workflows because of the EAS free plan. A `testflight` job given an
+EAS `build_id` needs a paid plan; one given the App Store Connect build id (`asc_build_id`), which
+only an App Store Connect upload event carries, does not.
+
+- **On a tag:** push `mobile-v<version>-<n>` (for example `git tag mobile-v0.1.0-8 && git push
+  origin mobile-v0.1.0-8`) from the commit to ship. The tag is a trigger only; EAS still assigns
   the build number.
 - **On demand:** `bun run release:testflight` from `mobile/`. This uploads the local `mobile/`
   directory, so run it from a clean checkout of the revision you mean to ship.
 
-Fill the "What to test" section of `RELEASE_NOTES.md` before either; the run fails without it.
+Fill the "What to test" section of `RELEASE_NOTES.md` before either; the build fails without it.
+The distribute workflow reads the notes from its own checkout of the repository, not from the
+build, so commit them to the default branch before the upload finishes.
 
 One-time setup, beyond the App Store Connect steps above:
 
 1. In the EAS project (**Project settings → GitHub**), connect `esopian/hermetic` with the base
    directory `mobile`, so tag pushes reach the workflow.
 2. In the EAS project (**Project settings → General → Connections**), connect App Store Connect,
-   so the workflow can set groups, notes and the review submission.
+   so upload events trigger the distribute workflow and it can set groups, notes and the review
+   submission.
 3. In App Store Connect, complete **TestFlight → Test Information** (beta description, feedback
    email, contact, review notes). Beta App Review refuses a submission without it.
 
-`submit:testflight` stays for a build made by hand; it uploads and joins the group, but does not
-fill What to Test or submit for review.
+`submit:testflight` stays for a build made by hand. Its upload triggers the distribute workflow
+too, so the build still gets its notes and review submission.
 
 ## Acceptance record
 
