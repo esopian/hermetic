@@ -45,7 +45,7 @@ import { OWNED_VOLUME_ROLE, assertResourceOwned, type ResourceOwner } from "../a
 import { FIXTURE_HERMETICD_VERSION } from "./fixture/memory-fixture.ts";
 
 import type { MemoryBackend } from "./memory.ts";
-import { simulateReboot } from "./memory-simulation.ts";
+import { simulateBoot, simulateReboot } from "./memory-simulation.ts";
 
 /**
  * A resource carrying no `hermetic:fleet_id` tag at all — the pre-v3 shape the
@@ -331,6 +331,7 @@ export function createMemoryCompute(b: MemoryBackend): Backend["compute"] {
       b.record("compute.start");
       const next = { ...inst, state: "pending", public_ip: b.fixturePublicIp("203.0.113.11") };
       b.instances.set(instanceId, next);
+      simulateBoot(b, instanceId);
       return { instance_id: next.instance_id, state: next.state, public_ip: next.public_ip };
     },
     /**

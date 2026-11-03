@@ -1,6 +1,10 @@
 /**
  * `agents.stop` and `agents.start` (§6.6): powering an agent's instance off and
- * on again, leaving the data volume where it is.
+ * on again, leaving the data volume where it is. `agents.pause` and
+ * `agents.resume` are the same two moves under their own statuses, with pause
+ * asking hermeticd to halt Hermes before the instance goes down: one
+ * `powerOff`, one `powerOn`, so the drift check, the lock and the wait cannot
+ * drift apart.
  *
  * The two are one module because they are one subject — the §4.3 edges
  * `ready → stopping → stopped` and `stopped → bootstrapping`, and the rule that
@@ -14,7 +18,7 @@
  * `TeardownDeps` (`teardown.ts`) and `PlanDeps` (`plans.ts`).
  */
 import { randomUUID } from "node:crypto";
-import type { OpEvent } from "../schema/index.ts";
+import type { AgentStatus, OpEvent } from "../schema/index.ts";
 import { HermeticError, isHermeticError } from "../errors.ts";
 import { validateName } from "../shared/naming.ts";
 import type { InstanceRef } from "../backend/types.ts";
@@ -24,9 +28,24 @@ import { evt } from "../events.ts";
 import type { OpOptions } from "../hermetic.ts";
 import type { CoreContext } from "../context.ts";
 
-/** `stop` and `start` need nothing beyond the shared context. */
+/** `stop`, `start`, `pause` and `resume` need nothing beyond the shared context. */
 export interface PowerDeps {
   ctx: CoreContext;
+}
+
+/** What separates `stop` from `pause`: the statuses it moves through, and whether Hermes is halted first. */
+interface OffSpec {
+  verb: "stop" | "pause";
+  via: "stopping" | "pausing";
+  to: "stopped" | "paused";
+  halt: boolean;
+}
+
+/** What separates `start` from `resume`: the status it starts from, and the one it passes through. */
+interface OnSpec {
+  verb: "start" | "resume";
+  from: "stopped" | "paused";
+  via: "resuming" | null;
 }
 
 export function createPower(deps: PowerDeps) {
@@ -94,6 +113,7 @@ export function createPower(deps: PowerDeps) {
     instanceId: string,
     opts: OpOptions,
     heartbeat: () => Promise<void>,
+    verb: OffSpec["verb"],
   ): AsyncIterable<OpEvent> {
     const wait = attachDeps();
     const now = wait.now ?? Date.now;
@@ -108,7 +128,7 @@ export function createPower(deps: PowerDeps) {
     let missed = 0;
 
     for (;;) {
-      checkAbort(opts.signal, "stop");
+      checkAbort(opts.signal, verb);
       await heartbeat();
 
       const live = await wait.compute.describeInstance(instanceId);
@@ -179,10 +199,30 @@ export function createPower(deps: PowerDeps) {
     }
   }
 
-  async function* stop(name: string, opts: OpOptions = {}): AsyncIterable<OpEvent> {
+  /** The statuses `powerOff` acts from besides its own `via`/`to`; `stop` from `pausing` is the escape hatch. */
+  const OFF_FROM: Record<OffSpec["verb"], readonly AgentStatus[]> = {
+    stop: ["ready", "degraded", "pausing"],
+    pause: ["ready", "degraded"],
+  };
+
+  async function* powerOff(spec: OffSpec, name: string, opts: OpOptions): AsyncIterable<OpEvent> {
+    const { verb, via, to } = spec;
     validateName(name);
     await guardFleet();
     let agent = await getAgent(name);
+    if (agent.status !== via && agent.status !== to && !OFF_FROM[verb].includes(agent.status)) {
+      const hint =
+        agent.status === "paused" || agent.status === "resuming"
+          ? `; use \`hermetic agent resume ${name}\``
+          : agent.status === "stopped" && verb === "pause"
+            ? `; it is already off (\`hermetic agent start ${name}\` brings it back)`
+            : "";
+      throw new HermeticError(
+        "INVALID_TRANSITION",
+        `${name} is ${agent.status}; only a ready or degraded agent can be ${to}${hint}`,
+        { name, status: agent.status },
+      );
+    }
 
     /**
      * `stopped` on the row is a claim, not evidence, and `stop` was the one
@@ -200,7 +240,7 @@ export function createPower(deps: PowerDeps) {
      * the table mean less. The final `transition` to `stopped` is then a
      * re-entry (`state.ts`), which writes the facts and no history line.
      */
-    const drifted = agent.status === "stopped";
+    const drifted = agent.status === to;
     let driftedFrom: string | null = null;
     if (drifted) {
       const recorded = agent.resources.instance_id ?? agent.instance_id ?? null;
@@ -219,7 +259,7 @@ export function createPower(deps: PowerDeps) {
         yield evt(
           "done",
           1,
-          `${name} is recorded as stopped; EC2 could not be asked to confirm it (${isHermeticError(e) ? e.code : "INTERNAL"})`,
+          `${name} is recorded as ${to}; EC2 could not be asked to confirm it (${isHermeticError(e) ? e.code : "INTERNAL"})`,
           nowIso(),
           "warn",
         );
@@ -238,12 +278,12 @@ export function createPower(deps: PowerDeps) {
           yield evt(
             "instance",
             0.5,
-            `instance ${recorded} is ${live.state}; there is nothing for stop to do to it`,
+            `instance ${recorded} is ${live.state}; there is nothing for ${verb} to do to it`,
             nowIso(),
             "warn",
           );
         }
-        yield evt("done", 1, `${name} is already stopped`, nowIso());
+        yield evt("done", 1, `${name} is already ${to}`, nowIso());
         return;
       }
       driftedFrom = live.state;
@@ -268,20 +308,28 @@ export function createPower(deps: PowerDeps) {
     let done = false;
     let failure: unknown = null;
     try {
-      checkAbort(opts.signal, "stop");
+      checkAbort(opts.signal, verb);
       if (drifted) {
         // The row and EC2 disagreed; say so once, on the op stream and on the
         // agent's history, because a row that was wrong about a running box is
         // the kind of thing an operator wants to be able to find afterwards.
-        const said = `${name} is recorded as stopped but instance ${agent.resources.instance_id ?? agent.instance_id} is ${driftedFrom}; stopping it`;
-        await appendEvent(name, "stop", said);
+        const said = `${name} is recorded as ${to} but instance ${agent.resources.instance_id ?? agent.instance_id} is ${driftedFrom}; stopping it`;
+        await appendEvent(name, verb, said);
         yield evt("instance", 0.2, said, nowIso(), "warn");
       } else {
         // Re-entrant for the same reason destroy is: a stop that died after
         // `StopInstances` was accepted — or was aborted while waiting for EC2 to
         // finish — left the row in `stopping`, where the §4.3 table has no
         // self-edge and every retry threw before reaching the box.
-        agent = await transition(agent, "stopping", "stop requested");
+        agent = await transition(agent, via, `${verb} requested`);
+        // Written before the halt, so nothing on the box reads the row as
+        // `ready` and restarts what was just stopped. A drifted row skips it:
+        // it has no tailnet address to reach hermeticd on.
+        if (spec.halt) {
+          yield* halt(name, opts);
+          // A halt that answered just as the abort landed must not reach StopInstances.
+          checkAbort(opts.signal, verb);
+        }
       }
 
       const instanceId = agent.resources.instance_id ?? agent.instance_id;
@@ -309,11 +357,12 @@ export function createPower(deps: PowerDeps) {
             yield evt("instance", 0.4, `stopping instance ${instanceId}`, nowIso());
           }
           // The row does not say `stopped` until EC2 does.
-          yield* waitInstanceStopped(instanceId, opts, keepLock);
+          yield* waitInstanceStopped(instanceId, opts, keepLock, verb);
         }
       }
 
-      agent = await transition(agent, "stopped", "instance stopped", {
+      agent = await transition(agent, to, `instance ${to}`, {
+        paused_at: to === "paused" ? nowIso() : null,
         // A powered-off box holds neither its address nor its MagicDNS name: the
         // next boot re-registers and may well be admitted under a different one
         // (§6.5), so keeping the old name would point every link at a dead node.
@@ -338,23 +387,65 @@ export function createPower(deps: PowerDeps) {
       // Set before the yield: a consumer that stops at the done event resumes
       // this generator with a `return`, which runs `finally` (see `create`).
       done = true;
-      yield evt("done", 1, `${name} stopped; the data volume is untouched`, nowIso());
+      yield evt("done", 1, `${name} ${to}; the data volume is untouched`, nowIso());
     } catch (e) {
       failure = e;
       throw e;
     } finally {
-      if (!done) await unwind(name, "stop", owner, failure ?? abandoned(name, "stop"));
+      if (!done) await unwind(name, verb, owner, failure ?? abandoned(name, verb));
     }
   }
 
-  async function* start(name: string, opts: OpOptions = {}): AsyncIterable<OpEvent> {
+  /**
+   * `POST /power/halt`. Best effort by design: a box off the tailnet, an older
+   * hermeticd without the route, a timeout — each is a warning, and the
+   * instance is stopped anyway, because a pause that cannot power off is worse
+   * than one that powers off a Hermes it could not stop first. Only an abort
+   * ends the op.
+   */
+  async function* halt(name: string, opts: OpOptions): AsyncIterable<OpEvent> {
+    yield evt("halt", 0.1, "asking hermeticd to halt Hermes", nowIso());
+    try {
+      const { halted } = await backend.rpc.powerHalt(name, opts.signal ? { signal: opts.signal } : {});
+      if (halted.length > 0) {
+        yield evt("halt", 0.2, `halted ${halted.join(", ")}`, nowIso(), undefined, "done");
+        return;
+      }
+      yield evt(
+        "halt",
+        0.2,
+        "Hermes was not halted cleanly (no unit reported inactive); stopping the instance anyway",
+        nowIso(),
+        "warn",
+      );
+    } catch (e) {
+      checkAbort(opts.signal, "pause");
+      const why = e instanceof Error ? e.message : String(e);
+      yield evt(
+        "halt",
+        0.2,
+        `Hermes was not halted cleanly (${why}); stopping the instance anyway`,
+        nowIso(),
+        "warn",
+      );
+    }
+  }
+
+  async function* powerOn(spec: OnSpec, name: string, opts: OpOptions): AsyncIterable<OpEvent> {
+    const { verb, from, via } = spec;
     validateName(name);
     await guardFleet();
     let agent = await getAgent(name);
-    if (agent.status !== "stopped") {
+    if (agent.status !== from && (via === null || agent.status !== via)) {
+      const other =
+        verb === "start" && (agent.status === "paused" || agent.status === "resuming")
+          ? `; use \`hermetic agent resume ${name}\``
+          : verb === "resume" && agent.status === "stopped"
+            ? `; use \`hermetic agent start ${name}\``
+            : "";
       throw new HermeticError(
         "INVALID_TRANSITION",
-        `${name} is ${agent.status}; only a stopped agent can be started`,
+        `${name} is ${agent.status}; only a ${from} agent can be ${verb === "start" ? "started" : "resumed"}${other}`,
         { name, status: agent.status },
       );
     }
@@ -364,7 +455,7 @@ export function createPower(deps: PowerDeps) {
     let done = false;
     let failure: unknown = null;
     try {
-      checkAbort(opts.signal, "start");
+      checkAbort(opts.signal, verb);
       const instanceId = agent.resources.instance_id ?? agent.instance_id;
       if (!instanceId) {
         throw new HermeticError(
@@ -372,6 +463,11 @@ export function createPower(deps: PowerDeps) {
           `${name} has no instance to start; use \`hermetic agent recreate ${name}\``,
           { name },
         );
+      }
+      // Before `StartInstances`, so the box never boots under a row still
+      // saying `paused`. A re-run from `resuming` is a re-entry.
+      if (via !== null) {
+        agent = await transition(agent, via, `${verb} requested`, {}, { paused_at: null });
       }
       const instance = await backend.compute.start(instanceId);
       yield evt("instance", 0.5, `instance ${instance.instance_id} starting`, nowIso());
@@ -399,14 +495,24 @@ export function createPower(deps: PowerDeps) {
       // Set before the yield: a consumer that stops at the done event resumes
       // this generator with a `return`, which runs `finally` (see `create`).
       done = true;
-      yield evt("done", 1, `${name} starting; hermeticd will report when it is ready`, nowIso());
+      const doing = verb === "start" ? "starting" : "resuming";
+      yield evt("done", 1, `${name} ${doing}; hermeticd will report when it is ready`, nowIso());
     } catch (e) {
       failure = e;
       throw e;
     } finally {
-      if (!done) await unwind(name, "start", owner, failure ?? abandoned(name, "start"));
+      if (!done) await unwind(name, verb, owner, failure ?? abandoned(name, verb));
     }
   }
 
-  return { stop, start };
+  const stop = (name: string, opts: OpOptions = {}) =>
+    powerOff({ verb: "stop", via: "stopping", to: "stopped", halt: false }, name, opts);
+  const pause = (name: string, opts: OpOptions = {}) =>
+    powerOff({ verb: "pause", via: "pausing", to: "paused", halt: true }, name, opts);
+  const start = (name: string, opts: OpOptions = {}) =>
+    powerOn({ verb: "start", from: "stopped", via: null }, name, opts);
+  const resume = (name: string, opts: OpOptions = {}) =>
+    powerOn({ verb: "resume", from: "paused", via: "resuming" }, name, opts);
+
+  return { stop, start, pause, resume };
 }

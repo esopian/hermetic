@@ -8,6 +8,8 @@
  * and each acts on a `MemoryBackend` handed to it.
  */
 import { locateManagedBlocks, parseHujson } from "../fleet/hujson.ts";
+import { cloudName } from "../schema/index.ts";
+import { FIXTURE_TAILNET } from "./fixture/memory-fixture.ts";
 import type { MemoryBackend } from "./memory.ts";
 
 /**
@@ -208,6 +210,45 @@ export function simulateReboot(b: MemoryBackend, instanceId: string): void {
       metrics: structuredClone(metrics ?? null),
       last_heartbeat: at,
       updated_at: at,
+    });
+  });
+}
+
+/**
+ * The fixture's stand-in for a box booting after `agent start` or `resume`:
+ * hermeticd finds every stage marker matching, re-registers on the tailnet and
+ * reports `ready`. Keyed on the row being `bootstrapping` with no heartbeat
+ * when the boot lands, so a row an operation moved on in the meantime is left
+ * alone. Without it a started fixture agent sat in `bootstrapping` for ever.
+ */
+export function simulateBoot(b: MemoryBackend, instanceId: string): void {
+  const name = b.instances.get(instanceId)?.agent ?? null;
+  if (name === null) return;
+  b.later(b.rerunDelayMs * 2, () => {
+    const current = b.agents.get(name);
+    const inst = b.instances.get(instanceId);
+    if (current?.status !== "bootstrapping" || current.last_heartbeat) return;
+    if (inst?.state !== "pending") return;
+    const at = b.now().toISOString();
+    b.instances.set(instanceId, { ...inst, state: "running" });
+    b.agents.set(name, {
+      ...current,
+      status: "ready",
+      version: current.version + 1,
+      tailscale_ip: "100.64.12.250",
+      tailscale_dns_name: `${cloudName(b.fleetItem?.fleet_id, name)}.${b.fleetItem?.tailnet ?? FIXTURE_TAILNET}`,
+      health: { hermes: true, tailscale: true, disk: true },
+      last_heartbeat: at,
+      updated_at: at,
+    });
+    b.events.push({
+      name,
+      timestamp: at,
+      actor: `hermeticd/${name}`,
+      action: "ready",
+      from_status: "bootstrapping",
+      to_status: "ready",
+      detail: "all bootstrap stages ok",
     });
   });
 }

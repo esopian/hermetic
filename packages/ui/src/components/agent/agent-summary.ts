@@ -121,6 +121,25 @@ export function statusSentence(agent: AgentView): StatusSentence {
         detail: "Compute is off and only its disks bill. Start it from Lifecycle.",
         tone: "muted",
       };
+    case "pausing":
+      return {
+        lead: "Pausing.",
+        detail: "Hermes is being halted, then the instance shuts down.",
+        tone: "busy",
+      };
+    case "paused":
+      return {
+        lead: "Paused.",
+        detail:
+          "Hermes was halted and the instance is off; only its disks bill. Resume it from Lifecycle.",
+        tone: "muted",
+      };
+    case "resuming":
+      return {
+        lead: "Resuming.",
+        detail: "The instance is starting; hermeticd reports once Hermes is back.",
+        tone: "busy",
+      };
     case "destroying":
       return { lead: "Being destroyed.", detail: "The instance is being terminated.", tone: "busy" };
     case "destroyed":
@@ -138,6 +157,7 @@ export function statusSentence(agent: AgentView): StatusSentence {
 export function overviewSubline(agent: AgentView): string {
   if (agent.display_status === "destroyed") return "record only";
   if (agent.display_status === "stopped") return "stopped";
+  if (agent.display_status === "paused") return "paused";
   if (agent.display_status === "error") return "bootstrap failed";
   if (agent.display_status === "unreachable") return "not answering";
   if (!agent.health) return "no report yet";
@@ -161,5 +181,6 @@ export function lifecycleSubline(
   if (agent.display_status === "unreachable") return { text: "reboot suggested", accent: true };
   if (isBehind(agent, latest)) return { text: "upgrade available", accent: true };
   if (agent.display_status === "stopped") return { text: "stopped · start", accent: false };
+  if (agent.display_status === "paused") return { text: "paused · resume", accent: false };
   return { text: "no action needed", accent: false };
 }

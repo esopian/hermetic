@@ -236,6 +236,8 @@ const getSchema = declare("agents.get", "agent status", AgentRefInput);
 const setSchema = declare("agents.set", "agent set", SetAgentInput);
 const stopSchema = declare("agents.stop", "agent stop", AgentRefInput);
 const startSchema = declare("agents.start", "agent start", AgentRefInput);
+const pauseSchema = declare("agents.pause", "agent pause", AgentRefInput);
+const resumeSchema = declare("agents.resume", "agent resume", AgentRefInput);
 const rebootSchema = declare("agents.reboot", "agent reboot", AgentRefInput);
 const recreateSchema = declare("agents.recreate", "agent recreate", RecreateAgentInput);
 const destroySchema = declare("agents.destroy", "agent destroy", DestroyAgentInput);
@@ -614,8 +616,9 @@ export function register(program: Command): void {
   );
 
   /**
-   * The two reversible verbs, and the only lifecycle commands here that ask
-   * nothing before acting. `destroy` and `recreate` go through the plan/confirm
+   * The reversible verbs, and the only lifecycle commands here that ask
+   * nothing before acting (`pause`/`resume` are `stop`/`start` with Hermes
+   * halted first). `destroy` and `recreate` go through the plan/confirm
    * ceremony (§3.2 rule 3) because they throw something away: a volume, or the
    * instance and everything on its root disk. `stop` and `start` throw nothing
    * away — the box powers off and on, the data volume and the row survive, and
@@ -624,18 +627,21 @@ export function register(program: Command): void {
    * without reading, which is how the prompts in front of the irreversible ones
    * stop working.
    */
-  for (const verb of ["stop", "start"] as const) {
+  const POWER = {
+    stop: { schema: stopSchema, about: "stop an agent's instance" },
+    start: { schema: startSchema, about: "start an agent's instance" },
+    pause: { schema: pauseSchema, about: "halt Hermes and stop an agent's instance" },
+    resume: { schema: resumeSchema, about: "start a paused agent's instance" },
+  } as const;
+  for (const verb of ["stop", "start", "pause", "resume"] as const) {
     agent.addCommand(
       globals(new Cmd(verb))
-        .description(`${verb} an agent's instance`)
+        .description(POWER[verb].about)
         .argument("<name>", "agent name")
         .action(async (name: string, _opts: unknown, cmd: Command) => {
           const ctx = await openCtx(cmd);
-          const input = validate(verb === "stop" ? stopSchema : startSchema, { name });
-          const op =
-            verb === "stop"
-              ? ctx.hermetic.agents.stop(input.name, { signal: ctx.signal })
-              : ctx.hermetic.agents.start(input.name, { signal: ctx.signal });
+          const input = validate(POWER[verb].schema, { name });
+          const op = ctx.hermetic.agents[verb](input.name, { signal: ctx.signal });
           await renderOp(op, { flags: ctx.flags, label: `agent ${verb} ${input.name}` });
         }),
     );

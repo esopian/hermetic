@@ -30,6 +30,12 @@ export const RPC_PATHS = {
    * request carries no secret; it only says "re-read".
    */
   secretsSync: "/secrets/sync",
+  /**
+   * `POST`, no body: stop the Hermes units before `agent pause` powers the box
+   * off (`PowerHaltResult`), so a turn ends under systemd's stop rather than
+   * mid-write at OS shutdown. The units stay enabled and start on next boot.
+   */
+  powerHalt: "/power/halt",
 } as const;
 
 /** `DELETE <prefix><device_id>` unregisters one phone. */

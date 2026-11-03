@@ -46,6 +46,9 @@ export const REKEYABLE_STATUSES: ReadonlySet<AgentStatus> = new Set<AgentStatus>
   "degraded",
   "stopping",
   "stopped",
+  "pausing",
+  "paused",
+  "resuming",
   "error",
 ]);
 

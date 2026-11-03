@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { AgentView, ProfileView, VolumeView } from "../api/index.ts";
-import { startAgent } from "../api/index.ts";
+import { resumeAgent, startAgent } from "../api/index.ts";
 import type { AgentTab } from "../nav/agent-nav.ts";
 import { diagnose } from "../logic/card-diagnosis.ts";
 import { currentStage, stages, stageLabel } from "../logic/bootstrap.ts";
@@ -12,6 +12,7 @@ import {
   isBusy,
   isOff,
   loadColor,
+  pausedFor,
   pct,
   sizeGlyph,
   statusColor,
@@ -185,9 +186,11 @@ export function AgentCard({
         ? `${String(stageList.filter((s) => s.status === "ok").length).padStart(2, "0")}/${String(stageList.length).padStart(2, "0")}${stageAt ? ` ${stageLabel(stageAt).toLowerCase()}` : ""} · ${fmtDuration(Math.max(0, now - Date.parse(a.created_at)))}`
         : a.display_status === "stopped"
           ? fmtDuration(Math.max(0, now - Date.parse(a.updated_at)))
-          : ["ready", "degraded", "error"].includes(a.display_status)
-            ? `up ${uptime(a, now)}`
-            : "";
+          : a.display_status === "paused"
+            ? (pausedFor(a, now) ?? "")
+            : ["ready", "degraded", "error"].includes(a.display_status)
+              ? `up ${uptime(a, now)}`
+              : "";
   const mismatch = hostnameMismatch(a, tailnet, fleetId);
   const fileRequests = useOpenRequestCount(a.name);
   const tags = [
@@ -224,11 +227,12 @@ export function AgentCard({
       </span>
     ) : null,
   ];
+  const paused = a.display_status === "paused";
   const start = async () => {
     setStarting(true);
     setStartError(null);
     try {
-      const accepted = await startAgent(a.name);
+      const accepted = await (paused ? resumeAgent(a.name) : startAgent(a.name));
       onStarted?.(a.name, accepted.op_id);
     } catch (e) {
       setStartError(e instanceof Error ? e.message : String(e));
@@ -267,7 +271,7 @@ export function AgentCard({
             </span>
           </div>
           <div className="card-actions">
-            {a.display_status === "stopped" ? (
+            {a.display_status === "stopped" || paused ? (
               <button
                 type="button"
                 className="btn btn-sm btn-primary"
@@ -277,7 +281,7 @@ export function AgentCard({
                   void start();
                 }}
               >
-                {starting ? "Starting…" : "Start"}
+                {paused ? (starting ? "Resuming…" : "Resume") : starting ? "Starting…" : "Start"}
               </button>
             ) : null}
             {!off && !isBusy(a) ? (
@@ -352,7 +356,7 @@ export function AgentCard({
         ) : null}
         {startError ? (
           <div className="card-start-error" role="alert">
-            Start failed: {startError}
+            {paused ? "Resume" : "Start"} failed: {startError}
           </div>
         ) : null}
         <div className={`card-metrics${a.display_status === "unreachable" ? " stale" : ""}`}>

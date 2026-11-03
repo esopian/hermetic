@@ -29,6 +29,8 @@ export const TRANSITIONAL: readonly AgentStatus[] = [
   "creating",
   "bootstrapping",
   "stopping",
+  "pausing",
+  "resuming",
   "destroying",
 ];
 

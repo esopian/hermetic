@@ -57,7 +57,7 @@ const SEEDED: ReadonlyArray<readonly [string, string]> = [
   ["juniper", "stopped"],
   ["kestrel", "ready"],
   ["lumen", "unreachable"],
-  ["marrow", "stopped"],
+  ["marrow", "paused"],
 ];
 
 const COLUMNS = [

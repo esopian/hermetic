@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { HERMETICD_RPC_PORT, RPC_CONTENT_TYPE, RPC_PATHS, decodeRpcFrame } from "@hermetic/core/schema";
+import { HERMES_DASHBOARD_UNIT, HERMES_GATEWAY_UNIT } from "@hermetic/core/shared";
 import type { RpcFrame, RpcHealth, SecretsSyncResult } from "@hermetic/core/schema";
 import { AgentdError } from "../src/errors.ts";
 import type { Whois } from "../src/rpc.ts";
@@ -8,6 +9,7 @@ import {
   REFUSAL_LOG_WINDOW_MS,
   TAGGED_DEVICES_LOGIN,
   SECRETS_SYNC_PER_MINUTE,
+  haltHermes,
   hermesLogPath,
   makeRpcHandler,
   mapJournalLine,
@@ -47,6 +49,8 @@ function handler(
     defaultJournal?: boolean;
     /** `POST /secrets/sync`; absent wires no route. */
     secretsSync?: () => Promise<SecretsSyncResult>;
+    /** Wire `POST /power/halt` to the real `haltHermes` over this rig's host. */
+    powerHalt?: boolean;
   } = {},
 ) {
   const host = new FakeHost();
@@ -71,6 +75,7 @@ function handler(
       whois: async (ip) => (ip.startsWith("100.64.") ? (options.peer ?? MEMBER) : null),
       ...(options.allowedTags ? { allowedTags: options.allowedTags } : {}),
       ...(options.secretsSync ? { secretsSync: options.secretsSync } : {}),
+      ...(options.powerHalt ? { powerHalt: () => haltHermes(host) } : {}),
       log: (message) => void audit.push(message),
       ...(options.defaultJournal
         ? {}
@@ -683,5 +688,47 @@ describe("POST /secrets/sync", () => {
     expect(text).toContain("COMMAND_FAILED");
     expect(text).not.toContain("FIXTURE");
     expect(r.audit.join("\n")).not.toContain("FIXTURE");
+  });
+});
+
+describe("POST /power/halt", () => {
+  const url = `http://100.64.0.7:${HERMETICD_RPC_PORT}${RPC_PATHS.powerHalt}`;
+  const post = () => new Request(url, { method: "POST" });
+
+  test("a peer whois cannot name, or a tagged node, is refused 403 and nothing stops", async () => {
+    const stranger = handler({ powerHalt: true });
+    expect((await stranger.fetch(post(), STRANGER_IP)).status).toBe(403);
+    const node = handler({ powerHalt: true, peer: AGENT_NODE });
+    expect((await node.fetch(post(), OPERATOR_IP)).status).toBe(403);
+    expect([...stranger.host.stopped, ...node.host.stopped]).toEqual([]);
+  });
+
+  test("any other method is 405, and without the dependency the route is a 404", async () => {
+    const r = handler({ powerHalt: true });
+    expect((await r.fetch(new Request(url), OPERATOR_IP)).status).toBe(405);
+    expect(r.host.stopped).toEqual([]);
+    expect((await handler().fetch(post(), OPERATOR_IP)).status).toBe(404);
+  });
+
+  test("a member's POST stops both Hermes units and names the ones now inactive", async () => {
+    const r = handler({ powerHalt: true });
+    // The dashboard stopped; the gateway is still up (the fake's default `is-active`).
+    r.host.when(new RegExp(`is-active --quiet ${HERMES_DASHBOARD_UNIT}`), { code: 3 });
+    const res = await r.fetch(post(), OPERATOR_IP);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ halted: [HERMES_DASHBOARD_UNIT] });
+    expect(r.host.stopped.sort()).toEqual([HERMES_DASHBOARD_UNIT, HERMES_GATEWAY_UNIT].sort());
+    // Bounded, so a stuck unit cannot hold the answer past the laptop's budget.
+    expect(r.host.commandsMatching(/^timeout \d+ systemctl stop/)).toHaveLength(2);
+  });
+
+  test("a halt that cannot run answers its code, never its message", async () => {
+    const r = handler({ powerHalt: true });
+    r.host.execFaults.push(() => new AgentdError("COMMAND_FAILED", "FIXTURE detail"));
+    const res = await r.fetch(post(), OPERATOR_IP);
+    expect(res.status).toBe(500);
+    const text = await res.text();
+    expect(text).toContain("COMMAND_FAILED");
+    expect(text).not.toContain("FIXTURE");
   });
 });

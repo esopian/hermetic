@@ -5,6 +5,7 @@ import {
   RPC_PROTOCOL_VERSION,
   RPC_VERSION_HEADER,
   RpcFrame,
+  PowerHaltResult,
   RpcHealth,
   SecretsSyncResult,
 } from "../schema/index.ts";
@@ -44,6 +45,13 @@ export const RPC_DEFAULT_TIMEOUT_MS = 5_000;
  * to miss, and a miss is reported as unreachable.
  */
 export const RPC_SECRETS_SYNC_TIMEOUT_MS = 30_000;
+
+/**
+ * `powerHalt`'s budget: the box bounds its own `systemctl stop` at ~30 s, so
+ * this leaves room for the answer to travel back. A miss only means pause warns
+ * and powers the box off anyway.
+ */
+export const RPC_POWER_HALT_TIMEOUT_MS = 45_000;
 
 /**
  * `http://<tailscale ip>:7434` for one agent, or a typed refusal: no such row,
@@ -153,6 +161,13 @@ export class HermeticdRpc implements RpcApi {
   async secretsSync(name: string, opts: { signal?: AbortSignal } = {}): Promise<SecretsSyncResult> {
     return SecretsSyncResult.parse(
       await this.bounded(name, RPC_PATHS.secretsSync, "POST", opts.signal, RPC_SECRETS_SYNC_TIMEOUT_MS),
+    );
+  }
+
+  /** `POST /power/halt`, bounded by `RPC_POWER_HALT_TIMEOUT_MS`; a 404 is an older hermeticd. */
+  async powerHalt(name: string, opts: { signal?: AbortSignal } = {}): Promise<PowerHaltResult> {
+    return PowerHaltResult.parse(
+      await this.bounded(name, RPC_PATHS.powerHalt, "POST", opts.signal, RPC_POWER_HALT_TIMEOUT_MS),
     );
   }
 

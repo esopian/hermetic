@@ -36,6 +36,7 @@ import {
   loadColor,
   offlineDetail,
   offlineUnit,
+  pausedFor,
   pct,
   sizeGlyph,
   sizeSpec,
@@ -563,6 +564,10 @@ describe("version comparison and status", () => {
     expect(statusColor("stopped")).toBe("var(--fg3)");
     expect(statusColor("destroyed")).toBe("var(--fg3)");
     expect(statusColor("creating")).toBe("var(--acc)");
+    // Paused is settled and grey like stopped; the two moves pulse like any op.
+    expect(statusColor("paused")).toBe("var(--fg3)");
+    expect(statusColor("pausing")).toBe("var(--acc)");
+    expect(statusColor("resuming")).toBe("var(--acc)");
   });
 
   test("isBusy / isOff", () => {
@@ -580,6 +585,23 @@ describe("version comparison and status", () => {
     expect(isOff(agent({ display_status: "stopped" }))).toBe(true);
     expect(isOff(agent({ display_status: "destroyed" }))).toBe(true);
     expect(isOff(agent({ display_status: "ready" }))).toBe(false);
+  });
+
+  test("pause and resume: the moves are busy, paused is off", () => {
+    expect(isBusy(agent({ display_status: "pausing" }))).toBe(true);
+    expect(isBusy(agent({ display_status: "resuming" }))).toBe(true);
+    expect(isBusy(agent({ display_status: "paused" }))).toBe(false);
+    expect(isOff(agent({ display_status: "paused" }))).toBe(true);
+    expect(isOff(agent({ display_status: "pausing" }))).toBe(false);
+    expect(isOff(agent({ display_status: "resuming" }))).toBe(false);
+  });
+
+  test("pausedFor reads paused_at, and only on a paused row", () => {
+    const now = Date.parse("2026-09-01T15:11:00.000Z");
+    const pausedAt = "2026-09-01T12:00:00.000Z";
+    expect(pausedFor(agent({ display_status: "paused", paused_at: pausedAt }), now)).toBe("3h 11m");
+    expect(pausedFor(agent({ display_status: "paused", paused_at: null }), now)).toBeNull();
+    expect(pausedFor(agent({ display_status: "stopped", paused_at: pausedAt }), now)).toBeNull();
   });
 });
 
@@ -737,6 +759,7 @@ describe("drawerActions", () => {
       reboot: false,
       rebuild: false,
       power: null,
+      pause: false,
       destroy: false,
     });
   });
@@ -784,6 +807,20 @@ describe("drawerActions", () => {
     }
   });
 
+  test("a running agent is offered Pause; a paused one Resume, not Start or Stop", () => {
+    expect(drawerActions("ready").pause).toBe(true);
+    expect(drawerActions("degraded").pause).toBe(true);
+    for (const status of ["stopped", "paused", "pausing", "resuming", "error", "unreachable"]) {
+      expect(drawerActions(status).pause).toBe(false);
+    }
+    expect(drawerActions("paused").power).toBe("resume");
+    expect(drawerActions("resuming").power).toBe("resume");
+    // Stop is core's escape hatch for a pause that hangs.
+    expect(drawerActions("pausing").power).toBe("stop");
+    expect(drawerActions("paused").rebuild).toBe(true);
+    expect(drawerActions("paused").reboot).toBe(false);
+  });
+
   test("an errored agent is offered Rerun", () => {
     const a = drawerActions("error");
     expect(a.rerun).toBe(true);
@@ -795,6 +832,7 @@ describe("offlineDetail", () => {
   test("names what actually happened to the instance", () => {
     expect(offlineDetail("destroyed")).toBe("offline · instance terminated");
     expect(offlineDetail("stopped")).toBe("offline · instance stopped");
+    expect(offlineDetail("paused")).toBe("offline · paused");
   });
 });
 
@@ -802,6 +840,7 @@ describe("offlineUnit", () => {
   test("the metric tiles make the same distinction the health strip does", () => {
     expect(offlineUnit("destroyed")).toBe("terminated");
     expect(offlineUnit("stopped")).toBe("stopped");
+    expect(offlineUnit("paused")).toBe("paused");
   });
 });
 

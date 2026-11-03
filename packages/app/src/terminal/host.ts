@@ -34,7 +34,15 @@ export const SESSIONS_PER_AGENT = 3;
 export const SESSIONS_PER_APP = 8;
 
 /** Statuses with no box to log in to. Anything else is worth a try; ssh says why not. */
-const AGENT_OFF: ReadonlySet<string> = new Set(["stopping", "stopped", "destroying", "destroyed"]);
+const AGENT_OFF: ReadonlySet<string> = new Set([
+  "stopping",
+  "stopped",
+  "pausing",
+  "paused",
+  "resuming",
+  "destroying",
+  "destroyed",
+]);
 
 export interface TerminalOpenInput {
   name: string;

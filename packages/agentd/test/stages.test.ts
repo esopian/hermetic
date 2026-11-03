@@ -222,7 +222,7 @@ describe("the stage runner (§4.2)", () => {
       expect(host.files.get(markerPath(stageIdOf(file)))?.content.trim()).toBe(sha256Of(body));
     }
     expect(transitions(ddb)).toEqual([
-      [["creating", "stopped", "error"], "bootstrapping"],
+      [["creating", "stopped", "resuming", "paused", "error"], "bootstrapping"],
       [["bootstrapping"], "ready"],
     ]);
     expect(
@@ -298,9 +298,24 @@ describe("the stage runner (§4.2)", () => {
     // Through `bootstrapping`: `ready` is only ever entered from the state
     // that means "this boot is happening", never straight out of `error`.
     expect(transitions(ddb)).toEqual([
-      [["creating", "stopped", "error"], "bootstrapping"],
+      [["creating", "stopped", "resuming", "paused", "error"], "bootstrapping"],
       [["bootstrapping"], "ready"],
     ]);
+  });
+
+  test("a resumed or console-booted paused box boots through bootstrapping, running nothing", async () => {
+    for (const status of ["resuming", "paused"]) {
+      const { host, ddb, deps, bodies } = rig({ row: { status } });
+      seedMarkers(host, bodies);
+
+      await runStages(deps);
+
+      expect(host.streamed).toEqual([]);
+      const [boot, ready] = transitions(ddb);
+      expect(boot?.[0]).toContain(status);
+      expect(boot?.[1]).toBe("bootstrapping");
+      expect(ready).toEqual([["bootstrapping"], "ready"]);
+    }
   });
 
   test("a stage whose digest moved runs again; its neighbours do not", async () => {
@@ -329,8 +344,8 @@ describe("the stage runner (§4.2)", () => {
     expect(host.streamed).toEqual([]);
     expect(host.files.has(`${STAGES_DIR}/00-preflight.sh`)).toBe(false);
     expect(transitions(ddb)).toEqual([
-      [["creating", "stopped", "bootstrapping"], "error"],
-      [["creating", "stopped", "bootstrapping"], "error"],
+      [["creating", "stopped", "resuming", "paused", "bootstrapping"], "error"],
+      [["creating", "stopped", "resuming", "paused", "bootstrapping"], "error"],
     ]);
     const failure = events(ddb).find((e) => e.action === "error");
     expect(failure?.detail).toContain("01-tailscale.sh does not match");
@@ -342,7 +357,9 @@ describe("the stage runner (§4.2)", () => {
 
     await expect(runStages(deps)).rejects.toThrow(/ProvisionedThroughput/);
     expect(host.streamed).toEqual([]);
-    expect(transitions(ddb)).toEqual([[["creating", "stopped", "bootstrapping"], "error"]]);
+    expect(transitions(ddb)).toEqual([
+      [["creating", "stopped", "resuming", "paused", "bootstrapping"], "error"],
+    ]);
   });
 
   test("a pre-stage failure's message is redacted before it reaches the row", async () => {
@@ -951,9 +968,9 @@ describe("failure, rerun and giving up (§4.2 step 7)", () => {
       ["02-data-volume", "ok", 2],
     ]);
     expect(transitions(ddb)).toEqual([
-      [["creating", "stopped", "error"], "bootstrapping"],
+      [["creating", "stopped", "resuming", "paused", "error"], "bootstrapping"],
       [["bootstrapping"], "error"],
-      [["creating", "stopped", "error"], "bootstrapping"],
+      [["creating", "stopped", "resuming", "paused", "error"], "bootstrapping"],
       [["bootstrapping"], "ready"],
     ]);
     // The failure is on the row, and named the stage.

@@ -299,7 +299,9 @@ export function triageGroups(agents: AgentView[], latest: string | null): Triage
   );
   const progress = live.filter((a) => isBusy(a));
   const healthy = live.filter((a) => a.display_status === "ready" && !isBehind(a, latest));
-  const stopped = live.filter((a) => isOff(a));
+  // `isOff` includes paused, so the paused group takes its rows first.
+  const paused = live.filter((a) => a.display_status === "paused");
+  const stopped = live.filter((a) => isOff(a) && a.display_status !== "paused");
   return [
     {
       key: "attention",
@@ -319,6 +321,13 @@ export function triageGroups(agents: AgentView[], latest: string | null): Triage
       label: "healthy",
       color: "var(--ok)",
       items: healthy,
+    },
+    {
+      key: "paused",
+      label: "paused",
+      color: "var(--fg3)",
+      hint: "Hermes halted, data volume kept.",
+      items: paused,
     },
     {
       key: "stopped",

@@ -706,6 +706,14 @@ describe.concurrent("the stdout/stderr split", () => {
       expect(JSON.parse(line) as { phase: string }).toHaveProperty("phase");
     }
   });
+
+  test("agent pause streams NDJSON that ends done, with no prompt", async () => {
+    const { code, stdout } = await run("agent", "pause", "atlas", "--json");
+    expect(code).toBe(0);
+    const last = JSON.parse(stdout.trim().split("\n").at(-1)!) as { phase: string; message: string };
+    expect(last.phase).toBe("done");
+    expect(last.message).toBe("atlas paused; the data volume is untouched");
+  });
 });
 
 describe.concurrent("destructive commands confirm", () => {

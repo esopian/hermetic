@@ -1173,6 +1173,8 @@ const OP_VERBS: Readonly<Record<string, string>> = {
   "agents.destroy": "destroy",
   "agents.stop": "stop",
   "agents.start": "start",
+  "agents.pause": "pause",
+  "agents.resume": "resume",
   "agents.rerun": "rerun",
 };
 

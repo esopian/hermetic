@@ -66,6 +66,8 @@ export function ChatView({
           return "destroyed";
         case "stopped":
         case "stopping":
+        case "paused":
+        case "pausing":
           return "stopped";
         default:
           return "pending";

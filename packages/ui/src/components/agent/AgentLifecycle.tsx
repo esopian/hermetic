@@ -13,7 +13,9 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
 import {
+  pauseAgent,
   recreate as recreateAgent,
+  resumeAgent,
   startAgent,
   stopAgent,
   upgrade as upgradeAgent,
@@ -101,6 +103,8 @@ export function AgentLifecycle({
   onReboot,
   confirmOpen,
   setConfirmOpen,
+  pauseAsk,
+  setPauseAsk,
   destroy,
 }: {
   agent: AgentView;
@@ -113,6 +117,12 @@ export function AgentLifecycle({
   onReboot: () => void;
   confirmOpen: boolean;
   setConfirmOpen: (open: boolean) => void;
+  /**
+   * The Pause confirm, owned by the drawer so its header "⏸ Pause" can land
+   * here with it already open: one confirm, wherever the press started.
+   */
+  pauseAsk: boolean;
+  setPauseAsk: (open: boolean) => void;
   destroy: ReturnType<typeof useDestroyFlow>;
 }) {
   const name = agent.name;
@@ -262,7 +272,76 @@ export function AgentLifecycle({
           </button>
         </Card>
 
-        {actions.power === "start" ? (
+        {/*
+          Pause always asks: there is no per-agent "is a turn running" read
+          short of a gateway round trip, so the confirm says what a busy box
+          loses instead. Resume never asks; it loses nothing.
+        */}
+        {actions.pause ? (
+          <Card
+            title="Pause"
+            recommended={!(behind && !!latest)}
+            about={`Halts Hermes, then shuts the instance down. You pay for storage only, ${storageOnly}.`}
+            keeps="disks, config, tailnet name, chat history"
+            loses="availability, a turn in flight"
+            down="until Resume, back in ~2 min"
+          >
+            {pauseAsk ? (
+              <div className="dr-ask" role="group" aria-label="Confirm pause">
+                <span>
+                  Pausing halts Hermes now. A turn in flight is interrupted and its output is lost.
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-secondary"
+                  onClick={() => {
+                    setPauseAsk(false);
+                    void onRun("pause", () => pauseAgent(name));
+                  }}
+                >
+                  Pause
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-secondary"
+                  onClick={() => setPauseAsk(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-sm btn-secondary"
+                disabled={busy}
+                title="Halt Hermes, then shut the instance down; asks first"
+                onClick={() => setPauseAsk(true)}
+              >
+                Pause…
+              </button>
+            )}
+          </Card>
+        ) : null}
+
+        {actions.power === "resume" ? (
+          <Card
+            title="Resume"
+            recommended
+            about="Starts the instance; Hermes comes back with its disks, config and chat history."
+            keeps="everything"
+            loses="nothing"
+            down="until it reports ready, ~2 min"
+          >
+            <button
+              type="button"
+              className="btn btn-sm btn-secondary"
+              disabled={busy}
+              onClick={() => void onRun("resume", () => resumeAgent(name))}
+            >
+              Resume
+            </button>
+          </Card>
+        ) : actions.power === "start" ? (
           <Card
             title="Start"
             pill="~2 min"

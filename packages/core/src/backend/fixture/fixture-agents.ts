@@ -317,8 +317,10 @@ export const SEEDS: readonly SeedSpec[] = [
     reports_no_digest: true,
   },
   {
+    // Paused, not stopped: the seed for the parked triage group and
+    // `agent resume --fixture` (`paused_at` is set in `memory-fixture.ts`).
     name: "marrow",
-    status: "stopped",
+    status: "paused",
     size: "medium",
     ip: "100.64.12.47",
     hermes: "0.14.0",

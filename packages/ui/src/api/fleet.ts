@@ -533,6 +533,14 @@ export function startAgent(name: string): Promise<Accepted> {
   return transport().request<Accepted>("agents.start", { name, target: target() });
 }
 
+export function pauseAgent(name: string): Promise<Accepted> {
+  return transport().request<Accepted>("agents.pause", { name, target: target() });
+}
+
+export function resumeAgent(name: string): Promise<Accepted> {
+  return transport().request<Accepted>("agents.resume", { name, target: target() });
+}
+
 /** The route answers 428 unless the body confirms; the drawer asks first. */
 export function recreate(name: string): Promise<Accepted> {
   return transport().request<Accepted>("agents.recreate", { name, yes: true, target: target() });

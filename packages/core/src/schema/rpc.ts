@@ -140,6 +140,12 @@ export const SecretsSyncResult = z.object({
 });
 export type SecretsSyncResult = z.infer<typeof SecretsSyncResult>;
 
+/** `POST /power/halt` — the Hermes units that are inactive after the stop. */
+export const PowerHaltResult = z.object({
+  halted: z.array(z.string()),
+});
+export type PowerHaltResult = z.infer<typeof PowerHaltResult>;
+
 /** Serialise one frame as an NDJSON line (server side). */
 export function encodeRpcFrame(frame: RpcFrame): string {
   return `${JSON.stringify(frame)}\n`;

@@ -5,11 +5,13 @@ import type {
   FleetItem,
   NetworkMode,
   RpcHealth,
+  PowerHaltResult,
   SecretsSyncResult,
   SnapshotPolicy,
 } from "../schema/index.ts";
 import { FLEET_KEY, RPC_PROTOCOL_VERSION, browserIdentities, stackNameFor } from "../schema/index.ts";
 import { HermeticError } from "../errors.ts";
+import { HERMES_DASHBOARD_UNIT, HERMES_GATEWAY_UNIT } from "../shared/hermes.ts";
 import { parseHujson } from "../fleet/hujson.ts";
 import type { Ec2InstanceFacts, Ec2VolumeFacts } from "./ec2-preconditions.ts";
 import { NO_POLICY_WRITE_SCOPE } from "../aws/tailscale.ts";
@@ -927,6 +929,11 @@ export class MemoryBackend implements Backend {
         throw new HermeticError("INTERNAL", `hermeticd on ${name} did not answer`, { name });
       }
       return { changed: true, bots: [] };
+    },
+    /** The fixture's `POST /power/halt`: answers where `/healthz` would, so a stale box takes pause's not-halted path. */
+    powerHalt: async (name: string): Promise<PowerHaltResult> => {
+      this.answering(name);
+      return { halted: [HERMES_GATEWAY_UNIT, HERMES_DASHBOARD_UNIT] };
     },
     /**
      * Two lines and then the end of the stream — including under `follow`. A
