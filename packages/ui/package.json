@@ -13,7 +13,7 @@
     "@hermetic/core": "workspace:*",
     "@xterm/addon-fit": "0.10.0",
     "@xterm/addon-web-links": "0.11.0",
-    "@xterm/xterm": "5.5.0",
+    "@xterm/xterm": "6.0.0",
     "gsap": "^3.13.0",
     "katex": "^0.18.2",
     "react": "^19.2.8",
