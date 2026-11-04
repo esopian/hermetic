@@ -45,6 +45,8 @@ export const getSchema = declareRpc("agents.get", AgentRefInput);
 export const setSchema = declareRpc("agents.set", SetAgentInput);
 export const stopSchema = declareRpc("agents.stop", AgentRefInput);
 export const startSchema = declareRpc("agents.start", AgentRefInput);
+export const pauseSchema = declareRpc("agents.pause", AgentRefInput);
+export const resumeSchema = declareRpc("agents.resume", AgentRefInput);
 export const recreateSchema = declareRpc("agents.recreate", RecreateAgentInput);
 export const destroySchema = declareRpc("agents.destroy", DestroyAgentInput);
 export const historySchema = declareRpc("agents.history", HistoryInput);
@@ -75,6 +77,8 @@ export const createBody = withTarget(createSchema);
 export const setBody = withTarget(setSchema);
 export const stopBody = withTarget(stopSchema);
 export const startBody = withTarget(startSchema);
+export const pauseBody = withTarget(pauseSchema);
+export const resumeBody = withTarget(resumeSchema);
 export const rebootBody = withTarget(rebootSchema);
 export const recreateBody = withTarget(recreateSchema);
 export const destroyBody = withTarget(destroySchema);
@@ -248,6 +252,22 @@ export async function start(ctx: HandlerContext, params: unknown): Promise<Accep
   return accepted(op);
 }
 
+export async function pause(ctx: HandlerContext, params: unknown): Promise<Accepted> {
+  requireWritable(ctx.state);
+  const { hermetic: h, input } = requireTarget(ctx.state, parseInput(pauseBody, params));
+  const { name } = input;
+  const op = ctx.ops.start("agents.pause", name, (signal) => h.agents.pause(name, { signal }));
+  return accepted(op);
+}
+
+export async function resume(ctx: HandlerContext, params: unknown): Promise<Accepted> {
+  requireWritable(ctx.state);
+  const { hermetic: h, input } = requireTarget(ctx.state, parseInput(resumeBody, params));
+  const { name } = input;
+  const op = ctx.ops.start("agents.resume", name, (signal) => h.agents.resume(name, { signal }));
+  return accepted(op);
+}
+
 export async function recreate(ctx: HandlerContext, params: unknown): Promise<Accepted> {
   requireWritable(ctx.state);
   const bound = requireTarget(ctx.state, parseInput(recreateBody, unconfirmed(params)));
@@ -393,6 +413,8 @@ export const agentHandlers = {
   "agents.set": set,
   "agents.stop": stop,
   "agents.start": start,
+  "agents.pause": pause,
+  "agents.resume": resume,
   "agents.recreate": recreate,
   "agents.destroy": destroy,
   "agents.history": history,

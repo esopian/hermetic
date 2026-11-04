@@ -266,7 +266,7 @@ export function createHermetic(deps: HermeticDeps) {
       (await backend.store.events.queryTombstones({ name })).map(incarnationEnd),
   });
 
-  const { create, destroy, stop, start, recreate } = createLifecycle({
+  const { create, destroy, stop, start, pause, resume, recreate } = createLifecycle({
     ctx,
     volumeClaims,
     applyPending,
@@ -644,6 +644,8 @@ export function createHermetic(deps: HermeticDeps) {
       set,
       stop,
       start,
+      pause,
+      resume,
       recreate,
       destroy,
       history,

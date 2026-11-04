@@ -258,7 +258,9 @@ export function ChatDock({
                     status === "stopped" ||
                     status === "destroyed"
                       ? status
-                      : "pending"
+                      : status === "paused" || status === "pausing"
+                        ? "stopped"
+                        : "pending"
                   }
                   square={false}
                 />

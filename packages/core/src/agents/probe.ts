@@ -111,6 +111,8 @@ const LIVE_STATUSES: readonly Agent["status"][] = ["bootstrapping", "ready", "de
 /** EC2 states that mean the box will not be coming back on its own. */
 const GONE_STATES: readonly string[] = ["terminated", "shutting-down"];
 const OFF_STATES: readonly string[] = ["stopped", "stopping"];
+/** Row statuses that want the box powered off; a paused box is a stopped one with Hermes halted first. */
+const OFF_ROWS: readonly ProbeRow["status"][] = ["stopped", "stopping", "paused", "pausing"];
 
 function messageOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -560,7 +562,7 @@ function errorSummary(row: ProbeRow): string {
  * a create that failed halfway is *defined* by the instance being in an
  * unpredictable place, so calling that drift would fire on every one of them.
  */
-const DRIFTABLE: readonly ProbeRow["status"][] = ["stopped", "stopping", "destroying", "destroyed"];
+const DRIFTABLE: readonly ProbeRow["status"][] = [...OFF_ROWS, "destroying", "destroyed"];
 
 /**
  * For a row that is not expected to be heartbeating, does EC2 agree with it?
@@ -572,7 +574,7 @@ const DRIFTABLE: readonly ProbeRow["status"][] = ["stopped", "stopping", "destro
  */
 function instanceAgreesWith(status: ProbeRow["status"], instance: ProbeInstance): boolean {
   const state = instance.state ?? "";
-  if (status === "stopped" || status === "stopping") {
+  if (OFF_ROWS.includes(status)) {
     return absentInstance(instance) || OFF_STATES.includes(state);
   }
   if (status === "destroyed" || status === "destroying") {
@@ -597,17 +599,18 @@ function absentInstance(instance: ProbeInstance): boolean {
 /** What to do about a row and an instance that disagree, per direction of drift. */
 function driftHints(n: string, status: ProbeRow["status"], instance: ProbeInstance): string[] {
   const state = instance.state ?? "";
-  if ((status === "stopped" || status === "stopping") && GONE_STATES.includes(state)) {
+  const paused = status === "paused" || status === "pausing";
+  if (OFF_ROWS.includes(status) && GONE_STATES.includes(state)) {
     // `agent start` boots a *fresh* instance from the row, and the row's
     // instance id no longer exists — so it is the one command that cannot work.
     return [
-      `\`hermetic agent start ${n}\` cannot work: the instance is ${state}`,
+      `\`hermetic agent ${paused ? "resume" : "start"} ${n}\` cannot work: the instance is ${state}`,
       `hermetic agent recreate ${n}`,
       `hermetic agent destroy ${n}`,
       "hermetic doctor",
     ];
   }
-  if (status === "stopped" || status === "stopping") {
+  if (OFF_ROWS.includes(status)) {
     // Running while the row says stopped: it is billing and nothing watches it.
     return [`hermetic agent stop ${n}`, `hermetic agent destroy ${n}`, "hermetic doctor"];
   }

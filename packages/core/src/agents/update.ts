@@ -230,7 +230,9 @@ export function createUpdate(deps: UpdateDeps) {
         "INVALID_TRANSITION",
         agent.status === "stopped"
           ? `${agent.name} is stopped; use \`hermetic agent start ${agent.name}\``
-          : `${agent.name} is ${agent.status}; reboot needs a running instance (ready, degraded, bootstrapping or error)`,
+          : agent.status === "paused"
+            ? `${agent.name} is paused; use \`hermetic agent resume ${agent.name}\``
+            : `${agent.name} is ${agent.status}; reboot needs a running instance (ready, degraded, bootstrapping or error)`,
         { name: agent.name, status: agent.status },
       );
     }

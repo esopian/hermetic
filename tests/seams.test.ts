@@ -127,14 +127,14 @@ import { ensureMemoryService } from "../packages/agentd/src/apply/memory-service
 import { collector } from "../packages/agentd/src/events.ts";
 import { SECRET_SLOTS, isKnownSlot } from "../packages/agentd/src/main.ts";
 import { parseArgv } from "../packages/agentd/src/cli.ts";
-import { makeRpcHandler } from "../packages/agentd/src/rpc.ts";
+import { haltHermes, makeRpcHandler } from "../packages/agentd/src/rpc.ts";
 import { managedBlockOf, spliceManagedBlock } from "../packages/agentd/src/apply/secrets.ts";
 import { MEMBER, OPERATOR_IP } from "../packages/agentd/test/files-fixture.ts";
 import { HermeticdRpc } from "../packages/core/src/aws/rpc.ts";
 import { seedFixtureFleet } from "../packages/core/src/backend/memory.ts";
 import { MANAGED_ENV_BEGIN, MANAGED_ENV_END } from "../packages/core/src/shared/hermes.ts";
 import { RPC_PATHS } from "../packages/core/src/shared/rpc.ts";
-import { SecretsSyncResult } from "../packages/core/src/schema/rpc.ts";
+import { PowerHaltResult, SecretsSyncResult } from "../packages/core/src/schema/rpc.ts";
 import { releaseStages, stageEnv } from "../packages/agentd/src/stages.ts";
 import type { StagesDeps } from "../packages/agentd/src/stages.ts";
 
@@ -1756,5 +1756,35 @@ describe("the managed .env block and its sync route", () => {
     expect(seen).toEqual([`POST ${RPC_PATHS.secretsSync}`]);
     expect(calls).toBe(1);
     expect(SecretsSyncResult.parse(result)).toEqual({ changed: true, bots: ["scout"] });
+  });
+});
+
+/** `agent pause`'s halt: the route hermeticd serves is the one core calls, in the shape core parses. */
+describe("the power halt route", () => {
+  test("POST /power/halt is served at the path core calls, and parses as PowerHaltResult", async () => {
+    const host = new FakeHost();
+    // The fake's `is-active` always says active; a real box answers 3 once stopped.
+    host.when(/systemctl is-active/, { code: 3 });
+    const handler = makeRpcHandler({
+      host,
+      name: "atlas",
+      hermeticdVersion: HERMETIC_VERSION,
+      configHash: async () => null,
+      whois: async (ip) => (ip === OPERATOR_IP ? MEMBER : null),
+      powerHalt: () => haltHermes(host),
+    });
+    const seen: string[] = [];
+    const rpc = new HermeticdRpc(seedFixtureFleet(new MemoryBackend()).store.agents, {
+      fetch: async (url, init) => {
+        seen.push(`${init?.method} ${new URL(String(url)).pathname}`);
+        return await handler(new Request(String(url), init), OPERATOR_IP);
+      },
+    });
+    const result = await rpc.powerHalt("atlas");
+    expect(seen).toEqual([`POST ${RPC_PATHS.powerHalt}`]);
+    expect(host.stopped.sort()).toEqual([HERMES_DASHBOARD_UNIT, HERMES_GATEWAY_UNIT].sort());
+    expect(PowerHaltResult.parse(result)).toEqual({
+      halted: [HERMES_GATEWAY_UNIT, HERMES_DASHBOARD_UNIT],
+    });
   });
 });

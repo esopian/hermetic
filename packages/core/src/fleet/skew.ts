@@ -44,8 +44,9 @@ import { SKEW_DRIFT_FIX, SKEW_FIX, SKEW_MESSAGE } from "../schema/skew.ts";
  * pinned and `last_heartbeat` cleared to null (`lifecycle.ts`) — so for the
  * whole bootstrap window the row *describes a box that does not exist yet*.
  * Counting it answers a question about a machine that has never spoken.
+ * `resuming` is the step before a resumed box's `bootstrapping`, so it goes too.
  *
- * `stopped` is deliberately *not* here, though nothing on a stopped row is a
+ * `stopped` (and `paused`) is deliberately *not* here, though nothing on a stopped row is a
  * report either. The list gates `agents_affected`, and a fleet-wide foundation
  * skew affects a powered-off agent exactly as much as a running one — it is a
  * property of the fleet, not of the box. What a stopped agent must not do is
@@ -53,7 +54,7 @@ import { SKEW_DRIFT_FIX, SKEW_FIX, SKEW_MESSAGE } from "../schema/skew.ts";
  * `null` for any agent that has not reported, which `computeSkew` reads as
  * unknown rather than as either answer.
  */
-const UNCOUNTED: readonly AgentStatus[] = ["destroyed", "creating", "bootstrapping"];
+const UNCOUNTED: readonly AgentStatus[] = ["destroyed", "creating", "bootstrapping", "resuming"];
 
 /** What the skew count considers an agent at all. */
 export function counts(status: AgentStatus): boolean {
@@ -120,7 +121,7 @@ export function configVerdict(
  * to reveal. The status already says something is wrong; the config column must
  * not spend its credibility arguing.
  *
- * `UNCOUNTED`'s three are here for the reason they are there — the row
+ * `UNCOUNTED`'s statuses are here for the reason they are there — the row
  * describes a box that does not exist yet, or no longer does. Both now clear
  * the field on the way in (`lifecycle.ts`), so this is belt and braces rather
  * than the only guard, which is the right amount for a claim this load-bearing.

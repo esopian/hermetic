@@ -10,6 +10,7 @@ import type {
   HermesLogFile,
   NatHealth,
   RpcHealth,
+  PowerHaltResult,
   SecretsSyncResult,
   SnapshotPolicy,
 } from "../schema/index.ts";
@@ -1233,6 +1234,12 @@ export interface RpcApi {
    * `health`; a box that cannot be reached throws, and the caller reports it.
    */
   secretsSync(name: string, opts?: { signal?: AbortSignal }): Promise<SecretsSyncResult>;
+  /**
+   * `POST /power/halt`: stop the Hermes units ahead of `agent pause`'s
+   * `StopInstances`. Bounded; a box that cannot be reached throws, and pause
+   * warns and powers off anyway.
+   */
+  powerHalt(name: string, opts?: { signal?: AbortSignal }): Promise<PowerHaltResult>;
 }
 
 /**

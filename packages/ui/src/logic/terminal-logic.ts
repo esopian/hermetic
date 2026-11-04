@@ -30,7 +30,15 @@ export const FALLBACK_SIZE = { cols: 120, rows: 32 } as const;
  * `terminal.open` with `TERMINAL_AGENT_OFF`. Restated so the section can show
  * the panel instead of offering a Connect that would only be refused.
  */
-const AGENT_OFF = new Set(["stopping", "stopped", "destroying", "destroyed"]);
+const AGENT_OFF = new Set([
+  "stopping",
+  "stopped",
+  "pausing",
+  "paused",
+  "resuming",
+  "destroying",
+  "destroyed",
+]);
 
 export function terminalAgentOff(status: string): boolean {
   return AGENT_OFF.has(status);

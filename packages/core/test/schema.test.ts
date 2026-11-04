@@ -87,7 +87,7 @@ describe("Agent", () => {
 });
 
 describe("AgentStatus", () => {
-  test("is exactly the nine statuses of §4.3", () => {
+  test("is exactly the twelve statuses of §4.3", () => {
     expect(AgentStatus.options).toEqual([
       "creating",
       "bootstrapping",
@@ -95,6 +95,9 @@ describe("AgentStatus", () => {
       "degraded",
       "stopping",
       "stopped",
+      "pausing",
+      "paused",
+      "resuming",
       "destroying",
       "destroyed",
       "error",

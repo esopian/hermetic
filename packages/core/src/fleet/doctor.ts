@@ -836,7 +836,14 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
    * The statuses `recreate` accepts (its DRAINS+DIRECT guard in `lifecycle.ts`).
    * Advising it on a row it would refuse is advice that cannot be taken.
    */
-  const RECREATABLE: readonly AgentStatus[] = ["ready", "degraded", "creating", "stopped", "error"];
+  const RECREATABLE: readonly AgentStatus[] = [
+    "ready",
+    "degraded",
+    "creating",
+    "stopped",
+    "paused",
+    "error",
+  ];
 
   for (const inst of liveInstances) {
     // A terminating box is neither an orphan nor a second one; see `isDying`.

@@ -625,10 +625,13 @@ function skippedTransitionMessage(from: readonly string[], to: string): string {
   return `row status moved under us; expected ${from.join(", ")}, transition to ${to} skipped`;
 }
 
-/** The statuses a boot may start from: first boot, a start after a stop, a retry. */
-const BOOT_FROM = ["creating", "stopped", "error"] as const;
+/**
+ * The statuses a boot may start from: first boot, a start after a stop, a
+ * resume (or a paused box booted from the console), a retry.
+ */
+const BOOT_FROM = ["creating", "stopped", "resuming", "paused", "error"] as const;
 /** …and the ones a *pre-stage* failure can interrupt. */
-const FAIL_FROM = ["creating", "stopped", "bootstrapping"] as const;
+const FAIL_FROM = ["creating", "stopped", "resuming", "paused", "bootstrapping"] as const;
 
 /**
  * Report a failure that happened before any stage could run — a fleet manifest

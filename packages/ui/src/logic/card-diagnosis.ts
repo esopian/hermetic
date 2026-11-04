@@ -30,6 +30,8 @@ export function diagnose(
   const root = a.metrics?.root_disk_pct;
   const free = rootFree(a.metrics, a.root_gib);
   const rootWorst = typeof root === "number" && root >= (a.metrics?.disk_pct ?? 0);
+  // A paused agent's instance is off exactly like a stopped one's.
+  const powered = a.display_status !== "stopped" && a.display_status !== "paused";
   const diskEvidence =
     disk !== null && disk > 85
       ? `${rootWorst ? "root" : "data"} ${pct(disk)}${rootWorst && free ? ` · ${free.text} free` : ""}`
@@ -88,7 +90,7 @@ export function diagnose(
   if (a.display_status === "creating" || a.display_status === "bootstrapping") {
     add({ kind: "stage", tone: "acc", message: "Bootstrap progress", stages: stages(a) });
   }
-  if (a.display_status === "stopped") {
+  if (!powered) {
     if (a.pending) {
       add({
         kind: "maintenance",
@@ -125,7 +127,7 @@ export function diagnose(
       suppress: "update",
     });
   }
-  if (a.display_status !== "stopped") {
+  if (powered) {
     const line = volumeLine(a, volumeOf(a, ctx.volumes));
     if (line)
       add({
@@ -154,7 +156,7 @@ export function diagnose(
       suppress: "behind",
     });
   }
-  if (a.display_status !== "stopped") {
+  if (powered) {
     const values = [
       { label: "CPU", value: a.metrics?.cpu_pct },
       { label: "Memory", value: a.metrics?.mem_pct },

@@ -21,7 +21,13 @@ import { AgentSectionContext } from "../chat/agent-sections.ts";
 import { isTopmostOverlay, keyboardOwned } from "../lib/focus.ts";
 import { openExternal } from "../lib/open-external.ts";
 import { useListeningIfAvailable } from "../state/listening-state.tsx";
-import { fleetIdOf, history as fetchHistory, rebootAgent, rerunAgent } from "../api/index.ts";
+import {
+  fleetIdOf,
+  history as fetchHistory,
+  rebootAgent,
+  rerunAgent,
+  resumeAgent,
+} from "../api/index.ts";
 import type { AgentEvent, AgentView, Meta } from "../api/index.ts";
 import type { ProfilesState } from "../state/state.tsx";
 import { rerunState } from "../logic/bootstrap.ts";
@@ -33,6 +39,7 @@ import {
   drawerActions,
   hostname,
   hostnameMismatch,
+  pausedFor,
   rebootState,
 } from "../logic/format.ts";
 import { failureHints } from "../logic/op-hints.ts";
@@ -234,9 +241,13 @@ export function AgentDrawer({
    * name half-way to a destroy should not survive the operator walking off to
    * read logs and be waiting, armed, when they come back.
    */
+  /** The Lifecycle Pause confirm; here so the header's "⏸ Pause" can open it. */
+  const [pauseAsk, setPauseAsk] = useState(false);
+
   const go = useCallback(
     (next: AgentTab) => {
       if (next !== "lifecycle" && confirmOpen) setConfirmOpen(false);
+      if (next !== "lifecycle") setPauseAsk(false);
       setSection(next);
       onTab?.(next);
     },
@@ -336,6 +347,14 @@ export function AgentDrawer({
   const actions = drawerActions(agent.display_status);
   const rerun = rerunState(agent, issuedCommand);
   const reboot = rebootState(agent, rebootIssued);
+  const pausedSince = pausedFor(agent, Date.now());
+
+  // An agent that stopped being pausable (paused from the CLI, say) must not
+  // reopen the confirm the next time it is ready.
+  const pausable = actions.pause;
+  useEffect(() => {
+    if (!pausable) setPauseAsk(false);
+  }, [pausable]);
 
   const loadHistory = useCallback(() => {
     const request = ++historyRequest.current;
@@ -601,6 +620,8 @@ export function AgentDrawer({
           onReboot={() => void doReboot()}
           confirmOpen={confirmOpen}
           setConfirmOpen={setConfirmOpen}
+          pauseAsk={pauseAsk}
+          setPauseAsk={setPauseAsk}
           destroy={destroy}
         />
       );
@@ -646,6 +667,7 @@ export function AgentDrawer({
             <span className="dr-head-pill">
               <StatusDot status={agent.display_status} />
               {agent.display_status}
+              {pausedSince ? <span className="status-sub">{pausedSince}</span> : null}
             </span>
             <span className="detail-host">
               {hostname(agent.name, tailnet, agent.tailscale_dns_name, fleetId, fleetCloudName)} ·{" "}
@@ -734,6 +756,36 @@ export function AgentDrawer({
                 Open desktop ↗
               </a>
             </>
+          ) : null}
+          {/*
+            The one lifecycle verb kept in the header as well as on its card
+            (docs/ui-brief.md, settled decisions). Pause does not run from here:
+            it lands on Lifecycle with the card's confirm open. Resume loses
+            nothing, so it runs directly.
+          */}
+          {actions.pause ? (
+            <button
+              type="button"
+              className="btn btn-sm btn-secondary"
+              disabled={busy}
+              title="Pause this agent: halt Hermes, then shut the instance down; asks first"
+              onClick={() => {
+                setPauseAsk(true);
+                go("lifecycle");
+              }}
+            >
+              ⏸ Pause
+            </button>
+          ) : agent.display_status === "paused" ? (
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              disabled={busy}
+              title="Start the instance; Hermes comes back with its disks, config and chat history"
+              onClick={() => void run("resume", () => resumeAgent(name))}
+            >
+              ▶ Resume
+            </button>
           ) : null}
           {/*
             A toggle, so one name and `aria-pressed` carry the state: a name

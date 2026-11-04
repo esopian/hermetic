@@ -84,7 +84,7 @@ describe("agents.list / get", () => {
       "02-data-volume",
     );
     expect(byName.get("juniper")!.display_status).toBe("stopped");
-    expect(byName.get("marrow")!.display_status).toBe("stopped");
+    expect(byName.get("marrow")!.display_status).toBe("paused");
     // `oriole` is destroyed, so it has no row (§6.7): it is a tombstone, read
     // through `agents.destroyed` (`destroyed-read.test.ts`), never listed.
     // A stale heartbeat derives `unreachable` without anything storing it.

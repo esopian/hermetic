@@ -73,6 +73,8 @@ function faceStatus(agent: AgentView | null): Parameters<typeof Face>[0]["status
       return "destroyed";
     case "stopped":
     case "stopping":
+    case "paused":
+    case "pausing":
       return "stopped";
     case undefined:
       return "pending";

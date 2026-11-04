@@ -1074,8 +1074,10 @@ export interface ThreadStateInput {
 
 export function threadState(input: ThreadStateInput): ThreadState {
   if (input.status === "destroyed") return "destroyed";
-  if (input.status === "stopped" || input.status === "stopping") return "stopped";
-  if (input.status === "creating" || input.status === "bootstrapping" || input.status === "pending") {
+  const status = input.status ?? "";
+  // A paused box is off like a stopped one; a resuming one boots like a new one.
+  if (["stopped", "stopping", "paused", "pausing"].includes(status)) return "stopped";
+  if (["creating", "bootstrapping", "resuming", "pending"].includes(status)) {
     return "bootstrapping";
   }
   if (input.fleetUnreachable) return "no_tailnet";

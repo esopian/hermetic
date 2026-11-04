@@ -28,6 +28,9 @@ export const AgentStatus = z.enum([
   "degraded",
   "stopping",
   "stopped",
+  "pausing",
+  "paused",
+  "resuming",
   "destroying",
   "destroyed",
   "error",
@@ -611,6 +614,12 @@ export const Agent = z.object({
   tailscale_version: z.string().min(1).max(64).nullish(),
   resources: Resources,
   last_heartbeat: Iso.nullish(),
+  /**
+   * When `agent pause` landed the row in `paused`, for the "paused 3h" duration;
+   * `updated_at` will not do, because key pushes touch paused rows. Nulled by
+   * `agent resume`.
+   */
+  paused_at: Iso.nullish(),
   health: Health.nullish(),
   metrics: Metrics.nullish(),
   created_by: z.string(),

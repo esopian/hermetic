@@ -248,8 +248,7 @@ export function AgentOverview({
           is that sentence's other half, so an operator reading an error does
           not have to find the nav to act on it.
         */}
-        {(say.tone === "bad" || say.tone === "warn" || agent.display_status === "stopped") &&
-        !destroyed ? (
+        {(say.tone === "bad" || say.tone === "warn" || isOff(agent)) && !destroyed ? (
           <button
             type="button"
             className="btn btn-sm btn-secondary dr-say-go"

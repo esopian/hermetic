@@ -206,6 +206,8 @@ export function settledPhase(status: string): SettledPhase | null {
     case "destroyed":
     case "error":
       return status;
+    case "paused":
+      return "stopped";
     default:
       return null;
   }

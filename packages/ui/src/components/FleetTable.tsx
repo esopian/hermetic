@@ -11,6 +11,7 @@ import {
   hostname,
   isOff,
   loadColor,
+  pausedFor,
   pct,
   sizeGlyph,
   uptime,
@@ -175,7 +176,10 @@ export function FleetTable({
                 <FileRequestBadge agent={a.name} />
                 {fresh.has(a.name) ? <span className="tag-new">NEW</span> : null}
               </span>
-              <StatusLabel status={a.display_status} sub={currentStageLabel(a) ?? lastSeenLabel(a)} />
+              <StatusLabel
+                status={a.display_status}
+                sub={currentStageLabel(a) ?? pausedFor(a, now) ?? lastSeenLabel(a)}
+              />
               <HealthSquares agent={a} />
               <span className="cell-version" style={{ color: versionColor(a, latest) }}>
                 {a.hermes_version}

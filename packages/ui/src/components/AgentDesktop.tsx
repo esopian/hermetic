@@ -285,7 +285,9 @@ export function AgentDesktop({
               <span className="mono">{servePath}</span> route, so there is no stream to open.
               {status === "stopped"
                 ? " Start the agent and the desktop comes back on the same address."
-                : " A destroyed agent is terminal; recreating one on the same volume gives it a new screen."}
+                : status === "paused"
+                  ? " Resume the agent and the desktop comes back on the same address."
+                  : " A destroyed agent is terminal; recreating one on the same volume gives it a new screen."}
             </p>
           </div>
         </div>
