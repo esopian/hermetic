@@ -168,18 +168,18 @@ test("a pinned bot still obeys the search", () => {
   expect(rowTitles()).toEqual(["herald bot"]);
 });
 
-test("folding a bucket hides its rows and keeps its unread count on the header", () => {
+test("folding a bucket hides its rows and keeps its unread mark on the header", () => {
   rail();
   expect(bucket("corvid").getAttribute("aria-expanded")).toBe("true");
   expect(rowTitles()).toContain("herald bot");
-  // Open, the rows carry the count; the header does not repeat it.
+  // Open, the rows carry the mark; the header does not repeat it.
   expect(bucket("corvid").querySelector(".ch-unread")).toBeNull();
 
   fireEvent.click(bucket("corvid"));
 
   expect(bucket("corvid").getAttribute("aria-expanded")).toBe("false");
   expect(rowTitles()).toEqual(["default bot", "scribe bot"]);
-  expect(bucket("corvid").querySelector(".ch-unread")?.textContent).toBe("2");
+  expect(bucket("corvid").querySelector(".ch-unread")?.getAttribute("aria-label")).toBe("Unread");
   expect(readRailPrefs(FLEET).collapsed).toEqual(["corvid"]);
 
   fireEvent.click(bucket("corvid"));
@@ -187,7 +187,7 @@ test("folding a bucket hides its rows and keeps its unread count on the header",
   expect(readRailPrefs(FLEET).collapsed).toEqual([]);
 });
 
-test("a folded bucket with a bot waiting on you says `!`, not a count", () => {
+test("a folded bucket with a bot waiting on you says `!`, not a dot", () => {
   rail({
     swarms: [
       swarm("corvid", [

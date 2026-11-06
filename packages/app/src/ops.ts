@@ -191,6 +191,12 @@ export interface OpRegistryOptions {
    * `main/index.ts` passes `AppState.runTarget`; tests may pass a constant.
    */
   target?: () => RunTarget | null;
+  /**
+   * Called once an op's outcome row is written, so the page hears of it now
+   * rather than on the next poll: the 1 s "was it on screen" check (§4.9)
+   * needs the row while the operator is still where it happened.
+   */
+  onSettled?: () => void;
   /** Quiet period before `follow` yields a keepalive. Default `FOLLOW_KEEPALIVE_MS`; tests shorten it. */
   keepaliveMs?: number;
   /**
@@ -206,6 +212,7 @@ export class OpRegistry {
   private readonly runs: RunRecorder | undefined;
   private readonly pending: PendingOpStore | undefined;
   private readonly log: AppLog | undefined;
+  private readonly onSettled: (() => void) | undefined;
   private readonly keepaliveMs: number;
   private readonly now: () => number;
   /**
@@ -221,6 +228,7 @@ export class OpRegistry {
     this.runs = options.runs;
     this.pending = options.pending;
     this.log = options.log;
+    this.onSettled = options.onSettled;
     this.keepaliveMs = options.keepaliveMs ?? FOLLOW_KEEPALIVE_MS;
     this.now = options.now ?? Date.now;
     if (options.target) this.runTarget = options.target;
@@ -436,6 +444,7 @@ export class OpRegistry {
       } catch {
         // Same: the log is a convenience, not a dependency.
       }
+      this.onSettled?.();
       this.evict();
     }
   }

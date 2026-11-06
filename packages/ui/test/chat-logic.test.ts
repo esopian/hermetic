@@ -40,7 +40,6 @@ import {
   toolVerdict,
   unknownName,
   unknownPayload,
-  unreadBadge,
   warmSlots,
 } from "../src/chat/chat-logic.ts";
 import type { BotLike, MessageLike, SwarmLike } from "../src/chat/chat-logic.ts";
@@ -556,12 +555,6 @@ describe("conversation order and badges", () => {
     const def = bot({ name: "zebra", is_default: true });
     const other = bot({ name: "alpha", is_default: false });
     expect([other, def].sort(compareBots).map((b) => b.name)).toEqual(["zebra", "alpha"]);
-  });
-
-  test("gold outranks orange on the pill too", () => {
-    expect(unreadBadge({ unread: 9, needs_action: true })).toBe("!");
-    expect(unreadBadge({ unread: 9, needs_action: false })).toBe("9");
-    expect(unreadBadge({ unread: 0, needs_action: false })).toBeNull();
   });
 
   test("compareBuckets is stable enough to be a sort comparator", () => {

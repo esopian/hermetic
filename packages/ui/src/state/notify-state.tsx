@@ -35,6 +35,7 @@ import {
   applyVerb,
   chunkIds,
   countDelta,
+  countWeight,
   inInbox,
   isCleared,
   isSnoozed,
@@ -44,8 +45,10 @@ import {
 } from "../logic/inbox-logic.ts";
 import type { DrawerView, InboxVerb, InboxWrite } from "../logic/inbox-logic.ts";
 import {
+  SEEN_ON_SCREEN_MS,
   TOAST_STACK_MAX,
   defaultPrefs,
+  isOnScreen,
   isResolved,
   streamCountDelta,
   loadNotificationPrefs,
@@ -55,14 +58,20 @@ import {
   toastDwellMs,
   unreadChatByConversation,
 } from "../logic/notification-logic.ts";
-import type { NotificationPrefs, WatchedThread, WatchedThreads } from "../logic/notification-logic.ts";
+import type {
+  NotificationPrefs,
+  OnScreen,
+  WatchedThread,
+  WatchedThreads,
+} from "../logic/notification-logic.ts";
 import { transport } from "../api/transport.ts";
 import { isVisible } from "../lib/visibility.ts";
 import { useListeningIfAvailable } from "./listening-state.tsx";
 import { isTerminalKind } from "../logic/terminal-notify.ts";
 import { useTerminalNotify } from "./terminal-notify-state.ts";
 import type { ReturnToast } from "./terminal-notify-state.ts";
-import { viewedTerminal } from "./terminal-watch.ts";
+import { viewedTerminal, windowPresent } from "./terminal-watch.ts";
+import { parseAgentHash } from "../nav/agent-nav.ts";
 import { useFleetIfAvailable } from "./state.tsx";
 import { FileRequestsProvider } from "./file-requests-state.tsx";
 
@@ -521,44 +530,97 @@ export function NotifyProvider({ children, api = LIVE_API }: { children: ReactNo
     };
   }, [refresh, accepts, instances, listening?.pending, listening?.loading, writeItems]);
 
+  /**
+   * Rows about what is on screen, held back for `SEEN_ON_SCREEN_MS` (§4.9).
+   * Still on screen then, a row is cleared into History without ever reaching
+   * the inbox; otherwise it is delivered as if it had just arrived. Counts
+   * leave held rows out so the bell does not blink for one second.
+   */
+  const held = useRef<Map<string, NotificationView>>(new Map());
+
   // The stream, borrowed from `FleetProvider` rather than opened again (§6).
   useEffect(() => {
     if (!fleet) return;
-    return fleet.subscribeNotifications({
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    const onScreen = (): OnScreen => ({
+      watched: watchingRef.current,
+      terminal: viewedTerminal(),
+      agent: windowPresent() ? (parseAgentHash(window.location.hash)?.name ?? null) : null,
+    });
+    const deliver = (n: NotificationView) => {
+      // The delta is read against the rows already held, before they grow:
+      // a row the last fetch already counted must not be counted again (see
+      // `streamCountDelta`). The bump is replaced by the server's number on
+      // the next count frame, and the two must not disagree in between about
+      // how much of the inbox is outstanding.
+      const delta = streamCountDelta(itemsRef.current, n);
+      writeItems((prev) => (prev.some((p) => p.id === n.id) ? prev : [n, ...prev]));
+      if (delta.unread) setUnread((u) => u + delta.unread);
+      if (delta.needs_action) setNeedsAction((c) => c + delta.needs_action);
+      // `terminal_alerts` off means nothing is raised. Core already writes no
+      // terminal row then; this holds the line for one written in the instant
+      // before the switch, which would otherwise toast after it.
+      if (isTerminalKind(n.kind) && settingsRef.current?.terminal_alerts === false) return;
+      const toasts = shouldToast(
+        n,
+        prefsRef.current,
+        prefsRef.current.quiet,
+        new Date(),
+        watchingRef.current,
+        viewedTerminal(),
+      );
+      if (toasts) pushToast(n);
+      if (isTerminalKind(n.kind)) noteTerminalRow(n, toasts);
+      maybeDesktop(n);
+    };
+    const heldWeight = () => {
+      const now = Date.now();
+      let unread = 0;
+      let needs = 0;
+      for (const n of held.current.values()) {
+        const w = countWeight(n, now);
+        unread += w.unread;
+        needs += w.needs;
+      }
+      return { unread, needs };
+    };
+    const stop = fleet.subscribeNotifications({
       onNotification: (n) => {
         if (!accepts(n)) return;
-        // The delta is read against the rows already held, before they grow:
-        // a row the last fetch already counted must not be counted again (see
-        // `streamCountDelta`). The bump is replaced by the server's number on
-        // the next count frame, and the two must not disagree in between about
-        // how much of the inbox is outstanding.
-        const delta = streamCountDelta(itemsRef.current, n);
-        writeItems((prev) => (prev.some((p) => p.id === n.id) ? prev : [n, ...prev]));
-        if (delta.unread) setUnread((u) => u + delta.unread);
-        if (delta.needs_action) setNeedsAction((c) => c + delta.needs_action);
-        // `terminal_alerts` off means nothing is raised. Core already writes no
-        // terminal row then; this holds the line for one written in the instant
-        // before the switch, which would otherwise toast after it.
-        if (isTerminalKind(n.kind) && settingsRef.current?.terminal_alerts === false) return;
-        const toasts = shouldToast(
-          n,
-          prefsRef.current,
-          prefsRef.current.quiet,
-          new Date(),
-          watchingRef.current,
-          viewedTerminal(),
-        );
-        if (toasts) pushToast(n);
-        if (isTerminalKind(n.kind)) noteTerminalRow(n, toasts);
-        maybeDesktop(n);
+        if (n.read_at || n.cleared_at || !isOnScreen(n, onScreen())) {
+          deliver(n);
+          return;
+        }
+        held.current.set(n.id, n);
+        const timer = setTimeout(() => {
+          timers.delete(timer);
+          held.current.delete(n.id);
+          if (!isOnScreen(n, onScreen())) {
+            deliver(n);
+            return;
+          }
+          // Seen where it happened: History, not the inbox. A failed clear
+          // leaves the row where the next read finds it, unread.
+          void (api.clearNotifications ?? clearNotifications)({ ids: [n.id] }).then(
+            () => refresh(),
+            () => refresh(),
+          );
+        }, SEEN_ON_SCREEN_MS);
+        timers.add(timer);
       },
       onCounts: (counts) => {
         if (listeningRef.current?.pending.length || listeningRef.current?.loading) return;
-        setUnread(counts.unread);
-        setNeedsAction(counts.needs_action);
+        const w = heldWeight();
+        setUnread(Math.max(0, counts.unread - w.unread));
+        setNeedsAction(Math.max(0, counts.needs_action - w.needs));
       },
     });
-  }, [fleet, pushToast, maybeDesktop, accepts, writeItems, noteTerminalRow]);
+    return () => {
+      for (const timer of timers) clearTimeout(timer);
+      held.current.clear();
+      stop();
+    };
+  }, [fleet, api, refresh, pushToast, maybeDesktop, accepts, writeItems, noteTerminalRow]);
 
   const writeMute = useCallback(
     async (input: MuteTarget, clear: boolean) => {

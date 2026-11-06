@@ -257,7 +257,10 @@ async function collect(frames: AsyncIterable<ChatFrame>): Promise<ChatFrame[]> {
   return out;
 }
 
-describe("chat.message: a reply nobody here asked for", () => {
+/** The box says the bot is waiting on a person: the one movement that still raises a row. */
+const WAITING = { needs_action: true } as const;
+
+describe("chat.message: a bot waiting on you, and a reply that is not", () => {
   test("the first sighting of a bot is silent", () => {
     const store = new MemoryNotificationStore();
     observeChatActivity(depsFor(store), [{ instance: "atlas", bot: "default", last_message_at: AT }]);
@@ -268,14 +271,27 @@ describe("chat.message: a reply nobody here asked for", () => {
     expect(store.seenStatus(FLEET, chatSeenSubject("atlas", "default"))).toBe(AT);
   });
 
-  test("a transcript that has moved on since raises exactly one row", () => {
+  test("a plain reply raises no row, but still moves the watermark", () => {
     const store = new MemoryNotificationStore();
     const deps = depsFor(store);
     observeChatActivity(deps, [{ instance: "atlas", bot: "default", last_message_at: AT }]);
     observeChatActivity(deps, [{ instance: "atlas", bot: "default", last_message_at: LATER }]);
+    expect(rows(store)).toHaveLength(0);
+    expect(store.seenStatus(FLEET, chatSeenSubject("atlas", "default"))).toBe(LATER);
+  });
+
+  test("a bot waiting on you raises exactly one needs_action row", () => {
+    const store = new MemoryNotificationStore();
+    const deps = depsFor(store);
+    observeChatActivity(deps, [{ instance: "atlas", bot: "default", last_message_at: AT }]);
+    observeChatActivity(deps, [
+      { instance: "atlas", bot: "default", last_message_at: LATER, ...WAITING },
+    ]);
     const found = rows(store);
     expect(found).toHaveLength(1);
     expect(found[0]?.kind).toBe("chat.message");
+    expect(found[0]?.class).toBe("needs_action");
+    expect(found[0]?.title).toBe("default on atlas is waiting on you");
     expect(found[0]?.source).toBe("chat");
     expect(found[0]?.agent).toBe("atlas");
     expect(found[0]?.key).toBe(`${CHAT_MESSAGE_PREFIX}${FLEET}:atlas/default:${LATER}`);
@@ -285,8 +301,12 @@ describe("chat.message: a reply nobody here asked for", () => {
     const store = new MemoryNotificationStore();
     const deps = depsFor(store);
     observeChatActivity(deps, [{ instance: "atlas", bot: "default", last_message_at: AT }]);
-    observeChatActivity(deps, [{ instance: "atlas", bot: "default", last_message_at: LATER }]);
-    observeChatActivity(deps, [{ instance: "atlas", bot: "default", last_message_at: LATER }]);
+    observeChatActivity(deps, [
+      { instance: "atlas", bot: "default", last_message_at: LATER, ...WAITING },
+    ]);
+    observeChatActivity(deps, [
+      { instance: "atlas", bot: "default", last_message_at: LATER, ...WAITING },
+    ]);
     expect(rows(store)).toHaveLength(1);
   });
 
@@ -308,7 +328,14 @@ describe("chat.message: a reply nobody here asked for", () => {
     };
     let payload: unknown = { sessions: [] };
     const chat = harness(
-      { swarm: (box) => Promise.resolve(mapSwarm(box, named, null, null, payload)) },
+      {
+        // The real mapper never reports a waiting bot; the box's word for it is added here.
+        swarm: (box) =>
+          Promise.resolve(mapSwarm(box, named, null, null, payload)).then((m) => ({
+            ...m,
+            bots: m.bots.map((b) => ({ ...b, ...WAITING })),
+          })),
+      },
       store,
     );
     await chat.swarms({ instance: "atlas" });
@@ -327,8 +354,10 @@ describe("chat.message: a reply nobody here asked for", () => {
     const store = new MemoryNotificationStore();
     const deps = depsFor(store);
     observeChatActivity(deps, [{ instance: "atlas", bot: "researcher", last_message_at: AT }]);
-    observeChatActivity(deps, [{ instance: "atlas", bot: "researcher", last_message_at: LATER }]);
-    expect(rows(store)[0]?.title).toBe("researcher on atlas has a new message");
+    observeChatActivity(deps, [
+      { instance: "atlas", bot: "researcher", last_message_at: LATER, ...WAITING },
+    ]);
+    expect(rows(store)[0]?.title).toBe("researcher on atlas is waiting on you");
   });
 
   test("one bot's failed insert neither silences the next bot nor loses its own", () => {
@@ -341,7 +370,12 @@ describe("chat.message: a reply nobody here asked for", () => {
     const deps = depsFor(store);
     const names = ["one", "two", "three"];
     const first = names.map((name) => ({ instance: "atlas", bot: name, last_message_at: AT }));
-    const second = names.map((name) => ({ instance: "atlas", bot: name, last_message_at: LATER }));
+    const second = names.map((name) => ({
+      instance: "atlas",
+      bot: name,
+      last_message_at: LATER,
+      ...WAITING,
+    }));
     observeChatActivity(deps, first);
 
     const insert = store.insert.bind(store);
@@ -383,8 +417,8 @@ describe("chat.message: a reply nobody here asked for", () => {
     ];
     observeChatActivity(deps, first);
     observeChatActivity(deps, [
-      { instance: "atlas", bot: "default", last_message_at: LATER },
-      { instance: "atlas", bot: "researcher", last_message_at: AT },
+      { instance: "atlas", bot: "default", last_message_at: LATER, ...WAITING },
+      { instance: "atlas", bot: "researcher", last_message_at: AT, ...WAITING },
     ]);
     const found = rows(store);
     expect(found).toHaveLength(1);
@@ -405,7 +439,9 @@ describe("chat.message: a reply nobody here asked for", () => {
     const store = new MemoryNotificationStore();
     const deps = depsFor(store);
     observeChatActivity(deps, [{ instance: "atlas", bot: "default", last_message_at: AT }]);
-    observeChatActivity(deps, [{ instance: "atlas", bot: "default", last_message_at: LATER }]);
+    observeChatActivity(deps, [
+      { instance: "atlas", bot: "default", last_message_at: LATER, ...WAITING },
+    ]);
     expect(rows(store)[0]?.actions).toContainEqual({
       label: "Open chat",
       target: "chat",
@@ -418,13 +454,13 @@ describe("chat.message: a reply nobody here asked for", () => {
     const deps = depsFor(store);
     observeChatActivity(deps, [{ instance: "atlas", bot: "default", last_message_at: AT }]);
     observeChatActivity(deps, [
-      { instance: "atlas", bot: "default", last_message_at: LATER, title: "Bot Chat" },
+      { instance: "atlas", bot: "default", last_message_at: LATER, title: "Bot Chat", ...WAITING },
     ]);
     const row = rows(store)[0];
     // Title and detail are built from the bot's identity and the box's own
     // label for it. There is no path from a message body to either, and this
     // asserts the shape rather than the absence of one example.
-    expect(row?.title).toBe("Bot Chat on atlas has a new message");
+    expect(row?.title).toBe("Bot Chat on atlas is waiting on you");
     // The profile behind the display name, not the display name again.
     expect(row?.detail).toBe("default");
   });
@@ -450,8 +486,12 @@ describe("chat.message: a reply nobody here asked for", () => {
     const deps = depsFor(store);
     observeChatActivity(deps, [{ instance: "atlas", bot: "default", last_message_at: AT }]);
     expect(rows(store)).toHaveLength(0);
-    observeChatActivity(deps, [{ instance: "atlas", bot: "default", last_message_at: LATER }]);
-    observeChatActivity(deps, [{ instance: "atlas", bot: "default", last_message_at: LATER }]);
+    observeChatActivity(deps, [
+      { instance: "atlas", bot: "default", last_message_at: LATER, ...WAITING },
+    ]);
+    observeChatActivity(deps, [
+      { instance: "atlas", bot: "default", last_message_at: LATER, ...WAITING },
+    ]);
     expect(rows(store)).toHaveLength(1);
     db.close();
   });
@@ -486,7 +526,7 @@ describe("chat.message through the real roster mapper", () => {
     expect(mapped.bots.some((b) => b.last_message_at != null)).toBe(true);
   });
 
-  test("a later session timestamp, through the mapper, raises exactly one row", async () => {
+  test("a later session timestamp, through the mapper, moves the watermark and raises no row", async () => {
     const store = new MemoryNotificationStore();
     /**
      * Two readings of the same box: the recorded payload, and the same payload
@@ -508,16 +548,18 @@ describe("chat.message through the real roster mapper", () => {
 
     await chat.swarms({ instance: "atlas" });
     expect(rows(store)).toHaveLength(0);
+    const before = store.seenStatus(FLEET, chatSeenSubject("atlas", "default"));
+    expect(before).not.toBeNull();
 
     payload = moved;
     await chat.swarms({ instance: "atlas" });
-    const found = rows(store);
-    expect(found).toHaveLength(1);
-    expect(found[0]?.kind).toBe("chat.message");
-    expect(found[0]?.ref).toBe("atlas/default");
+    // The mapper never reports a waiting bot, so a reply is the rail's news, not the inbox's.
+    expect(rows(store)).toHaveLength(0);
+    const after = store.seenStatus(FLEET, chatSeenSubject("atlas", "default"));
+    expect(Date.parse(after ?? "")).toBe(Date.parse(before ?? "") + 1800 * 1000);
   });
 
-  test("a bot first seen with nothing said still reports its first message", async () => {
+  test("a bot first seen with nothing said still registers its first message", async () => {
     // The case the whole feature is for, and the one a null watermark swallows:
     // a bot created five minutes ago, whose first message is the first thing it
     // has ever done.
@@ -527,10 +569,14 @@ describe("chat.message through the real roster mapper", () => {
 
     await chat.swarms({ instance: "atlas" });
     expect(rows(store)).toHaveLength(0);
+    const silent = store.seenStatus(FLEET, chatSeenSubject("atlas", "default"));
 
     payload = SESSION_LIST_POPULATED;
     await chat.swarms({ instance: "atlas" });
-    expect(rows(store).length).toBeGreaterThan(0);
+    // Moved off the silent marker onto a real timestamp: the first message was a transition.
+    const after = store.seenStatus(FLEET, chatSeenSubject("atlas", "default"));
+    expect(after).not.toBe(silent);
+    expect(Number.isNaN(Date.parse(after ?? ""))).toBe(false);
   });
 });
 
@@ -542,7 +588,9 @@ describe("chat.message through chat.swarms", () => {
       {
         swarm: (box) =>
           Promise.resolve(
-            swarm(box.instance, { bots: [bot({ instance: box.instance, last_message_at: at })] }),
+            swarm(box.instance, {
+              bots: [bot({ instance: box.instance, last_message_at: at, ...WAITING })],
+            }),
           ),
       },
       store,
@@ -595,7 +643,9 @@ describe("chat.message through chat.swarms", () => {
     // A message that arrives *after* the turn is still news.
     box.at = "2026-09-17T11:00:00.000Z";
     await chat.swarms({ instance: "atlas" });
-    expect(rows(store).map((r) => r.kind)).toEqual(["chat.message"]);
+    expect(store.seenStatus(FLEET, chatSeenSubject("atlas", "default"))).toBe(
+      "2026-09-17T11:00:00.000Z",
+    );
   });
 
   test("a caller that stops at `done` has still advanced the watermark", async () => {
@@ -962,7 +1012,9 @@ describe("the watermark is the box's clock, never the laptop's", () => {
 
     box.at = "2026-09-17T10:20:00.000Z";
     await chat.swarms({ instance: "atlas" });
-    expect(rows(store).map((r) => r.kind)).toEqual(["chat.message"]);
+    expect(store.seenStatus(FLEET, chatSeenSubject("atlas", "default"))).toBe(
+      "2026-09-17T10:20:00.000Z",
+    );
   });
 
   test("a box running behind the laptop: a message during the turn is not swallowed", async () => {
@@ -985,7 +1037,9 @@ describe("the watermark is the box's clock, never the laptop's", () => {
     // Somebody else says something a minute later, on the box's clock.
     box.at = "2026-09-17T09:06:00.000Z";
     await chat.swarms({ instance: "atlas" });
-    expect(rows(store).map((r) => r.kind)).toEqual(["chat.message"]);
+    expect(store.seenStatus(FLEET, chatSeenSubject("atlas", "default"))).toBe(
+      "2026-09-17T09:06:00.000Z",
+    );
   });
 
   test("a coordinate belonging to another session does not advance anything", async () => {
@@ -1088,7 +1142,9 @@ describe("the watermark is the box's clock, never the laptop's", () => {
 
     clock = new Date(Date.parse(AT) + CHAT_FENCE_TTL_MS + 1000).toISOString();
     await chat.swarms({ instance: "atlas" });
-    expect(rows(store).map((r) => r.kind)).toEqual(["chat.message"]);
+    expect(store.seenStatus(FLEET, chatSeenSubject("atlas", "default"))).toBe(
+      "2026-09-17T10:15:00.000Z",
+    );
   });
 
   test("a turn one process is taking defers the other process's roster read", async () => {
@@ -1158,7 +1214,9 @@ describe("the watermark is the box's clock, never the laptop's", () => {
     // A message that arrives after it is.
     box.at = "2026-09-17T11:00:00.000Z";
     await polling.swarms({ instance: "atlas" });
-    expect(rows(store).map((r) => r.kind)).toEqual(["chat.message"]);
+    expect(store.seenStatus(FLEET, chatSeenSubject("atlas", "default"))).toBe(
+      "2026-09-17T11:00:00.000Z",
+    );
     db.close();
   });
 });
@@ -1416,7 +1474,12 @@ describe("chat.event: a roster movement is classified by one history read", () =
     return row(id, at, { role: "system", blocks: [processEvent(over)] });
   }
 
-  /** A roster that reports `state.at`, a history that answers `state.transcript`, and a call log. */
+  /**
+   * A roster that reports `state.at`, a history that answers `state.transcript`, and a call log.
+   *
+   * The bot is waiting on a person, because the classifier's `quiet` verdict only
+   * decides anything for such a bot: a plain reply raises no generic row either way.
+   */
   function classifying(state: { at: string; transcript: ChatMessage[] | (() => ChatMessage[]) }): {
     client: Partial<HermesChatClient>;
     reads: number[];
@@ -1427,7 +1490,9 @@ describe("chat.event: a roster movement is classified by one history read", () =
       client: {
         swarm: (box) =>
           Promise.resolve(
-            swarm(box.instance, { bots: [bot({ instance: box.instance, last_message_at: state.at })] }),
+            swarm(box.instance, {
+              bots: [bot({ instance: box.instance, last_message_at: state.at, ...WAITING })],
+            }),
           ),
         history: (_box, _bot, opts) => {
           reads.push(opts?.limit ?? -1);

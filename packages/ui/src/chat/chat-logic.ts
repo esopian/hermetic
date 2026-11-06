@@ -801,14 +801,6 @@ export function railUnread(bot: { unread: number }, extra = 0): number {
 /** Looks up `extra` for one bot. Absent (the default) means "roster only". */
 export type RailUnreadLookup = (instance: string, bot: string) => number;
 
-/** What the `.ch-unread` pill says: `!` when blocked, a count when merely unread. */
-export function unreadBadge(bot: { unread: number; needs_action: boolean }, extra = 0): string | null {
-  if (bot.needs_action) return "!";
-  const unread = railUnread(bot, extra);
-  if (unread > 0) return String(unread);
-  return null;
-}
-
 /**
  * How many characters of a reply the rail shows, and the cut upstream makes.
  *

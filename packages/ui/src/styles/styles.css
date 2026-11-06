@@ -5501,11 +5501,10 @@ button:focus-visible,
   border-color: var(--fg);
   color: var(--fg);
 }
-.nt-bell .count.sub {
-  background: transparent;
-  color: var(--fg3);
+.nt-bell .count.dot {
+  width: 8px;
+  height: 8px;
   padding: 0;
-  font-weight: 700;
 }
 .nt-bell[aria-expanded="true"] {
   background: var(--bg2);

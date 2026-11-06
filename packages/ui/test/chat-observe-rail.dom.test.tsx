@@ -355,12 +355,13 @@ describe("a message that arrives before the transcript it belongs to", () => {
 
 /* ── the rail, ahead of the roster (Bug C) ───────────────────────────────── */
 
-/** What the rail's badge says for one bot. `null` is "no badge", not a failure. */
+/** The rail's mark for one bot: `Unread`, `!`, or `null` for no mark. */
 function railBadge(name: string): string | null {
   const row = [...document.querySelectorAll<HTMLElement>(".ch-conv")].find(
     (button) => button.querySelector(".ch-conv-name b")?.textContent === name,
   );
-  return row?.querySelector(".ch-unread")?.textContent ?? null;
+  const mark = row?.querySelector(".ch-unread");
+  return mark ? (mark.getAttribute("aria-label") ?? mark.textContent) : null;
 }
 
 describe("the rail moves on the stream, not on the roster's tick", () => {
@@ -381,24 +382,9 @@ describe("the rail moves on the stream, not on the roster's tick", () => {
     );
 
     // The whole point: no roster read happened, and the badge is already up.
-    await waitFor(() => expect(railBadge("beta")).toBe("1"));
+    await waitFor(() => expect(railBadge("beta")).toBe("Unread"));
     expect(h.calls.swarms).toBe(reads);
     expect(mounted.held.store?.observation.state).toBe("live");
-  });
-
-  test("a second message for the same bot counts twice, a replay counts once", async () => {
-    const h = harness();
-    h.swarms = [swarmWith("atlas", ["atlas", "beta"])];
-    await mount(h);
-    const beta = { instance: "atlas", bot: "beta", session: "s-beta" };
-
-    await deliver(h, arrivalFor(beta, messageOf({ id: "beta-1", session: "s-beta" })), beta);
-    await deliver(h, arrivalFor(beta, messageOf({ id: "beta-2", session: "s-beta" })), beta);
-    await waitFor(() => expect(railBadge("beta")).toBe("2"));
-
-    // The fan-in replays across a reconnect, and a replayed frame is not news.
-    await deliver(h, arrivalFor(beta, messageOf({ id: "beta-2", session: "s-beta" })), beta);
-    await waitFor(() => expect(railBadge("beta")).toBe("2"));
   });
 
   test("a message in the conversation on screen raises no badge for it", async () => {
@@ -467,7 +453,7 @@ describe("the rail moves on the stream, not on the roster's tick", () => {
       ),
       beta,
     );
-    await waitFor(() => expect(railBadge("beta")).toBe("1"));
+    await waitFor(() => expect(railBadge("beta")).toBe("Unread"));
   });
 
   test("the roster read is authoritative and the local count does not double it", async () => {
@@ -477,7 +463,7 @@ describe("the rail moves on the stream, not on the roster's tick", () => {
     const beta = { instance: "atlas", bot: "beta", session: "s-beta" };
 
     await deliver(h, arrivalFor(beta, messageOf({ id: "beta-1", session: "s-beta" })), beta);
-    await waitFor(() => expect(railBadge("beta")).toBe("1"));
+    await waitFor(() => expect(railBadge("beta")).toBe("Unread"));
 
     // The box has now counted the same message. The read that carries it was
     // decided after the bump, so the bump is spent — not added to it.
@@ -488,7 +474,7 @@ describe("the rail moves on the stream, not on the roster's tick", () => {
       await mounted.held.store?.refreshSwarms();
     });
 
-    await waitFor(() => expect(railBadge("beta")).toBe("1"));
+    await waitFor(() => expect(railBadge("beta")).toBe("Unread"));
   });
 
   test("opening a badged conversation retracts the badge this browser raised", async () => {
@@ -498,7 +484,7 @@ describe("the rail moves on the stream, not on the roster's tick", () => {
     const beta = { instance: "atlas", bot: "beta", session: "s-beta" };
 
     await deliver(h, arrivalFor(beta, messageOf({ id: "beta-1", session: "s-beta" })), beta);
-    await waitFor(() => expect(railBadge("beta")).toBe("1"));
+    await waitFor(() => expect(railBadge("beta")).toBe("Unread"));
 
     await act(async () => {
       mounted.held.store?.select("atlas", "beta");

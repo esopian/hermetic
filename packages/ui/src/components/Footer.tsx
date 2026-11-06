@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { useChatEntry } from "../chat/chat-entry-state.tsx";
+import { UnreadMark } from "../chat/components/UnreadMark.tsx";
 import { fmtClock } from "../logic/format.ts";
 import { usePageActive } from "../lib/visibility.ts";
 import { fleetTick, streamHealth, streamLabel, tickColor, volumeTick } from "../logic/loading.ts";
@@ -122,7 +123,7 @@ export function Footer({
           aria-label={entry.dock.open ? "Minimize chat dock" : "Open chat dock"}
         >
           Chat
-          {entry.dock.unread > 0 ? <strong>{entry.dock.unread} unread</strong> : null}
+          {entry.dock.unread > 0 ? <UnreadMark /> : null}
           {entry.dock.active > 0 ? (
             <>
               <i aria-hidden="true" />

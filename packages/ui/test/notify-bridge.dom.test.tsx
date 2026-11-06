@@ -124,11 +124,11 @@ function Probe() {
   );
 }
 
-async function mount(routes: FakeRoutes = {}) {
+async function mount(routes: FakeRoutes = {}, api: NotifyApi = API) {
   server = fakeServer({ "meta.get": META, "agents.list": [], ...routes });
   render(
     <FleetProvider>
-      <NotifyProvider api={API}>
+      <NotifyProvider api={api}>
         <Probe />
       </NotifyProvider>
     </FleetProvider>,
@@ -188,5 +188,54 @@ describe("desktop notifications", () => {
 
     await waitFor(() => expect(screen.getByTestId("toasts").textContent).toBe("1"));
     expect(fake.to("app.notify")).toHaveLength(1);
+  });
+});
+
+describe("a row about what is on screen never reaches the inbox", () => {
+  const hadFocus = document.hasFocus.bind(document);
+  let cleared: string[][] = [];
+  const api: NotifyApi = {
+    ...API,
+    clearNotifications: (input) => {
+      if ("ids" in input) cleared.push(input.ids);
+      return Promise.resolve({ cleared: 1 } as never);
+    },
+  };
+  beforeEach(() => {
+    cleared = [];
+    document.hasFocus = () => true;
+  });
+  afterEach(() => {
+    document.hasFocus = hadFocus;
+  });
+  const LATER = { timeout: 2500 };
+
+  test("the agent's drawer open and focused: cleared after 1 s, no toast", async () => {
+    window.location.hash = "#agent/oriole";
+    const fake = await mount({ "app.notify": { delivered: true, permission: "granted" } }, api);
+    deliver(notification());
+
+    await waitFor(() => expect(cleared).toEqual([["op-1"]]), LATER);
+    expect(screen.getByTestId("toasts").textContent).toBe("0");
+    expect(fake.to("app.notify")).toHaveLength(0);
+  });
+
+  test("looking away inside the second delivers it as usual", async () => {
+    window.location.hash = "#agent/oriole";
+    await mount({ "app.notify": { delivered: true, permission: "granted" } }, api);
+    deliver(notification());
+    window.location.hash = "";
+
+    await waitFor(() => expect(screen.getByTestId("toasts").textContent).toBe("1"), LATER);
+    expect(cleared).toEqual([]);
+  });
+
+  test("another agent's drawer is not this row's screen", async () => {
+    window.location.hash = "#agent/atlas";
+    await mount({ "app.notify": { delivered: true, permission: "granted" } }, api);
+    deliver(notification());
+
+    await waitFor(() => expect(screen.getByTestId("toasts").textContent).toBe("1"));
+    expect(cleared).toEqual([]);
   });
 });

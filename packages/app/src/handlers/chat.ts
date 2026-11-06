@@ -244,6 +244,9 @@ function startTurn(
       // `done` never rejects (`streams.ts`): a turn that dies with the socket,
       // or with the box, ends the stream rather than the process.
     }
+    // A failed turn wrote a `chat.error` row; the page needs it while the
+    // operator is still in the thread (§4.9, the 1 s on-screen check).
+    void ctx.poller()?.flushNotifications();
   })();
   const stream_id = ctx.streams.open({ close: () => controller.abort(), done });
   // A turn that ran out has nothing left to close; forgetting it here is what

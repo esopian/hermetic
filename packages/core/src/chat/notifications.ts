@@ -886,8 +886,14 @@ export function observeChatActivity(deps: NotificationDeps, bots: readonly ChatA
       if (move.kind === "record") deps.store.setSeenStatus(fleet, subject, move.value);
       if (move.kind !== "moved") continue;
       const at = move.at;
-      if (bot.quiet === true) {
-        // Every new row was a background-process event, already classified.
+      /**
+       * A reply on its own is not news worth a row: the rail marks the thread
+       * and the inbox keeps only what wants the operator. So the generic row is
+       * raised only when the box says the bot is waiting on a person; anything
+       * else (including a `quiet` window of background events, already raised
+       * as their own rows) just advances the watermark.
+       */
+      if (bot.quiet === true || bot.needs_action !== true) {
         deps.store.setSeenStatus(fleet, subject, at);
         continue;
       }
@@ -897,19 +903,13 @@ export function observeChatActivity(deps: NotificationDeps, bots: readonly ChatA
       deps.store.insert({
         source: "chat",
         kind: "chat.message",
-        /**
-         * `needs_action` when the box says the bot is waiting on a person, so a
-         * question asked by a cron run reaches the gold badge rather than
-         * sitting in the same colour as small talk. Everything else is `info`:
-         * a reply is not a problem, and `warn` would put a colour on a
-         * conversation going normally.
-         */
-        class: bot.needs_action === true ? "needs_action" : "info",
+        // Only a bot waiting on a person reaches here (above).
+        class: "needs_action",
         // The display name when the roster gave one: `default` is the profile
         // that is `$HERMES_HOME`, and an inbox row about "default" names nothing
         // the operator recognises. The instance stays either way — one fleet has
         // many boxes and each box has a bot called `default`.
-        title: `${bot.title ?? bot.bot} on ${bot.instance} has a new message`,
+        title: `${bot.title ?? bot.bot} on ${bot.instance} is waiting on you`,
         /**
          * The profile behind the display name, and only when the two differ —
          * repeating the title under itself says nothing. Still not a word of

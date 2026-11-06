@@ -252,7 +252,7 @@ describe("the local database", () => {
       .query(`SELECT version FROM schema_migrations ORDER BY version`)
       .all() as Array<{ version: number }>;
     expect(applied.map((r) => r.version)).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
     ]);
 
     const tables = (
@@ -610,6 +610,7 @@ describe("the migration ledger", () => {
     "mobile-devices",
     "mobile-devices-fleet",
     "mobile-tables-dropped",
+    "chat-message-rows-cleared",
   ];
 
   test("a fresh home gets every table, and a named ledger row for each migration", () => {
@@ -618,7 +619,7 @@ describe("the migration ledger", () => {
     const rows = ledger(local.db);
     expect(rows.map((r) => r.name)).toEqual(NAMES);
     expect(rows.map((r) => r.version)).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
     ]);
 
     const tables = tablesIn(local.db);
@@ -657,6 +658,41 @@ describe("the migration ledger", () => {
     expect(tables).not.toContain("mobile_devices");
     expect(tables).not.toContain("mobile_pair_codes");
     expect(ledger(local.db).map((r) => r.name)).toContain("mobile-tables-dropped");
+    local.close();
+  });
+
+  test("per-message chat rows move to History, read; event and waiting rows stay", () => {
+    const local = openLocalDb({ home });
+    const insert = (id: string, key: string, cls: string) =>
+      local.db.run(
+        `INSERT INTO notifications (id, at, source, kind, class, title, key)
+         VALUES (?, '2026-09-17T09:00:00.000Z', 'chat', 'chat.message', ?, 't', ?)`,
+        [id, cls, key],
+      );
+    insert("plain", "chat.message:fxtr0001:atlas/default:2026-09-17T09:00:00.000Z", "info");
+    insert("event", "chat.event:fxtr0001:atlas/default:proc_a1", "bad");
+    insert("waiting", "chat.message:fxtr0001:atlas/coder:2026-09-17T09:00:00.000Z", "needs_action");
+    local.db.run(`DELETE FROM schema_migrations WHERE name = 'chat-message-rows-cleared'`);
+
+    migrate(local.db);
+    const state = () =>
+      local.db.query(`SELECT id, read_at, cleared_at FROM notifications ORDER BY id`).all() as Array<{
+        id: string;
+        read_at: string | null;
+        cleared_at: string | null;
+      }>;
+    const after = state();
+    const plain = after.find((r) => r.id === "plain");
+    expect(plain?.read_at).not.toBeNull();
+    expect(plain?.cleared_at).not.toBeNull();
+    for (const id of ["event", "waiting"]) {
+      expect(after.find((r) => r.id === id)).toEqual({ id, read_at: null, cleared_at: null });
+    }
+
+    // A re-run keeps the stamps it wrote.
+    local.db.run(`DELETE FROM schema_migrations WHERE name = 'chat-message-rows-cleared'`);
+    migrate(local.db);
+    expect(state()).toEqual(after);
     local.close();
   });
 
