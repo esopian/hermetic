@@ -298,10 +298,10 @@ export function chatThreadOf(n: {
  *
  * Two things this rule deliberately does **not** do.
  *
- * It does not suppress the inbox row, only the interruption. The record that a
- * cron job spoke at 03:00 is worth keeping whether or not somebody saw it live,
- * and `read_at` — the operator's own acknowledgement — is the field that says
- * they did.
+ * It does not suppress the inbox row on its own, only the interruption. The
+ * row is kept out of the inbox by `isOnScreen` and the one-second hold in
+ * `notify-state.tsx`, which clears it into History if the thread is still on
+ * screen then.
  *
  * It does not live in core. Which thread a browser is showing, and whether that
  * browser has focus, are facts no process on the other side of the HTTP
@@ -319,6 +319,40 @@ export function isWatchingThread(
   const thread = chatThreadOf(n);
   if (thread === null) return false;
   return thread.instance === watched.instance && thread.bot === watched.bot;
+}
+
+/** How long a row about what is on screen waits before it counts as seen. */
+export const SEEN_ON_SCREEN_MS = 1000;
+
+/**
+ * What the operator has in front of them right now, each part `null` when
+ * nothing of that kind is: the focused chat threads, the terminal session on
+ * screen, and the agent whose drawer is open in a focused window.
+ */
+export interface OnScreen {
+  watched: WatchedThreads;
+  terminal: string | null;
+  agent: string | null;
+}
+
+/**
+ * Whether a row is about something already on the operator's screen (§4.9:
+ * the inbox is for what happened while nobody was looking). The page holds
+ * such a row for `SEEN_ON_SCREEN_MS`, and if it is still on screen then, clears
+ * it into History rather than letting it reach the inbox. Chat rows match the
+ * focused thread, terminal rows the session on screen, and operation and health
+ * rows the agent whose drawer is open. Advisories never match: the banner that
+ * shows one is not the fix it asks for.
+ */
+export function isOnScreen(
+  n: { kind: string; source: string; ref?: string | null; agent?: string | null },
+  view: OnScreen,
+): boolean {
+  if (isWatchingThread(n, view.watched)) return true;
+  if (isWatchingTerminalSession(n, view.terminal)) return true;
+  return (
+    view.agent !== null && n.agent === view.agent && (n.source === "operation" || n.source === "agent")
+  );
 }
 
 /* ── toasts ──────────────────────────────────────────────────────────────── */

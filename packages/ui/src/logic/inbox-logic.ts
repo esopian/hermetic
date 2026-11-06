@@ -118,18 +118,14 @@ export function centerTabCounts(
 /* ── the bell ────────────────────────────────────────────────────────────── */
 
 /**
- * What the bell draws: the gold needs-you count with a dim `+N` for the other
- * unread rows, or the orange unread count alone. Gold still outranks orange —
- * the `+N` is not a second colour, it is the same count said quieter.
+ * What the bell's dot says: gold when something needs you, orange when
+ * something is merely unread, nothing otherwise. Gold outranks orange. A tone,
+ * never a count: that something is waiting is the news, not how much.
  */
-export function bellParts(
-  unread: number,
-  needsAction: number,
-): { tone: "quiet" | "unread" | "needs_action"; main: number; more: number } {
-  if (needsAction > 0)
-    return { tone: "needs_action", main: needsAction, more: Math.max(0, unread - needsAction) };
-  if (unread > 0) return { tone: "unread", main: unread, more: 0 };
-  return { tone: "quiet", main: 0, more: 0 };
+export function bellTone(unread: number, needsAction: number): "quiet" | "unread" | "needs_action" {
+  if (needsAction > 0) return "needs_action";
+  if (unread > 0) return "unread";
+  return "quiet";
 }
 
 /* ── sections ────────────────────────────────────────────────────────────── */

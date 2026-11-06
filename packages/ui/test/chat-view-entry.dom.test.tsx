@@ -534,22 +534,24 @@ describe("chat dock panels and activity", () => {
     await waitFor(() => expect(container.querySelector(".ch-dock-pane")).not.toBeNull());
   });
 
-  test("unread count stays legible on an open tab and the minimized footer", async () => {
+  test("an unread mark shows on an open tab and the minimized footer", async () => {
     const h = harness({
       swarms: [swarmOf("atlas", { bots: [botOf("atlas", "atlas", { unread: 2 })] })],
     });
     const { container } = mountEntry(h);
     await userEvent.click(screen.getByText("Open explicit"));
     await waitFor(() =>
-      expect(within(screen.getByRole("tab", { name: /atlas/i })).getByText("2")).toBeDefined(),
+      expect(
+        within(screen.getByRole("tab", { name: /atlas/i })).getByLabelText("Unread"),
+      ).toBeDefined(),
     );
-    expect(container.querySelector(".ch-footer-chat")?.textContent).toContain("2 unread");
+    expect(container.querySelector(".ch-footer-chat .ch-unread.dot")).not.toBeNull();
 
     await userEvent.click(
       within(screen.getByTestId("chat-dock")).getByRole("button", { name: "Minimize chat dock" }),
     );
     expect(
-      within(screen.getByRole("button", { name: "Open chat dock" })).getByText("2 unread"),
+      within(screen.getByRole("button", { name: "Open chat dock" })).getByLabelText("Unread"),
     ).toBeDefined();
   });
 
@@ -606,7 +608,7 @@ describe("chat dock panels and activity", () => {
     );
 
     const rail = await screen.findByLabelText("Chat activity");
-    expect(within(rail).getByText("2")).toBeDefined();
+    expect(within(rail).getByLabelText("Unread")).toBeDefined();
     await userEvent.click(within(rail).getByRole("button", { name: /granite/i }));
     await waitFor(() =>
       expect(container.querySelector(".ch-dock-pane")?.getAttribute("aria-label")).toContain("granite"),

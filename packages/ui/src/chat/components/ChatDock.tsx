@@ -10,6 +10,7 @@ import { botLabel } from "../chat-presentation.ts";
 import { useChat } from "../chat-state.tsx";
 import type { ChatSelection } from "../chat-state.tsx";
 import { Face } from "./Face.tsx";
+import { UnreadMark } from "./UnreadMark.tsx";
 
 export interface DockPicker {
   mode: "panel" | "tab";
@@ -178,7 +179,7 @@ export function ChatDock({
                         onClick={() => onSelectTab(panel.id, target)}
                       >
                         <span className="ch-dock-tab-label">{labelOf(target)}</span>
-                        {unread > 0 ? <span className="ch-unread">{unread}</span> : null}
+                        {unread > 0 ? <UnreadMark /> : null}
                         {activity !== "idle" ? (
                           <i className="ch-footer-running" role="img" aria-label="Turn in progress" />
                         ) : null}

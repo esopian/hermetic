@@ -28,19 +28,13 @@ import { RedactedText } from "./RedactedText.tsx";
 import { SILENT_LABEL, isSilentPreview } from "../chat-silence.ts";
 import { useState } from "react";
 import type { BotView, SessionView, SwarmView } from "../../api/index.ts";
-import {
-  railBuckets,
-  railFooter,
-  railTime,
-  railUnread,
-  unreadBadge,
-  warmSlots,
-} from "../chat-logic.ts";
+import { railBuckets, railFooter, railTime, railUnread, warmSlots } from "../chat-logic.ts";
 import type { RailBucket, RailFilter, RailScope } from "../chat-logic.ts";
 import { useUnreadChatByConversation } from "../../state/notify-state.tsx";
 import type { ChatSelection } from "../chat-state.tsx";
 import type { AvatarStatus } from "./avatar/Avatar.tsx";
 import { Face } from "./Face.tsx";
+import { UnreadMark } from "./UnreadMark.tsx";
 
 const FILTERS: { id: RailFilter; label: string }[] = [
   { id: "all", label: "All" },
@@ -72,13 +66,13 @@ function Conv({
   now: number;
   onSelect: () => void;
 }) {
-  const badge = unreadBadge(bot, inboxUnread);
+  const unread = railUnread(bot, inboxUnread) > 0;
   return (
     <button
       type="button"
       className={`ch-conv ${nested}`}
       aria-current={current ? true : undefined}
-      data-unread={railUnread(bot, inboxUnread) > 0 || bot.needs_action ? "true" : undefined}
+      data-unread={unread || bot.needs_action ? "true" : undefined}
       onClick={onSelect}
     >
       <Face
@@ -117,9 +111,7 @@ function Conv({
       </span>
       <span className="ch-conv-right">
         <span className="ch-time">{railTime(bot.last_message_at, now)}</span>
-        {badge ? (
-          <span className={bot.needs_action ? "ch-unread needs-action" : "ch-unread"}>{badge}</span>
-        ) : null}
+        {bot.needs_action || unread ? <UnreadMark needs={bot.needs_action} /> : null}
         {bot.muted ? <span className="ch-muted-icon">⊘</span> : null}
       </span>
     </button>
@@ -371,7 +363,7 @@ export function Rail({
                             </span>
                             <span className="ch-conv-right">
                               <span className="ch-time">{railTime(s.last_message_at, now)}</span>
-                              {s.unread > 0 ? <span className="ch-unread">{s.unread}</span> : null}
+                              {s.unread > 0 ? <UnreadMark /> : null}
                             </span>
                           </button>
                         ))}

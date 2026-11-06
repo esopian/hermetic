@@ -162,6 +162,9 @@ const ops = new OpRegistry({
   pending,
   log,
   target: () => state.runTarget,
+  onSettled: () => {
+    void state.poller?.flushNotifications();
+  },
 });
 
 /**

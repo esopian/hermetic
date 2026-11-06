@@ -592,6 +592,22 @@ const MIGRATIONS: Migration[] = [
     version: 19,
     statements: ["DROP TABLE IF EXISTS mobile_devices", "DROP TABLE IF EXISTS mobile_pair_codes"],
   },
+  {
+    /**
+     * The roster read no longer raises a row per new bot message (§4.9), only
+     * one for a bot waiting on a person. The per-message rows already written
+     * move to History, read, so they stop lighting the bell; nothing is
+     * deleted, and retention ages them out. `COALESCE` keeps a re-run harmless.
+     */
+    name: "chat-message-rows-cleared",
+    version: 20,
+    statements: [
+      `UPDATE notifications
+          SET read_at    = COALESCE(read_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+              cleared_at = COALESCE(cleared_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        WHERE key LIKE 'chat.message:%' AND class != 'needs_action'`,
+    ],
+  },
 ];
 
 /**

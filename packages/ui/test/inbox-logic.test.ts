@@ -12,7 +12,7 @@ import { describe, expect, test } from "bun:test";
 import {
   affectedRows,
   applyVerb,
-  bellParts,
+  bellTone,
   buildSections,
   centerTabCounts,
   chunkIds,
@@ -105,11 +105,10 @@ describe("tabs and views", () => {
     expect(view({ q: "WOKE" })).toEqual(["woke"]);
   });
 
-  test("the bell: gold count plus a dim +N, or the orange count alone", () => {
-    expect(bellParts(7, 2)).toEqual({ tone: "needs_action", main: 2, more: 5 });
-    expect(bellParts(1, 2)).toEqual({ tone: "needs_action", main: 2, more: 0 });
-    expect(bellParts(3, 0)).toEqual({ tone: "unread", main: 3, more: 0 });
-    expect(bellParts(0, 0).tone).toBe("quiet");
+  test("the bell is a dot: gold outranks orange, quiet when nothing waits", () => {
+    expect(bellTone(7, 2)).toBe("needs_action");
+    expect(bellTone(3, 0)).toBe("unread");
+    expect(bellTone(0, 0)).toBe("quiet");
   });
 });
 

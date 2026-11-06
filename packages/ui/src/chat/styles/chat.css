@@ -311,6 +311,16 @@
   background: var(--warn);
   color: #0e0e0d;
 }
+/* Unread is a mark, not a count. `span` lifts it over the per-context
+   `.x .ch-unread` sizing (dock tab, footer, soft skin). */
+span.ch-unread.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  min-width: 0;
+  padding: 0;
+  flex: none;
+}
 .ch-muted-icon {
   font-family: var(--mono);
   font-size: 11px;

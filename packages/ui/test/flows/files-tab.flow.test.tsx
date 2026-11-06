@@ -213,7 +213,7 @@ test("the fleet table badges corvid's one open request, and nothing on atlas", a
 test("the bell lists the request and opens corvid's Files tab", async () => {
   await open("#fleet");
   const bell = await screen.findByRole("button", { name: /^Notifications/ });
-  await waitFor(() => expect(bell.getAttribute("aria-label") ?? "").toMatch(/need you/), WAIT);
+  await waitFor(() => expect(bell.getAttribute("aria-label") ?? "").toMatch(/needs you/), WAIT);
   await userEvent.click(bell);
   const row = await waitFor(() => {
     const el = document.querySelector('.nt-freq [data-kind="file_request"]');
