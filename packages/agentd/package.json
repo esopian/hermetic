@@ -10,11 +10,11 @@
     "build": "bun build --compile --target=bun-linux-arm64 src/main.ts --outfile dist/hermeticd"
   },
   "dependencies": {
-    "@aws-sdk/client-dynamodb": "^3.1124.0",
-    "@aws-sdk/client-s3": "^3.1124.0",
-    "@aws-sdk/client-ssm": "^3.1124.0",
-    "@aws-sdk/lib-dynamodb": "^3.1124.0",
+    "@aws-sdk/client-dynamodb": "^3.1162.0",
+    "@aws-sdk/client-s3": "^3.1162.0",
+    "@aws-sdk/client-ssm": "^3.1162.0",
+    "@aws-sdk/lib-dynamodb": "^3.1162.0",
     "@hermetic/core": "workspace:*",
-    "systeminformation": "^5.33.18"
+    "systeminformation": "^5.33.19"
   }
 }
