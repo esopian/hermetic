@@ -9,6 +9,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
   NOTIFICATION_PREFS_KEY,
+  isOnScreen,
   PREF_GROUPS,
   TOAST_DWELL_MS,
   actionHash,
@@ -575,5 +576,29 @@ describe("prefs persistence", () => {
     expect(normalizePrefs(null)).toEqual(defaultPrefs());
     expect(normalizePrefs(42)).toEqual(defaultPrefs());
     expect(normalizePrefs([])).toEqual(defaultPrefs());
+  });
+});
+
+describe("isOnScreen", () => {
+  const none = { watched: null, terminal: null, agent: null };
+  const op = { kind: "operation.failed", source: "operation", agent: "atlas", ref: "op-1" };
+  test("operation and health rows match the open agent drawer, nothing else", () => {
+    expect(isOnScreen(op, { ...none, agent: "atlas" })).toBe(true);
+    expect(
+      isOnScreen({ ...op, kind: "agent.health", source: "agent" }, { ...none, agent: "atlas" }),
+    ).toBe(true);
+    expect(isOnScreen(op, { ...none, agent: "corvid" })).toBe(false);
+    expect(isOnScreen(op, none)).toBe(false);
+    const advisory = { kind: "fleet.advisory", source: "fleet", agent: "atlas" };
+    expect(isOnScreen(advisory, { ...none, agent: "atlas" })).toBe(false);
+  });
+  test("chat rows match the focused thread, terminal rows the session on screen", () => {
+    const chat = { kind: "chat.error", source: "chat", ref: "atlas/default" };
+    const thread = { instance: "atlas", bot: "default", focused: true };
+    expect(isOnScreen(chat, { ...none, watched: thread })).toBe(true);
+    expect(isOnScreen(chat, { ...none, watched: { ...thread, focused: false } })).toBe(false);
+    const term = { kind: "terminal.finished", source: "terminal", ref: "s1" };
+    expect(isOnScreen(term, { ...none, terminal: "s1" })).toBe(true);
+    expect(isOnScreen(term, { ...none, terminal: "s2" })).toBe(false);
   });
 });

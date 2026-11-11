@@ -16,6 +16,7 @@ import { activityFor } from "../chat-activity.ts";
 import type { ConversationActivity } from "../chat-activity.ts";
 import type { AvatarStatus } from "./avatar/Avatar.tsx";
 import { Face } from "./Face.tsx";
+import { UnreadMark } from "./UnreadMark.tsx";
 import { RedactedText } from "./RedactedText.tsx";
 import { SILENT_LABEL, isSilentPreview } from "../chat-silence.ts";
 import { matchesQuery } from "../conversation-search.ts";
@@ -171,11 +172,7 @@ export function BotRail({
             {progress || bot.needs_action || unread > 0 ? (
               <span className="ch-conv-flags">
                 {progress ? <RailTaskBar {...progress} /> : null}
-                {bot.needs_action || unread > 0 ? (
-                  <span className={`ch-unread${bot.needs_action ? " needs-action" : ""}`}>
-                    {bot.needs_action ? "!" : unread}
-                  </span>
-                ) : null}
+                {bot.needs_action || unread > 0 ? <UnreadMark needs={bot.needs_action} /> : null}
               </span>
             ) : null}
           </span>
@@ -337,9 +334,7 @@ export function BotRail({
                       stays on the header, so an instance you are not reading
                       can still ask for you. */}
                   {folded && (signal.needs > 0 || signal.unread > 0) ? (
-                    <span className={`ch-unread${signal.needs > 0 ? " needs-action" : ""}`}>
-                      {signal.needs > 0 ? "!" : signal.unread}
-                    </span>
+                    <UnreadMark needs={signal.needs > 0} />
                   ) : null}
                 </>
               );

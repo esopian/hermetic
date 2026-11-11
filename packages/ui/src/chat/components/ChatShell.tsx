@@ -27,6 +27,7 @@ import { ChatView } from "./ChatView.tsx";
 import { ChatDock } from "./ChatDock.tsx";
 import type { DockPicker } from "./ChatDock.tsx";
 import { Face } from "./Face.tsx";
+import { UnreadMark } from "./UnreadMark.tsx";
 import { QuickJump } from "./QuickJump.tsx";
 import { InspectorShortcut } from "./inspector/InspectEntry.tsx";
 import { jumpToMessage } from "../thread-jump.ts";
@@ -480,7 +481,7 @@ export function ChatShell({ children, enabled = true }: { children: ReactNode; e
                   className="ch-activity-item"
                   key={`${item.target.instance}/${item.target.bot}`}
                   onClick={() => open(item.target, "dock")}
-                  aria-label={`${labelOf(item.target)}, ${item.unread > 0 ? `${item.unread} unread` : item.activity}`}
+                  aria-label={`${labelOf(item.target)}, ${item.unread > 0 ? "unread" : item.activity}`}
                 >
                   <Face
                     fleetId={fleet?.meta?.config?.fleet_id ?? ""}
@@ -510,7 +511,7 @@ export function ChatShell({ children, enabled = true }: { children: ReactNode; e
                           : "Replying"}
                     </em>
                   </span>
-                  {item.unread > 0 ? <span className="ch-unread">{item.unread}</span> : null}
+                  {item.unread > 0 ? <UnreadMark /> : null}
                   {item.activity !== "idle" ? (
                     <i className="ch-footer-running" aria-hidden="true" />
                   ) : null}

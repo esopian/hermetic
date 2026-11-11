@@ -129,8 +129,8 @@ test("the rail's Unread filter keeps a bot the inbox has unread rows for", async
   // The roster says `unread: 0` for this bot; the inbox says two.
   await waitFor(() => expect(document.querySelectorAll(".ch-conv").length).toBe(1));
   expect(document.querySelector(".ch-conv")?.getAttribute("data-unread")).toBe("true");
-  // Two rows, two messages: the roster's own zero does not add to them.
-  expect(document.querySelector(".ch-unread")?.textContent).toBe("2");
+  // A mark, not a count.
+  expect(document.querySelector(".ch-unread")?.getAttribute("aria-label")).toBe("Unread");
 });
 
 test("with no inbox to read, the roster's own count is still the whole story", () => {
