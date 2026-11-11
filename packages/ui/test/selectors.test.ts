@@ -243,12 +243,23 @@ describe("triageGroups", () => {
     expect(byKey.stopped).toEqual(["stopped"]);
   });
 
+  test("a paused agent sits in the paused group, not stopped, though isOff counts it", () => {
+    const paused = agent({ name: "paused", display_status: "paused" });
+    const pausing = agent({ name: "pausing", display_status: "pausing" });
+    const stopped = agent({ name: "stopped", display_status: "stopped" });
+    const groups = triageGroups([paused, pausing, stopped], null);
+    const byKey = Object.fromEntries(groups.map((g) => [g.key, g.items.map((a) => a.name)]));
+    expect(byKey.paused).toEqual(["paused"]);
+    expect(byKey.stopped).toEqual(["stopped"]);
+    expect(byKey.progress).toEqual(["pausing"]);
+  });
+
   test("a legacy destroyed row lands in no group, stopped included (§6.7)", () => {
     const stopped = agent({ name: "stopped", display_status: "stopped" });
     const gone = agent({ name: "gone", display_status: "destroyed" });
     const groups = triageGroups([stopped, gone], null);
 
-    expect(groups.map((g) => g.key)).toEqual(["attention", "progress", "healthy", "stopped"]);
+    expect(groups.map((g) => g.key)).toEqual(["attention", "progress", "healthy", "paused", "stopped"]);
     const byKey = Object.fromEntries(groups.map((g) => [g.key, g.items.map((a) => a.name)]));
     expect(byKey.stopped).toEqual(["stopped"]);
     expect(groups.flatMap((g) => g.items.map((a) => a.name))).not.toContain("gone");
@@ -269,9 +280,9 @@ describe("triageGroups", () => {
     expect(withoutLatest.hint).not.toContain("null");
   });
 
-  test("always returns the four groups, even for an empty fleet", () => {
+  test("always returns the five groups, even for an empty fleet", () => {
     const groups = triageGroups([], null);
-    expect(groups.map((g) => g.key)).toEqual(["attention", "progress", "healthy", "stopped"]);
+    expect(groups.map((g) => g.key)).toEqual(["attention", "progress", "healthy", "paused", "stopped"]);
     for (const g of groups) expect(g.items).toEqual([]);
   });
 

@@ -29,6 +29,22 @@ const ALLOWED = new Set<string>([
   "degraded>stopping",
   "stopping>stopped",
   "stopped>bootstrapping",
+  // ready → pausing → paused → (resume) → resuming → bootstrapping
+  "ready>pausing",
+  "degraded>pausing",
+  "pausing>paused",
+  "paused>resuming",
+  "resuming>bootstrapping",
+  // a paused box booted outside resume (the EC2 console), as from stopped
+  "paused>bootstrapping",
+  // `stop` is the escape hatch for a pause stuck halting
+  "pausing>stopping",
+  "pausing>destroying",
+  "paused>destroying",
+  "resuming>destroying",
+  "pausing>error",
+  "paused>error",
+  "resuming>error",
   // any → destroying → destroyed
   "creating>destroying",
   "bootstrapping>destroying",
@@ -167,6 +183,13 @@ describe("deriveDisplayStatus", () => {
     for (const s of ["creating", "stopping", "stopped", "destroying", "destroyed", "error"] as const) {
       expect(deriveDisplayStatus(row(s, THRESHOLD * 100), NOW)).toBe(s);
       expect(deriveDisplayStatus(row(s, null), NOW)).toBe(s);
+    }
+  });
+
+  test("a paused agent stays paused however long ago it last spoke", () => {
+    for (const s of ["pausing", "paused", "resuming"] as const) {
+      expect(deriveDisplayStatus(row(s, THRESHOLD * 100, THRESHOLD * 100), NOW)).toBe(s);
+      expect(deriveDisplayStatus(row(s, null, THRESHOLD * 100), NOW)).toBe(s);
     }
   });
 

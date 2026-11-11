@@ -321,7 +321,7 @@ export function sizeGlyph(id: string): string {
  * bootstrapping → ready`, with `bootstrapping → error` on a failed stage and
  * `error → bootstrapping` on a rerun; there is no `converging` any more.
  */
-const BUSY = new Set(["creating", "bootstrapping", "stopping", "destroying"]);
+const BUSY = new Set(["creating", "bootstrapping", "stopping", "pausing", "resuming", "destroying"]);
 
 export function isBusy(a: AgentView): boolean {
   return BUSY.has(a.display_status);
@@ -335,7 +335,7 @@ export function isBusy(a: AgentView): boolean {
  * cannot open.
  */
 export function isOffStatus(status: string): boolean {
-  return status === "stopped" || status === "destroyed";
+  return status === "stopped" || status === "paused" || status === "destroyed";
 }
 
 export function isOff(a: AgentView): boolean {
@@ -364,8 +364,14 @@ export interface DrawerActions {
   reboot: boolean;
   /** `agent recreate`: a new instance from a fresh disk, same data volume. */
   rebuild: boolean;
-  /** The single power button: `start` when off, `stop` when up, none when gone. */
-  power: "start" | "stop" | null;
+  /**
+   * The single power button: `start` when stopped, `resume` when paused or
+   * resuming (core's `start` and `stop` refuse both), `stop` otherwise, none
+   * when gone.
+   */
+  power: "start" | "resume" | "stop" | null;
+  /** `agent pause`: core takes it only from a running, settled row. */
+  pause: boolean;
   destroy: boolean;
 }
 
@@ -377,6 +383,7 @@ const NO_ACTIONS: DrawerActions = {
   reboot: false,
   rebuild: false,
   power: null,
+  pause: false,
   destroy: false,
 };
 
@@ -392,7 +399,15 @@ const REBOOTABLE = new Set(["ready", "degraded", "bootstrapping", "error", "unre
 export const CONVERGEABLE: ReadonlySet<string> = new Set(["ready", "degraded", "error"]);
 
 /** Recreate needs a settled row (§6.5): mid-flight statuses have no edge to it. */
-const REBUILDABLE = new Set(["ready", "degraded", "creating", "stopped", "error", "unreachable"]);
+const REBUILDABLE = new Set([
+  "ready",
+  "degraded",
+  "creating",
+  "stopped",
+  "paused",
+  "error",
+  "unreachable",
+]);
 
 export function drawerActions(status: string): DrawerActions {
   if (status === "destroyed") return { ...NO_ACTIONS };
@@ -403,7 +418,11 @@ export function drawerActions(status: string): DrawerActions {
     rerun: true,
     reboot: REBOOTABLE.has(status),
     rebuild: REBUILDABLE.has(status),
-    power: status === "stopped" ? "start" : "stop",
+    // `resuming` re-enters resume (core takes it as a retry); `pausing` keeps
+    // Stop, core's escape hatch for a pause that hangs.
+    power:
+      status === "stopped" ? "start" : status === "paused" || status === "resuming" ? "resume" : "stop",
+    pause: status === "ready" || status === "degraded",
     destroy: true,
   };
 }
@@ -450,12 +469,14 @@ export function rebootState(
 
 /** The health-strip line for an agent with no instance answering. */
 export function offlineDetail(status: string): string {
-  return status === "destroyed" ? "offline · instance terminated" : "offline · instance stopped";
+  if (status === "destroyed") return "offline · instance terminated";
+  return status === "paused" ? "offline · paused" : "offline · instance stopped";
 }
 
 /** The same distinction, short enough for a metric tile's unit slot. */
 export function offlineUnit(status: string): string {
-  return status === "destroyed" ? "terminated" : "stopped";
+  if (status === "destroyed") return "terminated";
+  return status === "paused" ? "paused" : "stopped";
 }
 
 /**
@@ -473,7 +494,7 @@ export function statusColor(status: string): string {
   if (status === "ready") return "var(--ok)";
   if (status === "degraded") return "var(--warn)";
   if (status === "unreachable" || status === "error") return "var(--bad)";
-  if (status === "stopped" || status === "destroyed") return "var(--fg3)";
+  if (status === "stopped" || status === "paused" || status === "destroyed") return "var(--fg3)";
   return "var(--acc)";
 }
 
@@ -838,6 +859,15 @@ export function fmtDuration(ms: number): string {
 export function uptime(a: AgentView, now: number): string {
   if (isOff(a) || a.last_heartbeat === null || a.last_heartbeat === undefined) return "—";
   return fmtDuration(now - Date.parse(a.created_at));
+}
+
+/** How long a paused agent has been paused (`3h 11m`), or null for any other row. */
+export function pausedFor(
+  a: Pick<AgentView, "display_status" | "paused_at">,
+  now: number,
+): string | null {
+  if (a.display_status !== "paused" || !a.paused_at) return null;
+  return fmtDuration(Math.max(0, now - Date.parse(a.paused_at)));
 }
 
 export function heartbeatAge(a: AgentView): string {

@@ -216,6 +216,8 @@ const SURFACE: Record<PublicMethod, string> = {
   "agents.set": "agent set",
   "agents.stop": "agent stop",
   "agents.start": "agent start",
+  "agents.pause": "agent pause",
+  "agents.resume": "agent resume",
   "agents.reboot": "agent reboot",
   "agents.recreate": "agent recreate",
   "agents.destroy": "agent destroy",

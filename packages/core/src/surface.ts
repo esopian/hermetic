@@ -250,6 +250,8 @@ export const PUBLIC_METHODS = [
   "agents.set",
   "agents.stop",
   "agents.start",
+  "agents.pause",
+  "agents.resume",
   "agents.reboot",
   "agents.recreate",
   "agents.destroy",
@@ -304,6 +306,8 @@ export const STREAMING_METHODS: readonly PublicMethod[] = [
   "agents.recreate",
   "agents.stop",
   "agents.start",
+  "agents.pause",
+  "agents.resume",
   // Answering an agent's file request: one row on failure, never the bytes.
   "files.put",
 ] as const;
@@ -447,6 +451,8 @@ export const REQUEST_SCHEMAS = {
   "agents.set": SetAgentInputSchema,
   "agents.stop": AgentRefInputSchema,
   "agents.start": AgentRefInputSchema,
+  "agents.pause": AgentRefInputSchema,
+  "agents.resume": AgentRefInputSchema,
   "agents.reboot": AgentRefInputSchema,
   "agents.recreate": RecreateAgentInputSchema,
   "agents.destroy": DestroyAgentInputSchema,

@@ -20,6 +20,7 @@ const HEARTBEAT_EXPECTED: readonly AgentStatus[] = ["bootstrapping", "ready", "d
  *   error → bootstrapping         (`agent rerun`, or a recreate)
  *   ready ⇄ degraded
  *   ready → stopping → stopped → (start) → bootstrapping
+ *   ready → pausing → paused → (resume) → resuming → bootstrapping
  *   any   → destroying → (row deleted; name released, §6.7)
  *   any   → error
  *
@@ -34,11 +35,18 @@ export const TRANSITIONS: Readonly<Record<AgentStatus, readonly AgentStatus[]>> 
   // The staged bootstrap ends in `ready`, or in `error` on the first stage that
   // fails; there is no third state between them any more.
   bootstrapping: ["ready", "degraded", "destroying", "error"],
-  ready: ["degraded", "stopping", "destroying", "error"],
-  degraded: ["ready", "stopping", "destroying", "error"],
+  ready: ["degraded", "stopping", "pausing", "destroying", "error"],
+  degraded: ["ready", "stopping", "pausing", "destroying", "error"],
   stopping: ["stopped", "destroying", "error"],
   // `start` boots a fresh instance, which re-runs bootstrap.
   stopped: ["bootstrapping", "destroying", "error"],
+  // `pause` is `stop` with Hermes halted first; `stop` from `pausing` is the
+  // escape hatch for a pause stuck halting.
+  pausing: ["paused", "stopping", "destroying", "error"],
+  // `bootstrapping` without `resuming`: a box booted outside `resume` (the EC2
+  // console), as from `stopped`.
+  paused: ["resuming", "bootstrapping", "destroying", "error"],
+  resuming: ["bootstrapping", "destroying", "error"],
   destroying: ["destroyed", "error"],
   // Terminal, and legacy only: nothing writes it now (§6.7). A legacy row is
   // released — deleted — rather than moved anywhere.

@@ -8,7 +8,7 @@ import { BOOTSTRAP_UNIT } from "./bootstrap.ts";
 import { makeHeartbeat } from "./heartbeat.ts";
 import { HERMETICD_PATH } from "./stages.ts";
 import { reportBrowsers } from "./browser-health.ts";
-import { serveRpc, tailscaleWhois } from "./rpc.ts";
+import { haltHermes, serveRpc, tailscaleWhois } from "./rpc.ts";
 import { fleetViewSource, makeMobileRoutes } from "./rpc-mobile.ts";
 import { pushDeviceStore } from "./push/devices.ts";
 import { bunChatSocket } from "./push/socket.ts";
@@ -210,6 +210,7 @@ export async function serve(host: Host, deps: RunDeps = {}): Promise<void> {
         const synced = await secrets.sync();
         return { changed: synced.changed.length > 0 || synced.memoryChanged, bots: synced.bots };
       },
+      powerHalt: () => haltHermes(host),
     },
     { log },
   );

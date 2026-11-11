@@ -226,6 +226,8 @@ export const FIXTURE_CONFIG: LocalConfig = fixtureConfigFor("main");
 
 /** The fixture fleet's tailnet; Serve URLs are `https://<name>.<this>`. */
 export const FIXTURE_TAILNET = "hermetic.ts.net";
+/** The paused seed's age: 3h 11m, so the duration a head renders has hours in it. */
+const PAUSED_AGO_MS = 11_460_000;
 
 /** The CloudFormation stack id a seeded fixture fleet's foundation carries. */
 function fixtureStackId(config: LocalConfig): string {
@@ -969,7 +971,7 @@ export function seedFixtureAgents(backend: MemoryBackend, opts: FixtureSeed = {}
     const instance_id = `i-fixture${String(n).padStart(11, "0")}`;
     // No seed is destroyed: a destroy deletes the row (§6.7), so the fixture's
     // destroyed agent is a tombstone (`seedFixtureTombstones`), not a seed.
-    const running = seed.status !== "stopped";
+    const running = seed.status !== "stopped" && seed.status !== "paused";
     const spec = SIZES[seed.size];
     const config_hash = `fixture${String(n).padStart(2, "0")}`.padEnd(16, "0");
     const ssm_paths = [slot(seed.name, "ts-key")];
@@ -1186,6 +1188,7 @@ export function seedFixtureAgents(backend: MemoryBackend, opts: FixtureSeed = {}
         seed.heartbeat_age_min === null
           ? null
           : new Date(nowMs - seed.heartbeat_age_min * 60_000).toISOString(),
+      ...(seed.status === "paused" ? { paused_at: new Date(nowMs - PAUSED_AGO_MS).toISOString() } : {}),
       health: seed.health,
       metrics: {
         cpu_pct: seed.cpu,
@@ -1235,15 +1238,16 @@ export function seedFixtureAgents(backend: MemoryBackend, opts: FixtureSeed = {}
         detail,
       });
     }
-    if (seed.status === "stopped") {
+    if (seed.status === "stopped" || seed.status === "paused") {
+      const paused = seed.status === "paused";
       backend.events.push({
         name: seed.name,
-        timestamp: new Date(nowMs - 86_400_000).toISOString(),
+        timestamp: new Date(nowMs - (paused ? PAUSED_AGO_MS : 86_400_000)).toISOString(),
         actor,
-        action: "stop",
-        from_status: "stopping",
-        to_status: "stopped",
-        detail: "operator stopped the instance",
+        action: paused ? "transition" : "stop",
+        from_status: paused ? "pausing" : "stopping",
+        to_status: seed.status,
+        detail: paused ? "instance paused" : "operator stopped the instance",
       });
     }
     if (seed.status === "degraded") {

@@ -496,7 +496,9 @@ export function ChatShell({ children, enabled = true }: { children: ReactNode; e
                       status === "stopped" ||
                       status === "destroyed"
                         ? status
-                        : "pending"
+                        : status === "paused" || status === "pausing"
+                          ? "stopped"
+                          : "pending"
                     }
                   />
                   <span className="copy">

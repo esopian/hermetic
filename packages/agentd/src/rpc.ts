@@ -38,6 +38,7 @@ import type {
   HermesLogFile,
   RpcFrame,
   RpcHealth,
+  PowerHaltResult,
   RpcLogLine,
   SecretsSyncResult,
 } from "@hermetic/core/schema";
@@ -46,6 +47,7 @@ import {
   FILES_CAPABILITY,
   FILES_LIMITS,
   HERMES_DASHBOARD_UNIT,
+  HERMES_GATEWAY_UNIT,
   HERMES_HOME,
   HERMETICD_RPC_PORT,
   RPC_CONTENT_TYPE,
@@ -149,6 +151,28 @@ export interface RpcDeps {
    * which is what an older hermeticd answers too.
    */
   readonly secretsSync?: () => Promise<SecretsSyncResult>;
+  /** `POST /power/halt` (`haltHermes`). Absent, the route is a 404, as on an older hermeticd. */
+  readonly powerHalt?: () => Promise<PowerHaltResult>;
+}
+
+/** Seconds `systemctl stop` gets per unit; the laptop waits 45 s for the answer. */
+export const POWER_HALT_STOP_S = "30";
+
+/**
+ * Stop the Hermes units ahead of `agent pause`'s `StopInstances`, and report
+ * the ones that are inactive afterwards. The two stops run side by side under
+ * one bound each, so a stuck unit cannot hold the answer past the laptop's
+ * budget. The units stay enabled: the next boot starts them as usual.
+ */
+export async function haltHermes(host: Host): Promise<PowerHaltResult> {
+  const units = [HERMES_GATEWAY_UNIT, HERMES_DASHBOARD_UNIT];
+  await Promise.all(
+    units.map((u) => host.exec(["timeout", POWER_HALT_STOP_S, "systemctl", "stop", u])),
+  );
+  const active = await Promise.all(
+    units.map(async (u) => (await host.exec(["systemctl", "is-active", "--quiet", u])).code === 0),
+  );
+  return { halted: units.filter((_, i) => !active[i]) };
 }
 
 /** `POST /secrets/sync` calls one peer may make per minute before 429. */
@@ -519,6 +543,24 @@ export function makeRpcHandler(deps: RpcDeps): RpcHandler {
         const code = e instanceof AgentdError ? e.code : "unexpected error";
         say(`secrets sync for ${peerIp} failed: ${code}`);
         return refuse(500, `the secret sync failed on the box (${code})`, "INTERNAL");
+      }
+    }
+
+    if (url.pathname === RPC_PATHS.powerHalt && deps.powerHalt) {
+      if (request.method !== "POST") {
+        return refuse(405, `${request.method} ${url.pathname} is not allowed`, "UNSUPPORTED");
+      }
+      try {
+        const { halted } = await deps.powerHalt();
+        say(`power halt for ${peerIp}: ${halted.join(", ") || "nothing halted"}`);
+        const body: PowerHaltResult = { halted };
+        return Response.json(body, {
+          headers: { "cache-control": "no-store", [RPC_VERSION_HEADER]: String(RPC_PROTOCOL_VERSION) },
+        });
+      } catch (e) {
+        const code = e instanceof AgentdError ? e.code : "unexpected error";
+        say(`power halt for ${peerIp} failed: ${code}`);
+        return refuse(500, `the halt failed on the box (${code})`, "INTERNAL");
       }
     }
 

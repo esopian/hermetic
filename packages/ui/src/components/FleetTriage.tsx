@@ -2,7 +2,7 @@ import { FleetChatButton } from "../chat/components/FleetChatButton.tsx";
 import { ListenButton } from "./ListenButton.tsx";
 /** The grouped layout: what needs a human, what is moving, what is fine. */
 import type { AgentView, VolumeView } from "../api/index.ts";
-import { hostname, pct, sizeGlyph, uptime, versionColor } from "../logic/format.ts";
+import { hostname, pausedFor, pct, sizeGlyph, uptime, versionColor } from "../logic/format.ts";
 import type { TriageGroup } from "../state/state.tsx";
 import { boardVolumes } from "../logic/volume-logic.ts";
 import { LooseVolumesGroup } from "./LooseVolumes.tsx";
@@ -59,7 +59,11 @@ function Row({
         {pct(agent.metrics?.cpu_pct)} / {pct(agent.metrics?.mem_pct)}
       </span>
       <span className="m">{hostname(agent.name, tailnet, agent.tailscale_dns_name, fleetId)}</span>
-      <span className="r">{uptime(agent, now)}</span>
+      <span className="r">
+        {agent.display_status === "paused"
+          ? `paused ${pausedFor(agent, now) ?? ""}`.trim()
+          : uptime(agent, now)}
+      </span>
     </div>
   );
 }

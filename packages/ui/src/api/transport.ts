@@ -75,6 +75,8 @@ export type RequestName =
   | "agents.set"
   | "agents.stop"
   | "agents.start"
+  | "agents.pause"
+  | "agents.resume"
   | "agents.reboot"
   | "agents.recreate"
   | "agents.history"

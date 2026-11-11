@@ -114,8 +114,8 @@ export function createLifecycle(deps: LifecycleDeps) {
    * (`lifecycle/retire-nodes.ts`) from the context themselves.
    */
   const { destroy } = createDestroy(deps);
-  const { stop, start } = createPower(deps);
+  const { stop, start, pause, resume } = createPower(deps);
   const { recreate } = createRecreateOp(deps, { release });
 
-  return { create, destroy, stop, start, recreate };
+  return { create, destroy, stop, start, pause, resume, recreate };
 }

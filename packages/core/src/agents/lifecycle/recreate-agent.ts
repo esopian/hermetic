@@ -92,12 +92,12 @@ export function createRecreateOp(deps: LifecycleDeps, shared: { release: Release
      * terminating the box settles it at `stopped` over the edge §4.3 already has,
      * and recreate was going to terminate whatever instance is there anyway.
      */
-    const DRAINS = ["ready", "degraded", "stopping"] as const;
-    const DIRECT = ["creating", "stopped", "error"] as const;
+    const DRAINS = ["ready", "degraded", "stopping", "pausing"] as const;
+    const DIRECT = ["creating", "stopped", "paused", "error"] as const;
     if (![...DRAINS, ...DIRECT].some((s) => s === agent.status)) {
       throw new HermeticError(
         "INVALID_TRANSITION",
-        `${agent.name} is ${agent.status}; recreate needs it settled (creating, ready, degraded, stopping, stopped or error)`,
+        `${agent.name} is ${agent.status}; recreate needs it settled (creating, ready, degraded, stopping, pausing, stopped, paused or error)`,
         { name: agent.name, status: agent.status },
       );
     }
@@ -430,6 +430,7 @@ export function createRecreateOp(deps: LifecycleDeps, shared: { release: Release
           hermeticd_version: release.version,
           bootstrap: null,
           command: null,
+          paused_at: null,
           tailscale_ip: null,
           tailscale_dns_name: null,
           tailscale_version: null,

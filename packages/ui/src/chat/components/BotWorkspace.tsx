@@ -90,7 +90,7 @@ export function BotWorkspace({
       const status = fleet?.byName.get(name)?.display_status;
       return status === "ready" || status === "degraded" || status === "error" || status === "destroyed"
         ? status
-        : status === "stopped" || status === "stopping"
+        : status === "stopped" || status === "stopping" || status === "paused" || status === "pausing"
           ? "stopped"
           : "pending";
     },

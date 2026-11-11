@@ -1409,7 +1409,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "config_hash": "<render>",
     "created_at": "2026-08-04T12:00:00.000Z",
     "created_by": "arn:aws:sts::123456789012:assumed-role/hermetic-operator/evan",
-    "display_status": "stopped",
+    "display_status": "paused",
     "health": {
       "disk": true,
       "hermes": false,
@@ -1428,6 +1428,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
       "mem_pct": 0,
     },
     "name": "marrow",
+    "paused_at": "2026-09-01T08:49:00.000Z",
     "provider": "nous",
     "region": "us-west-2",
     "resources": {
@@ -1444,7 +1445,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "running_hermeticd_sha256": null,
     "secrets_mode": "none",
     "size": "medium",
-    "status": "stopped",
+    "status": "paused",
     "tailscale_dns_name": null,
     "tailscale_ip": null,
     "tailscale_version": null,
