@@ -7,7 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@clack/prompts": "^1.7.0",
+    "@clack/prompts": "^1.8.1",
     "@hermetic/core": "workspace:*",
     "commander": "^15.0.0",
     "zod": "^4.6.7"
