@@ -12,6 +12,8 @@
  * - `heron`: answers its first board read (the prototype's stale card), then
  *   nothing, so the next read shows that card stale. The roster calls heron unreachable.
  * - any other box the roster calls unreachable (`juniper`, `quill`): unreachable.
+ *   Both are stopped, so only a named read (`kanban.board({instance})`) reaches them;
+ *   the fleet-wide board gives a stopped or paused box no lane.
  * - everything else: on, with an empty board.
  *
  * `createFixtureKanbanStore()` is also the staging surface a fixture chat turn
