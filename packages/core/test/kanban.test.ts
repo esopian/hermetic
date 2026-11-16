@@ -211,8 +211,10 @@ test("fixture: board, unblock, board", async () => {
     kestrel: "off",
     fathom: "unknown",
     heron: "on",
-    juniper: "unreachable",
   });
+  // A stopped or paused box gets no lane.
+  expect(states(before)).not.toHaveProperty("juniper");
+  expect(states(before)).not.toHaveProperty("marrow");
   const atlas = (b: typeof before) => b.instances.find((i) => i.instance === "atlas")!;
   expect(atlas(before).tasks.find((t) => t.id === "t_8b20d6e1")?.status).toBe("blocked");
 

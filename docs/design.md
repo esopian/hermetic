@@ -1704,7 +1704,7 @@ A `delegate_task` call starts children, each running its own agent loop under th
 
 | Method | Input | Result |
 |---|---|---|
-| `kanban.board` | `{instance?}` | `KanbanBoard {fleet_id, instances: [{instance, state, reason, hint, board, profiles, tasks[], read_at, stale_since}]}`. Without `instance`, every instance of the fleet, read concurrently with an 8 s deadline per box |
+| `kanban.board` | `{instance?}` | `KanbanBoard {fleet_id, instances: [{instance, state, reason, hint, board, profiles, tasks[], read_at, stale_since}]}`. Without `instance`, every live instance of the fleet (`bootstrapping`, `ready`, `degraded`, `resuming` or `error`; a destroyed, stopped or paused agent gets no lane), read concurrently with an 8 s deadline per box |
 | `kanban.task` | `{instance, id}` | `{instance, task, comments, events, runs, links: {parents, children}, stale_since}` |
 | `kanban.log` | `{instance, id, tail?}` | `{task_id, exists, size_bytes, content, truncated}`, the worker's log |
 | `kanban.create` | `{instance, title, body?, assignee?: string \| null, start, workspace_kind, workspace_path?, priority, skills?, goal_mode?, goal_max_turns?}` | the new card. `start` is `triage` or `ready` (default `ready`); `workspace_kind` is `scratch` (default, upstream's own), `dir` or `worktree`, and the last two require a `workspace_path` starting with `/` or `~` (upstream would otherwise refuse the card at dispatch, long after create); `priority` is 0 to 3 |
