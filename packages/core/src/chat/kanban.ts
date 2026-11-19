@@ -7,6 +7,7 @@
  * require the instance to be watched (`dashboardBox(…, false)`).
  */
 import * as S from "../schema/kanban.ts";
+import type { AgentStatus } from "../schema/agent.ts";
 import type { ChatDeps } from "./chat.ts";
 import { HermeticError } from "../errors.ts";
 import { MemoryChatSettingsStore } from "./chat-settings.ts";
@@ -20,6 +21,14 @@ const DEADLINE_MS = 8_000;
 const META_TTL_MS = 5 * 60_000;
 /** The command that turns the bundled plugin on, run on the box. */
 export const KANBAN_ENABLE_HINT = "hermes plugins enable kanban";
+/** Statuses whose box is up, or coming up: the only ones the fleet-wide board reads. */
+const LIVE: ReadonlySet<AgentStatus> = new Set([
+  "bootstrapping",
+  "ready",
+  "degraded",
+  "resuming",
+  "error",
+]);
 
 type Box = ReturnType<typeof dashboardAddress>;
 type Opts = { signal?: AbortSignal | undefined };
@@ -149,7 +158,10 @@ export function createKanban(deps: KanbanDeps) {
 
   const board = operation(S.KanbanBoardInput, async (p, o): Promise<S.KanbanBoard> => {
     const { fleet } = await deps.guardFleet();
-    const agents = p.instance ? [await deps.getAgent(p.instance)] : await deps.listAgents();
+    // A tombstone, or a stopped or paused box, has no board to read: no lane for it.
+    const agents = p.instance
+      ? [await deps.getAgent(p.instance)]
+      : (await deps.listAgents()).filter((a) => LIVE.has(a.status));
     const sorted = [...agents].sort((a, b) => a.name.localeCompare(b.name, "en"));
     return {
       fleet_id: fleet.fleet_id,
