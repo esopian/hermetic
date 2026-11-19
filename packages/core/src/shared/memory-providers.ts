@@ -139,6 +139,13 @@ export interface MemoryProviderSpec {
    * on a lazy install.
    */
   readonly pip: readonly string[];
+  /**
+   * The Hermes plugin hermeticd checks out into `hermesPluginDir`, pinned to
+   * upstream's `plugin-catalog/<name>.yaml` at `BUILD_VERSIONS.hermes_ref`
+   * (`tests/memory-plugin-pins.test.ts`); null when there is no catalog
+   * plugin to check out (prism's ships inside hermeticd).
+   */
+  readonly plugin: MemoryServicePlugin | null;
   readonly docs: string;
   /** Display estimates for pickers and help (`MemoryResources`); not enforced. */
   readonly resources: MemoryResources;
@@ -181,12 +188,23 @@ export const MEMORY_PROVIDERS: Readonly<Record<MemoryProvider, MemoryProviderSpe
     min_mem_gib: 0,
     vendors: PROVIDER_IDS,
     uses_llm: false,
-    // The store lives at `$HERMES_HOME/memory_store.db`, and every setting
-    // under `plugins.hermes-memory-store` is optional, so nothing is rendered.
+    // The store lives at `$HERMES_HOME/memory_store.db`. From `hermes_min` the
+    // managed config sets `plugins.hermes-memory-store.mirror_memory_writes`
+    // (`render-hermes.ts`), the catalog plugin's off-by-default copy of built-in
+    // memory adds; every other setting there is optional and not rendered.
     // numpy is optional upstream: without it the holographic (HRR) weighting is
     // dropped and only FTS5 + Jaccard rank. Preinstalled so the provider runs
-    // as designed.
+    // as designed. The plugin's other dependency, snowballstemmer, is one of
+    // Hermes's own from 0.22.
     pip: ["numpy"],
+    plugin: {
+      repo: "https://github.com/itpartypattaya/hermes-plugin-holographic",
+      sha: "f75c636a2865459600e0a5d8470108032d8f8860",
+      subdir: null,
+      version: "0.26.5",
+      // Bundled as `plugins/memory/holographic` through 0.21.6.
+      hermes_min: "0.22.0",
+    },
     docs: `${DOCS}#holographic`,
     resources: {
       added_ram: "~50 MB",
@@ -206,9 +224,19 @@ export const MEMORY_PROVIDERS: Readonly<Record<MemoryProvider, MemoryProviderSpe
     min_mem_gib: 8,
     vendors: PROVIDER_IDS,
     uses_llm: true,
-    // The Hermes plugin (`MEMORY_SERVICES.hindsight.plugin`) in `local_external`
-    // mode needs only the HTTP client; the server runs from its own venv.
+    // The Hermes plugin in `local_external` mode needs only the HTTP client;
+    // the server runs from its own venv.
     pip: ["hindsight-client==0.10.3"],
+    // Never bundled, so checked out on every Hermes. Deliberately behind the
+    // catalog's pin (plugin 1.2.4 at v0.23.1): moving it moves the client and
+    // `MEMORY_SERVICES.hindsight.pin` with it, a follow-up of its own.
+    plugin: {
+      repo: "https://github.com/vectorize-io/hindsight",
+      sha: "176f8c2de1369f569c489b831d143b78128b5535",
+      subdir: "hindsight-integrations/hermes",
+      version: "1.0.1",
+      hermes_min: null,
+    },
     docs: `${DOCS}#hindsight`,
     resources: {
       added_ram: "~1 GiB idle",
@@ -227,8 +255,16 @@ export const MEMORY_PROVIDERS: Readonly<Record<MemoryProvider, MemoryProviderSpe
     min_mem_gib: 4,
     vendors: PROVIDER_IDS,
     uses_llm: true,
-    // `httpx` is the plugin's only dependency and Hermes already ships it.
+    // The plugin needs `httpx`, `psutil` and `packaging`, all Hermes's own.
     pip: [],
+    plugin: {
+      repo: "https://github.com/volcengine/OpenViking",
+      sha: "e855796c83f9eb575d9b0f3082926660730f6a63",
+      subdir: "examples/hermes-plugin",
+      version: "2.1.2",
+      // Bundled as `plugins/memory/openviking` through 0.21.5.
+      hermes_min: "0.22.0",
+    },
     docs: `${DOCS}#openviking`,
     resources: {
       added_ram: "~0.5–1 GiB",
@@ -249,9 +285,17 @@ export const MEMORY_PROVIDERS: Readonly<Record<MemoryProvider, MemoryProviderSpe
     vendors_note:
       "Honcho embeds through an OpenAI-compatible /embeddings endpoint, which anthropic and bedrock do not offer",
     uses_llm: true,
-    // Hermes bundles the plugin (`plugins/memory/honcho`) and pins its SDK at
-    // this exact version (`tools/lazy_deps.py`); 2.x speaks the server's v3 API.
+    // The plugin's SDK (it asks for `>=2.2.0,<3`), pinned exactly; 2.x speaks
+    // the server's v3 API.
     pip: ["honcho-ai==2.2.0"],
+    plugin: {
+      repo: "https://github.com/plastic-labs/honcho",
+      sha: "894b88321872e01702a1aa638ddfdde6ad60f173",
+      subdir: "hermes-plugin-honcho",
+      version: "1.2.0",
+      // Bundled as `plugins/memory/honcho` through 0.21.5.
+      hermes_min: "0.22.0",
+    },
     docs: `${DOCS}#honcho`,
     resources: {
       added_ram: "~0.9 GiB",
@@ -278,6 +322,8 @@ export const MEMORY_PROVIDERS: Readonly<Record<MemoryProvider, MemoryProviderSpe
     uses_llm: false,
     // The plugin (`packages/agentd/plugins/prme`) uses `httpx`, which Hermes ships.
     pip: [],
+    // Shipped inside hermeticd (`BUNDLED_MEMORY_PLUGINS`), not checked out.
+    plugin: null,
     // Hermes's memory-providers page has no section for it; PRME's own README.
     docs: "https://github.com/dwamianm/prism#readme",
     resources: {
@@ -584,11 +630,19 @@ export function hermesPluginDir(name: string): string {
   return `${HERMES_HOME}/plugins/${name}`;
 }
 
+/** A catalog plugin checkout (`MemoryProviderSpec.plugin`); the name predates in-process ones. */
 export interface MemoryServicePlugin {
   readonly repo: string;
   readonly sha: string;
-  readonly subdir: string;
+  /** The plugin's directory in the repo; null for the repo root. */
+  readonly subdir: string | null;
   readonly version: string;
+  /**
+   * The first Hermes the checkout is for. Below it Hermes bundles the provider
+   * itself, its bundled copy wins, and hermeticd removes a checkout it made
+   * for a later Hermes. Null when Hermes never bundled it.
+   */
+  readonly hermes_min: string | null;
 }
 
 /** A server that runs from a pinned source checkout rather than a package (honcho). */
@@ -628,8 +682,6 @@ export interface MemoryServiceSpec {
   readonly source: MemoryServiceSource | null;
   /** Distro packages the server needs, installed by hermeticd before the venv. */
   readonly apt: readonly string[];
-  /** A Hermes catalog plugin to check out into `hermesPluginDir(id)`, or null when bundled upstream. */
-  readonly plugin: MemoryServicePlugin | null;
   /** A model file to pre-seed so the first recall does not stall on a download, or null. */
   readonly model: {
     readonly url: string;
@@ -656,13 +708,6 @@ export const MEMORY_SERVICES: Readonly<Record<MemoryServiceId, MemoryServiceSpec
     command: "hindsight-api",
     source: null,
     apt: [],
-    // Hermes's plugin catalog entry at the pinned ref (`plugin-catalog/hindsight.yaml`).
-    plugin: {
-      repo: "https://github.com/vectorize-io/hindsight",
-      sha: "176f8c2de1369f569c489b831d143b78128b5535",
-      subdir: "hindsight-integrations/hermes",
-      version: "1.0.1",
-    },
     // Embeddings and the reranker are sentence-transformers models the server
     // fetches from Hugging Face into `HF_HOME` on first start; the unit
     // tolerates that start (`HINDSIGHT_API_MODEL_INIT_TIMEOUT`).
@@ -682,7 +727,6 @@ export const MEMORY_SERVICES: Readonly<Record<MemoryServiceId, MemoryServiceSpec
     command: "openviking-server",
     source: null,
     apt: [],
-    plugin: null,
     // The only local dense model OpenViking knows. Downloaded inside the first
     // embedding call otherwise, which Hermes's 3 s recall budget would not wait for.
     model: {
@@ -710,8 +754,6 @@ export const MEMORY_SERVICES: Readonly<Record<MemoryServiceId, MemoryServiceSpec
       tag: "v3.3.0",
     },
     apt: HONCHO_APT_PACKAGES,
-    // Hermes bundles the honcho plugin.
-    plugin: null,
     model: null,
   },
   prism: {
@@ -760,8 +802,6 @@ export const MEMORY_SERVICES: Readonly<Record<MemoryServiceId, MemoryServiceSpec
     command: "python",
     source: null,
     apt: [],
-    // Shipped inside hermeticd (`packages/agentd/plugins/prme`), not checked out.
-    plugin: null,
     // fastembed's `BAAI/bge-small-en-v1.5` is a multi-file ONNX download, not
     // one file: hermeticd warms it (and tiktoken's encoding) at install
     // (`ensurePrismCaches`), so neither happens inside a recall.

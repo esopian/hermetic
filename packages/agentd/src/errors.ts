@@ -74,6 +74,51 @@ export type AgentdErrorCode =
    * the release that was just published.
    */
   | "UNIT_MISSING"
+  /**
+   * The pre-upgrade copy of `$HERMES_HOME` could not be taken or did not
+   * validate (`apply/hermes-backup.ts`; `detail.reason` says which). Nothing
+   * was changed: the source is never written and no backup was published, so
+   * the apply stops before the Hermes checkout is touched.
+   */
+  | "HERMES_BACKUP_FAILED"
+  /**
+   * A downgrade found no validated backup for the version it returns to, or
+   * not enough room to restore one. Refused before anything moved.
+   */
+  | "HERMES_RESTORE_REFUSED"
+  /**
+   * A downgrade failed after the current state was moved aside. Nothing is
+   * destroyed: `detail.moved_aside` holds the state as it was, `detail.backup`
+   * the copy being restored, and `$HERMES_HOME` may be partly restored.
+   */
+  | "HERMES_RESTORE_FAILED"
+  /**
+   * A Hermes version change found a unit still active after `systemctl stop`
+   * (`detail.units` names each with its state), or a process outside the units
+   * holding files under `$HERMES_HOME` open (`detail.processes`). Refused before the backup or
+   * the checkout was touched; the units that were running are started again.
+   */
+  | "HERMES_UNITS_ACTIVE"
+  /**
+   * A Hermes version change failed before its checkout moved: the pre-fetch
+   * (bundle, git fetch, a uv, Node or pnpm download or its digest) or a step
+   * after the hold. `detail.cause` is the failure. The checkout and state are
+   * untouched and the units that were running are running again.
+   */
+  | "HERMES_SWAP_ABORTED"
+  /**
+   * A forward version change failed after its checkout moved, and hermeticd
+   * put the box back: the pre-upgrade backup restored (the state found is in
+   * `detail.moved_aside`), the old checkout reinstalled, the units started on
+   * it. `detail.cause` is the original failure. The box runs the old version.
+   */
+  | "HERMES_UPGRADE_ROLLED_BACK"
+  /**
+   * That rollback failed too. Nothing is deleted: `detail` names the backup,
+   * any moved-aside state, the ref the checkout may be on, and both failures.
+   * The Hermes units are left stopped.
+   */
+  | "HERMES_ROLLBACK_FAILED"
   | "TRANSITION_REJECTED"
   | "CONFLICT"
   | "USAGE"

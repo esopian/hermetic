@@ -18,7 +18,7 @@ import { Version } from "./common.ts";
 import { Provider, SecretsMode, Size } from "./agent.ts";
 import { BrowserIdentity } from "./browser.ts";
 import { ApprovalsMode } from "./hermes.ts";
-import { CHROME_REF_RE } from "./fleet.ts";
+import { CHROME_REF_RE, compareVersions } from "./fleet.ts";
 import { StoredManifestMemory } from "./memory.ts";
 
 /** An extra apt source the manifest asks hermeticd to add before installing packages. */
@@ -325,6 +325,16 @@ export const AGENT_CONFIG_CAPABILITIES = {
    * asking for a `prme` plugin that is not there.
    */
   [MEMORY_PRISM_CAPABILITY]: "run prism's memory server and install its bundled prme plugin",
+  /**
+   * hermeticd installs Hermes 0.22 and later safely: it stops the Hermes units
+   * and verifies they stopped, takes a validated copy of `$HERMES_HOME` before
+   * the checkout moves, restores one on a downgrade, and reports a failure that
+   * happened before the checkout was touched on the row (`apply_failure`). An
+   * older box would swap the checkout under running writers with no copy to
+   * fall back on, so a manifest pinning 0.22 or later asks, and an older box
+   * refuses it.
+   */
+  "hermes-0.22-install": "stop, back up and swap Hermes 0.22+ with a validated pre-upgrade copy",
 } as const;
 export type AgentCapability = keyof typeof AGENT_CONFIG_CAPABILITIES;
 
@@ -344,8 +354,17 @@ export function requiredCapabilities(manifest: {
   provider_key_ref?: string | undefined;
   browsers?: readonly BrowserIdentity[] | undefined;
   memory?: { provider: string; pin?: string | undefined } | undefined;
+  hermes_version?: string | undefined;
 }): AgentCapability[] {
   const out: AgentCapability[] = [];
+  // The row's pin, as the unit text keys on it: a row still on 0.21 keeps
+  // applying on a box that predates the 0.22 install path.
+  if (
+    manifest.hermes_version !== undefined &&
+    compareVersions(manifest.hermes_version, "0.22.0") >= 0
+  ) {
+    out.push("hermes-0.22-install");
+  }
   if (manifest.units.some((u) => /^hermes-gateway.*\.service$/.test(u))) out.push("gateway-unit");
   if (manifest.files.some((f) => (f.restart_units?.length ?? 0) > 0)) out.push("restart-units");
   /*

@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { mapHistory } from "../src/chat/hermes/hermes-chat.ts";
 import {
   KINDS,
   defaultPicker,
   describeSchedule,
+  finishedCronCalls,
   fromSchedule,
   laptopTime,
   nextRuns,
@@ -107,4 +109,43 @@ test("weekGrid buckets runs by day and hour", () => {
   expect(grid).toHaveLength(7);
   expect(grid[1]?.[8]).toBe(1);
   expect(grid[3]?.[8]).toBe(0);
+});
+
+describe("finishedCronCalls", () => {
+  test("a cron call re-read from history counts, plain or behind v0.23.1's tool_call bridge", () => {
+    const BOX = {
+      instance: "atlas",
+      baseUrl: "https://fxtr0001-atlas.tail0000.ts.net/",
+      fleet_id: "fxtr0001",
+    };
+    const call = (id: string, name: string, args: unknown) => ({
+      id,
+      type: "function",
+      function: { name, arguments: JSON.stringify(args) },
+    });
+    const messages = mapHistory(BOX, "s-1", {
+      messages: [
+        {
+          id: 1,
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            call("c-1", "cronjob", { action: "list" }),
+            // `cronjob_manage` is deferred by default (`hermes_cli/config_defaults.py:1997-2001`).
+            call("c-2", "tool_call", {
+              name: "cronjob_manage",
+              arguments: { action: "pause", job_id: "j1" },
+            }),
+            call("c-3", "tool_call", { name: "web_search", arguments: { q: "x" } }),
+          ],
+        },
+        { id: 2, role: "tool", tool_call_id: "c-1", content: "{}" },
+        { id: 3, role: "tool", tool_call_id: "c-2", tool_name: "tool_call", content: "{}" },
+        { id: 4, role: "tool", tool_call_id: "c-3", tool_name: "tool_call", content: "{}" },
+      ],
+    });
+    // Each result row is a message of its own; the turn is all of them.
+    const turn = { id: "turn", blocks: messages.flatMap((m) => m.blocks) };
+    expect(finishedCronCalls(turn)).toEqual(["id:c-1", "id:c-2"]);
+  });
 });

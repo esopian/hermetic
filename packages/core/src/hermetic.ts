@@ -51,7 +51,7 @@ import { MemoryLocalChatSessions, createChat, defaultHermesChat } from "./chat/c
 import { MemoryChatFenceStore } from "./chat/chat-fence.ts";
 import { MemoryChatSettingsStore } from "./chat/chat-settings.ts";
 import { createDevtools } from "./chat/devtools.ts";
-import { createBotMode } from "./chat/bot-mode.ts";
+import { createBotMode, dashboardAddress } from "./chat/bot-mode.ts";
 import { createKanban } from "./chat/kanban.ts";
 import {
   MemoryNotificationStore,
@@ -194,6 +194,7 @@ export function createHermetic(deps: HermeticDeps) {
     actor: deps.actor,
     attach: deps.attach,
     handoff: deps.handoff,
+    hermesVersion,
   });
   const ctx: CoreContext = {
     ...runtime,
@@ -336,6 +337,16 @@ export function createHermetic(deps: HermeticDeps) {
     // `upgrade --hermeticd` rolls out with `foundation.update`'s timings (§6.5).
     rolloutWaitMs: deps.foundation?.rolloutWaitMs,
     rolloutPollMs: deps.foundation?.rolloutPollMs,
+    // D4's idle wait asks the gateway through the chat adapter built below.
+    boxBusy:
+      deps.rollout?.boxBusy ??
+      (async (agent, signal) => {
+        const { fleet } = await guardFleet();
+        const asked = hermesChat.boxBusy?.(dashboardAddress(fleet, agent), signal ? { signal } : {});
+        return (await asked?.catch(() => null)) ?? null;
+      }),
+    idleTimeoutMs: deps.rollout?.idleTimeoutMs,
+    idlePollMs: deps.rollout?.idlePollMs,
   });
   const { settingsGet, settingsSet } = createSettings({ ctx });
 

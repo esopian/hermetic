@@ -17,10 +17,20 @@ import {
   PROVIDERS,
   browserIdentities,
   chromeBinaryPath,
+  compareVersions,
   isProviderKeySlot,
 } from "../schema/index.ts";
 import type { RenderInput } from "./render.ts";
 import { memoryHermesLines } from "./render-memory.ts";
+
+/**
+ * Whether the row's Hermes is 0.22 or later. Unit text keys on the row's pin,
+ * never this build's, so a row still on 0.21 renders the bytes it always did
+ * and a newer laptop or hermeticd restarts nothing on an un-upgraded box.
+ */
+function atLeast022(input: RenderInput): boolean {
+  return compareVersions(input.hermes_version, "0.22.0") >= 0;
+}
 
 function unit(
   description: string,
@@ -133,9 +143,13 @@ function hermesRuntimeLines(input: RenderInput): HermesRuntime {
      * reinstalled on next use. The cost, accepted: a box's Python closure is
      * the pinned `hermes_ref` *plus* whatever its features asked for, fetched
      * from PyPI at the time.
+     *
+     * From 0.22 the target is read nowhere and the flag refuses every
+     * on-demand install outright (`pm/install.py:168-184`); the flag stays on
+     * by decision, so only the target goes.
      */
     "Environment=HERMES_DISABLE_LAZY_INSTALLS=1",
-    "Environment=HERMES_LAZY_INSTALL_TARGET=" + HERMES_LAZY_TARGET,
+    ...(atLeast022(input) ? [] : ["Environment=HERMES_LAZY_INSTALL_TARGET=" + HERMES_LAZY_TARGET]),
     /**
      * `npm install -g` into the account's own prefix rather than Node's, which
      * is root's (`HERMES_USER_PREFIX`). On both units because an agent's shell
@@ -159,9 +173,12 @@ function hermesRuntimeLines(input: RenderInput): HermesRuntime {
      * Where upstream's agent-browser finds a Chrome, for the paths that still
      * launch one rather than attaching to `browser.cdp_url`. It is the one
      * seam of the four with no config form (`browser_tool.py:6033`), which is
-     * why it is here and the other three are in the managed config.
+     * why it is here and the other three are in the managed config. From 0.22
+     * nothing reads it (only a config migration names it), so it goes.
      */
-    service.push("Environment=AGENT_BROWSER_EXECUTABLE_PATH=" + chromeBinaryPath(input.chrome_ref));
+    if (!atLeast022(input)) {
+      service.push("Environment=AGENT_BROWSER_EXECUTABLE_PATH=" + chromeBinaryPath(input.chrome_ref));
+    }
   }
   if (PROVIDERS[input.provider].auth === "role") {
     /**
@@ -279,6 +296,10 @@ export function hermesUnit(input: RenderInput): string {
     "Environment=HERMES_WEB_DIST=" + HERMES_WEB_DIST_DIR,
     "Environment=HERMES_TUI_DIR=" + HERMES_TUI_DIR,
   );
+  // From 0.22 the TUI resolves Node through upstream's package manager unless
+  // told otherwise (`main_tui_launch.py:198-213`), which the disable flag
+  // refuses, so the dashboard's Chat tab would not launch.
+  if (atLeast022(input)) body.push("Environment=HERMES_NODE=/usr/local/bin/node");
   // Everything below is shared verbatim with the gateway's drop-in, so the two
   // Hermes processes cannot end up with different environments.
   body.push(...runtime.service);

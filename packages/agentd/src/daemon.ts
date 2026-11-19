@@ -3,10 +3,13 @@
  * that run and exit are in `cli.ts`; `main.ts` is the entrypoint.
  */
 import type { Host } from "./host.ts";
+import { must } from "./host.ts";
+import { UNIT_DIR } from "./apply/shared.ts";
 import { readAppliedConfigHash } from "./manifest.ts";
 import { BOOTSTRAP_UNIT } from "./bootstrap.ts";
 import { makeHeartbeat } from "./heartbeat.ts";
 import { HERMETICD_PATH } from "./stages.ts";
+import { STATE_DIR } from "./fleet.ts";
 import { reportBrowsers } from "./browser-health.ts";
 import { haltHermes, serveRpc, tailscaleWhois } from "./rpc.ts";
 import { fleetViewSource, makeMobileRoutes } from "./rpc-mobile.ts";
@@ -30,13 +33,16 @@ import {
 } from "./update/index.ts";
 import { makeUpdateGate, type UpdateGate } from "./update-request.ts";
 import { makeRequestGate, type RequestGate } from "./request-gate.ts";
-import { convergeOnce, type ConvergeOutcome } from "./converge.ts";
+import { convergeOnce, type ConvergeOutcome, heldResumeRequest, NEEDS_OPERATOR } from "./converge.ts";
+import { APPLY_LOCK_PATH, readInstallLock, takeInstallLock } from "./install-lock.ts";
 import { makeSecretsSyncer } from "./secrets-sync.ts";
 import { ensureLoginShell } from "./apply/accounts.ts";
 import type { ApplyRequest } from "@hermetic/core/schema";
 import { redactValue } from "./redact.ts";
+import { AgentdError } from "./errors.ts";
 import { HERMETICD_VERSION } from "./version.ts";
 import { bootContext, log, stderrEmit, type Context, type RunDeps } from "./context.ts";
+import { withUpgradeHistory } from "./events.ts";
 
 /**
  * The systemd service (§6.4): heartbeat every 30 s, self-update at start-up and
@@ -83,11 +89,44 @@ export async function runningBinarySha256(host: Host): Promise<string | null> {
   return null;
 }
 
+/**
+ * systemd's default `OOMPolicy=stop` stops a whole service when the kernel
+ * OOM-kills any process in its cgroup: a web build an apply runs took hermeticd
+ * down mid-swap, so no rollback ever ran. With `continue` the build fails as a
+ * command (exit 137) and the apply rolls back. Also the bootstrap unit, whose
+ * stage `hermeticd apply` (`agent rerun`, a reboot's drift rerun) can swap too;
+ * on a fresh box it is written only once this first runs, after `04-apply`.
+ * Drop-ins written here rather than in the rendered unit, so they are in force
+ * (systemd reads `OOMPolicy` at the OOM event, from the unit as last loaded)
+ * before the first converge of a box whose unit predates them: the apply's
+ * files phase runs after the install they guard.
+ */
+export const oomDropIn = (unit: string): string => `${UNIT_DIR}/${unit}.d/hermetic-oom.conf`;
+const OOM_CONF =
+  "# Written by hermeticd: an OOM-killed child fails its command instead of stopping this unit.\n" +
+  "[Service]\nOOMPolicy=continue\n";
+
+export async function ensureOomPolicy(host: Host): Promise<boolean> {
+  let wrote = false;
+  for (const unit of ["hermeticd.service", BOOTSTRAP_UNIT]) {
+    if ((await host.readFile(oomDropIn(unit))) === OOM_CONF) continue;
+    await host.mkdir(`${UNIT_DIR}/${unit}.d`, "0755");
+    await host.writeFile(oomDropIn(unit), OOM_CONF, "0644");
+    wrote = true;
+  }
+  if (wrote) await must(host, ["systemctl", "daemon-reload"]);
+  return wrote;
+}
+
 export async function serve(host: Host, deps: RunDeps = {}): Promise<void> {
   // Before `bootContext`, so nothing that could swap a binary has run yet.
   const hermeticdSha256 = await runningBinarySha256(host);
 
   const ctx = await bootContext(host, deps);
+  // Before any loop starts, so before any converge can run a build.
+  await ensureOomPolicy(host).catch((e: unknown) => {
+    log(`could not set hermeticd's OOM policy: ${e instanceof Error ? e.message : String(e)}`);
+  });
   /**
    * The account fixes a release carries but no apply will run for it: a
    * self-update restarts this service and nothing else (§6.5). Best effort —
@@ -290,6 +329,15 @@ export function convergeLoop(
   gate: RequestGate<ApplyRequest>,
   signal: AbortSignal,
 ): Promise<void> {
+  const record = async (action: string, detail: string): Promise<void> => {
+    await ctx.aws.appendEvent({
+      name: ctx.userData.name,
+      action,
+      from_status: null,
+      to_status: null,
+      detail,
+    });
+  };
   return runConvergeLoop({
     host,
     gate,
@@ -302,19 +350,19 @@ export function convergeLoop(
           name: ctx.userData.name,
           bucket: ctx.bucket,
           paramPrefix: ctx.paramPrefix,
-          emit: stderrEmit,
+          emit: withUpgradeHistory(stderrEmit, record),
           log,
         },
         request,
         bootstrapUnitActive,
       ),
-    record: async (action, detail) => {
-      await ctx.aws.appendEvent({
-        name: ctx.userData.name,
-        action,
-        from_status: null,
-        to_status: null,
-        detail,
+    record,
+    resume: () => heldResumeRequest(host),
+    reportFailure: async (request, code) => {
+      await ctx.aws.reportApplyFailure(ctx.userData.name, {
+        request_id: request.id,
+        config_hash: request.config_hash,
+        code,
       });
     },
     log,
@@ -328,6 +376,15 @@ export interface ConvergeLoopDeps {
   readonly run: (request: ApplyRequest) => Promise<ConvergeOutcome>;
   /** Writes the agent's event log, so `agent history` carries the outcome. */
   readonly record: (action: string, detail: string) => Promise<void>;
+  /** Writes `apply_failure` on the row: the request that failed and hermeticd's code for why. */
+  readonly reportFailure: (request: ApplyRequest, code: string) => Promise<void>;
+  /**
+   * Asked at start, then every `RESUME_RETRY_MS` while nothing is pending: a
+   * request the box owes itself, such as finishing a Hermes swap a crash cut
+   * short (`heldResumeRequest`). A request the heartbeat delivers meanwhile
+   * replaces it, and either one re-applies.
+   */
+  readonly resume?: () => Promise<ApplyRequest | null>;
   readonly log?: (message: string) => void;
 }
 
@@ -335,6 +392,11 @@ export interface ConvergeLoopDeps {
 export async function runConvergeLoop(deps: ConvergeLoopDeps): Promise<void> {
   const { host, gate, signal } = deps;
   const say = deps.log ?? log;
+
+  const owed = await deps.resume?.().catch(() => null);
+  if (owed && gate.pending() === null) gate.onRequest(owed);
+  let nextResume = host.now().getTime() + RESUME_RETRY_MS;
+  let needsOperator = false;
 
   while (!signal?.aborted) {
     const request = gate.take();
@@ -346,10 +408,13 @@ export async function runConvergeLoop(deps: ConvergeLoopDeps): Promise<void> {
           // bootstrap window is not a spin loop (`request-gate.ts`).
           gate.restore(request);
           say(`converge ${request.id} deferred: ${outcome.reason}`);
-        } else if (outcome.kind === "applied") {
-          await deps
-            .record("apply", `converged to config ${outcome.config_hash}`)
-            .catch(() => undefined);
+        } else {
+          needsOperator = false;
+          if (outcome.kind === "applied") {
+            await deps
+              .record("apply", `converged to config ${outcome.config_hash}`)
+              .catch(() => undefined);
+          }
         }
       } catch (e) {
         const why = redactValue(e instanceof Error ? e.message : String(e));
@@ -363,12 +428,59 @@ export async function runConvergeLoop(deps: ConvergeLoopDeps): Promise<void> {
         await deps
           .record("apply", `converge to config ${request.config_hash} failed: ${why}`)
           .catch(() => undefined);
+        const code = e instanceof AgentdError ? e.code : "INTERNAL";
+        needsOperator = NEEDS_OPERATOR.has(code);
+        // Kept until written: the heartbeat never re-delivers this request, so a
+        // lost report would leave the laptop waiting out a timeout instead of the code.
+        await deps
+          .reportFailure(request, code)
+          .then(
+            () => host.remove(UNSENT_FAILURE_PATH),
+            async () => {
+              await host.mkdir(STATE_DIR, "0755");
+              await host.writeFile(
+                UNSENT_FAILURE_PATH,
+                `${JSON.stringify({ request, code })}\n`,
+                "0600",
+              );
+            },
+          )
+          .catch(() => undefined);
       }
+      nextResume = host.now().getTime() + RESUME_RETRY_MS;
     }
     if (signal?.aborted) return;
+    await resendFailure(deps).catch(() => undefined);
+    // A box left held with nothing pending is never a resting state: ask again,
+    // unless the last failure is one that waits for an operator by design.
+    if (!needsOperator && gate.pending() === null && host.now().getTime() >= nextResume) {
+      nextResume = host.now().getTime() + RESUME_RETRY_MS;
+      const again = await deps.resume?.().catch(() => null);
+      if (again && gate.pending() === null) gate.onRequest(again);
+    }
     await gate.wait(host, CONVERGE_POLL_MS);
   }
 }
+
+/** A failure report DynamoDB did not take, retried each tick until it lands. Root-owned. */
+export const UNSENT_FAILURE_PATH = `${STATE_DIR}/apply-failure.unsent.json`;
+
+async function resendFailure(deps: ConvergeLoopDeps): Promise<void> {
+  const raw = await deps.host.readFile(UNSENT_FAILURE_PATH);
+  if (raw === null) return;
+  let unsent: { request: ApplyRequest; code: string };
+  try {
+    unsent = JSON.parse(raw) as { request: ApplyRequest; code: string };
+  } catch {
+    await deps.host.remove(UNSENT_FAILURE_PATH);
+    return;
+  }
+  await deps.reportFailure(unsent.request, unsent.code);
+  await deps.host.remove(UNSENT_FAILURE_PATH);
+}
+
+/** How often the converge loop asks again whether a held Hermes swap is owed a resume. */
+export const RESUME_RETRY_MS = 10 * 60_000;
 
 /** How often the converge loop looks when it has no news. */
 export const CONVERGE_POLL_MS = 15_000;
@@ -601,11 +713,29 @@ export async function maybeUpdate(
   opts: { readonly auto?: boolean } = {},
 ): Promise<UpdateResult | "off" | null> {
   const bootstrap = await bootstrapUnitBusy(host);
-  if (bootstrap.busy) {
-    if (opts.auto !== true) log(`${bootstrap.detail}; deferring the update`);
+  // A restart mid-apply would cut a Hermes swap or its rollback short, so the
+  // update holds the apply lock through its restart: an apply (converge here,
+  // or a stage's `hermeticd apply`) started meanwhile defers or waits. A held
+  // box with no apply running may restart: `serve` resumes the swap on start,
+  // and an operator-held box may need the new hermeticd to recover.
+  const lock = bootstrap.busy ? null : await takeInstallLock(host, "update", { path: APPLY_LOCK_PATH });
+  if (lock === null) {
+    if (opts.auto !== true) {
+      const applying = bootstrap.busy ? null : await readInstallLock(host, APPLY_LOCK_PATH);
+      const busy = bootstrap.busy
+        ? bootstrap.detail
+        : `an apply (pid ${applying?.pid ?? "?"}) is running`;
+      log(`${busy}; deferring the update`);
+    }
     return null;
   }
-  return opts.auto === true ? await autoUpdate(deps) : await update(deps);
+  try {
+    return opts.auto === true ? await autoUpdate(deps) : await update(deps);
+  } finally {
+    // Reached only when no restart took: a successful one ends this process,
+    // and the lock it leaves names a pid that is gone.
+    await lock.release();
+  }
 }
 
 /** How often the scheduler checks whether the nightly slot has arrived. */

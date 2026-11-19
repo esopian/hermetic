@@ -11,7 +11,7 @@ import {
 } from "../src/backend/memory.ts";
 import { agentParamPath, agentParamPrefix, sharedSecretPath } from "../src/backend/constants.ts";
 import { profileSlotSlug } from "../src/schema/index.ts";
-import { drain, freshFleet, testHermetic } from "./helpers.ts";
+import { drain, freshFleet, onBuildHermes, testHermetic } from "./helpers.ts";
 
 function seeded() {
   const backend = seedFixtureFleet(new MemoryBackend());
@@ -807,6 +807,7 @@ describe("plan.destroy / apply", () => {
    */
   test("a destroy plan whose instance has moved since is refused, and says so", async () => {
     const { backend, hermetic } = seeded();
+    onBuildHermes(backend);
     const plan = await hermetic.plan.destroy({ name: "granite" });
     const volumeId = (await backend.store.agents.get("granite"))!.resources.volume_id!;
     const instanceId = (await backend.store.agents.get("granite"))!.resources.instance_id!;
@@ -948,6 +949,7 @@ describe("plan.destroy / apply", () => {
 
   test("a recreate plan whose instance has moved since is refused too", async () => {
     const { backend, hermetic } = seeded();
+    onBuildHermes(backend);
     const plan = await hermetic.plan.recreate({ name: "granite" });
     await drain(hermetic.agents.recreate({ name: "granite", yes: true }));
     backend.resetMutations();

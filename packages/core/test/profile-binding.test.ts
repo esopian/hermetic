@@ -28,7 +28,7 @@ import { agentParamPath, sharedSecretPath } from "../src/backend/constants.ts";
 import { profileSlotSlug } from "../src/schema/index.ts";
 import type { Agent } from "../src/schema/index.ts";
 import { type HermeticError, isHermeticError } from "../src/errors.ts";
-import { drain, testHermetic } from "./helpers.ts";
+import { drain, onBuildHermes, testHermetic } from "./helpers.ts";
 
 // The fixture directory is process-global; each file says which account it is in.
 /** A fixture value that is still obviously a fixture (§11.3, the leak grep). */
@@ -43,6 +43,7 @@ const BOUND = "kestrel";
 
 function fleet() {
   const backend = seedFixtureFleet(new MemoryBackend({ directory: "seeded" }));
+  onBuildHermes(backend);
   const hermetic = testHermetic({
     backend,
     config: FIXTURE_CONFIG,

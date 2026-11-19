@@ -10,8 +10,22 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { ApplyRequest } from "@hermetic/core/schema";
-import { convergeOnce } from "../src/converge.ts";
+import {
+  HERMES_OPERATOR_HOLD_PATH,
+  HERMES_ROLLED_BACK_PATH,
+  NEEDS_OPERATOR,
+  convergeOnce,
+  heldResumeRequest,
+  recordRolledBack,
+  refuseRecorded,
+} from "../src/converge.ts";
+import { run } from "../src/cli.ts";
+import { HERMES_HOLD_PATH } from "../src/apply/hermes-upgrade.ts";
+import { FLEET_CACHE_PATH } from "../src/fleet.ts";
+import { USER_DATA_JSON_PATH } from "../src/userdata.ts";
+import { captureOutput } from "./quiet.ts";
 import { runConvergeLoop, type ConvergeLoopDeps } from "../src/main.ts";
+import { RESUME_RETRY_MS, UNSENT_FAILURE_PATH } from "../src/daemon.ts";
 import { makeRequestGate } from "../src/request-gate.ts";
 import { APPLIED_CONFIG_PATH, BUNDLE_DIR, INCOMING_DIR, MANIFEST_PATH } from "../src/manifest.ts";
 import { AgentdError } from "../src/errors.ts";
@@ -22,7 +36,9 @@ import {
   TEST_BUCKET,
   TEST_EVENTS_TABLE,
   TEST_NAME,
+  makeFleetManifest,
   makeManifest,
+  makeUserDataJson,
 } from "./fixtures.ts";
 import { makeAws } from "../src/aws.ts";
 import type { CommandSink } from "../src/aws.ts";
@@ -46,7 +62,15 @@ function request(overrides: Partial<ApplyRequest> = {}): ApplyRequest {
  * stage left and the record a finished apply wrote, which is what a converge
  * compares the request against.
  */
-function box(options: { configHash?: string; onDisk?: string | null; packed?: boolean } = {}) {
+function box(
+  options: {
+    configHash?: string;
+    onDisk?: string | null;
+    packed?: boolean;
+    /** The row's `apply_request`. */
+    applyRequest?: ApplyRequest;
+  } = {},
+) {
   const host = new BoxHost();
   const manifest = { ...makeManifest(), config_hash: options.configHash ?? "cafef00d" };
   if (options.onDisk !== undefined && options.onDisk !== null) {
@@ -69,6 +93,7 @@ function box(options: { configHash?: string; onDisk?: string | null; packed?: bo
       status: "ready",
       version: 3,
       resources: { config_key: `config/${TEST_NAME}/${manifest.config_hash}.tgz`, ssm_paths: [] },
+      ...(options.applyRequest ? { apply_request: options.applyRequest } : {}),
     },
   }));
   ddb.byCommand.set("UpdateCommand", () => ({}));
@@ -277,6 +302,7 @@ describe("the converge loop", () => {
     const host = new BoxHost();
     const gate = makeRequestGate<ApplyRequest>();
     const events: Array<{ action: string; detail: string }> = [];
+    const failures: Array<{ id: string; code: string }> = [];
     const control = new AbortController();
     const deps: ConvergeLoopDeps = {
       host,
@@ -286,9 +312,27 @@ describe("the converge loop", () => {
       record: async (action, detail) => {
         events.push({ action, detail });
       },
+      reportFailure: async (failed, code) => {
+        failures.push({ id: failed.id, code });
+      },
       log: () => {},
     };
-    return { gate, events, control, deps };
+    return { gate, events, failures, control, deps, host };
+  }
+
+  /** The gate's wait, aborting the loop once the fake clock has run `limitMs` past the start. */
+  function until(deps: ConvergeLoopDeps, control: AbortController, limitMs: number): ConvergeLoopDeps {
+    const end = deps.host.now().getTime() + limitMs;
+    return {
+      ...deps,
+      gate: {
+        ...deps.gate,
+        wait: async (h, ms) => {
+          if (h.now().getTime() >= end) control.abort();
+          await deps.gate.wait(h, ms);
+        },
+      },
+    };
   }
 
   test("an applied converge lands on the agent's event log", async () => {
@@ -345,5 +389,301 @@ describe("the converge loop", () => {
     expect(events[0]?.action).toBe("apply");
     expect(events[0]?.detail).toContain("converge to config cafef00d failed");
     expect(events[0]?.detail).toContain("dpkg lock");
+  });
+
+  test("a failure is reported on the row with hermeticd's code", async () => {
+    const { gate, failures, control, deps } = loop(async () => {
+      throw new AgentdError("HERMES_BACKUP_FAILED", "the copy did not validate");
+    });
+    gate.onRequest(request());
+
+    const running = runConvergeLoop(deps);
+    await Promise.resolve();
+    control.abort();
+    await running;
+
+    expect(failures).toEqual([{ id: "req-1", code: "HERMES_BACKUP_FAILED" }]);
+  });
+
+  test("a deferred or applied converge reports no failure", async () => {
+    const { gate, failures, control, deps } = loop(async () => ({
+      kind: "applied" as const,
+      config_hash: "cafef00d",
+    }));
+    gate.onRequest(request());
+
+    const running = runConvergeLoop(deps);
+    await Promise.resolve();
+    control.abort();
+    await running;
+
+    expect(failures).toEqual([]);
+  });
+
+  test("a held box with nothing pending asks for its resume again on the tick, after a back-off", async () => {
+    const { control, deps, host } = loop(async () => {
+      throw new AgentdError("COMMAND_FAILED", "uv sync: could not resolve host");
+    });
+    const asked: number[] = [];
+    const resume = async (): Promise<ApplyRequest> => {
+      asked.push(host.now().getTime());
+      return request({ id: `resume-held-swap-${asked.length}` });
+    };
+
+    await runConvergeLoop(until({ ...deps, resume }, control, 3 * RESUME_RETRY_MS));
+
+    expect(asked.length).toBeGreaterThanOrEqual(3);
+    for (let i = 1; i < asked.length; i += 1) {
+      expect(asked[i]! - asked[i - 1]!).toBeGreaterThanOrEqual(RESUME_RETRY_MS);
+    }
+  });
+
+  test("a failure that waits for an operator is not resumed by the box itself", async () => {
+    const { control, deps, failures } = loop(async () => {
+      throw new AgentdError("HERMES_RESTORE_FAILED", "the units stay held");
+    });
+    let asked = 0;
+    const resume = async (): Promise<ApplyRequest> => {
+      asked += 1;
+      return request({ id: `resume-held-swap-${asked}` });
+    };
+
+    await runConvergeLoop(until({ ...deps, resume }, control, 3 * RESUME_RETRY_MS));
+
+    expect(asked).toBe(1);
+    expect(failures).toEqual([{ id: "resume-held-swap-1", code: "HERMES_RESTORE_FAILED" }]);
+  });
+
+  test("a failure report DynamoDB did not take is kept and sent on a later tick", async () => {
+    const { gate, control, deps, host } = loop(async () => {
+      throw new AgentdError("HERMES_ROLLBACK_FAILED", "the rollback failed too");
+    });
+    let attempts = 0;
+    const sent: Array<{ id: string; code: string }> = [];
+    gate.onRequest(request());
+
+    await runConvergeLoop(
+      until(
+        {
+          ...deps,
+          reportFailure: async (failed, code) => {
+            attempts += 1;
+            if (attempts <= 2) throw new Error("ECONNRESET");
+            sent.push({ id: failed.id, code });
+          },
+        },
+        control,
+        5 * 60_000,
+      ),
+    );
+
+    expect(attempts).toBe(3);
+    expect(sent).toEqual([{ id: "req-1", code: "HERMES_ROLLBACK_FAILED" }]);
+    expect(host.files.has(UNSENT_FAILURE_PATH)).toBe(false);
+  });
+});
+
+/**
+ * The record a rollback or a failed rollback leaves (`HERMES_ROLLED_BACK_PATH`)
+ * is read by every way an apply starts, and survives the process that wrote it.
+ */
+describe("a refused configuration outlives hermeticd", () => {
+  captureOutput();
+
+  const rolledBack = (host: BoxHost, code: "HERMES_UPGRADE_ROLLED_BACK" | "HERMES_ROLLBACK_FAILED") =>
+    recordRolledBack(host, new AgentdError(code, "the swap failed"), "cafef00d", ["req-1"]);
+
+  /** A booted box whose config stage fetched the row's config: what `04-apply` runs against. */
+  function staged(applyRequest?: ApplyRequest) {
+    const b = box(applyRequest ? { applyRequest } : {});
+    b.host.seed(USER_DATA_JSON_PATH, makeUserDataJson());
+    b.host.seed(FLEET_CACHE_PATH, JSON.stringify(makeFleetManifest()));
+    b.host.seed(MANIFEST_PATH, JSON.stringify(b.manifest));
+    const stage = () =>
+      run(["apply"], b.host, { aws: () => b.deps.aws }).catch((e: unknown) => e as AgentdError);
+    return { ...b, stage };
+  }
+
+  test("a reboot's `hermeticd apply` stage does not swap a rolled-back config again", async () => {
+    for (const row of [request(), undefined]) {
+      const { host, stage } = staged(row);
+      await rolledBack(host, "HERMES_UPGRADE_ROLLED_BACK");
+      const record = host.files.get(HERMES_ROLLED_BACK_PATH)?.content;
+
+      expect(((await stage()) as AgentdError).code).toBe("HERMES_UPGRADE_ROLLED_BACK");
+      expect(host.commands.some((c) => c.startsWith("systemctl"))).toBe(false);
+      expect(host.files.get(HERMES_ROLLED_BACK_PATH)?.content).toBe(record);
+    }
+  });
+
+  test("…and a new laptop request lets the stage apply it", async () => {
+    const { host, stage } = staged(request({ id: "req-2" }));
+    await rolledBack(host, "HERMES_UPGRADE_ROLLED_BACK");
+
+    expect(await stage()).toBe(0);
+    expect(host.commands.some((c) => c.startsWith("systemctl enable"))).toBe(true);
+    expect(host.files.has(HERMES_ROLLED_BACK_PATH)).toBe(false);
+  });
+
+  test("an operator hold survives a restart: no resume, the row's request refused and reported, a new one applies", async () => {
+    const { host, deps } = box({ applyRequest: request() });
+    host.seed(HERMES_HOLD_PATH, "2026-09-10T00:00:00.000Z\n");
+    await rolledBack(host, "HERMES_ROLLBACK_FAILED");
+
+    // `serve` starts again: fresh loop state, and the first heartbeat re-delivers the row's request.
+    expect(await heldResumeRequest(host)).toBeNull();
+    const gate = makeRequestGate<ApplyRequest>();
+    gate.onRequest(request());
+    const control = new AbortController();
+    const failures: Array<{ id: string; code: string }> = [];
+    await runConvergeLoop({
+      host,
+      gate: { ...gate, wait: async () => control.abort() },
+      signal: control.signal,
+      run: (r) => convergeOnce(deps, r, idle),
+      resume: () => heldResumeRequest(host),
+      record: async () => {},
+      reportFailure: async (failed, code) => {
+        failures.push({ id: failed.id, code });
+      },
+      log: () => {},
+    });
+
+    expect(failures).toEqual([{ id: "req-1", code: "HERMES_ROLLBACK_FAILED" }]);
+    expect(host.commands.some((c) => c.startsWith("systemctl"))).toBe(false);
+    expect(host.files.has(HERMES_HOLD_PATH)).toBe(true);
+
+    // A config with a different hash is held too: the hold is the box's, not the config's.
+    host.files.delete(HERMES_HOLD_PATH);
+    const other = box({ configHash: "0therc0f", applyRequest: request() });
+    other.host.seed(HERMES_ROLLED_BACK_PATH, host.files.get(HERMES_ROLLED_BACK_PATH)!.content);
+    const err = await convergeOnce(other.deps, request(), idle).catch((e: unknown) => e);
+    expect((err as AgentdError).code).toBe("HERMES_ROLLBACK_FAILED");
+
+    // The operator asks again.
+    expect(await convergeOnce(other.deps, request({ id: "req-2" }), idle)).toMatchObject({
+      kind: "applied",
+    });
+    expect(other.host.files.has(HERMES_ROLLED_BACK_PATH)).toBe(false);
+  });
+
+  test("an operator hold on the config the box records is refused or re-applied, never current", async () => {
+    const { host, deps } = box({ onDisk: "cafef00d" });
+    await rolledBack(host, "HERMES_ROLLBACK_FAILED");
+
+    const err = await convergeOnce(deps, request(), idle).catch((e: unknown) => e);
+    expect((err as AgentdError).code).toBe("HERMES_ROLLBACK_FAILED");
+
+    expect(await convergeOnce(deps, request({ id: "req-2" }), idle)).toMatchObject({ kind: "applied" });
+    expect(host.files.has(HERMES_ROLLED_BACK_PATH)).toBe(false);
+  });
+
+  test("a held box's own resume never applies a rolled-back config; a new laptop request does", async () => {
+    const { host } = box();
+    host.seed(HERMES_HOLD_PATH, "2026-09-10T00:00:00.000Z\n");
+    await rolledBack(host, "HERMES_UPGRADE_ROLLED_BACK");
+    const record = host.files.get(HERMES_ROLLED_BACK_PATH)?.content;
+
+    const err = await refuseRecorded(host, "cafef00d", async () =>
+      request({ id: "resume-held-swap-x" }),
+    ).catch((e: unknown) => e);
+    expect((err as AgentdError).code).toBe("HERMES_UPGRADE_ROLLED_BACK");
+    expect(host.files.get(HERMES_ROLLED_BACK_PATH)?.content).toBe(record);
+
+    // A laptop request, listed or not, still finishes or undoes the held swap.
+    await refuseRecorded(host, "cafef00d", async () => request({ id: "req-2" }));
+    await refuseRecorded(host, "cafef00d", async () => request());
+  });
+
+  test("an operator hold whose record cannot be written still stops the box's own resume after a restart", async () => {
+    const { host } = box();
+    host.seed(HERMES_HOLD_PATH, "2026-09-10T00:00:00.000Z\n");
+    // req-1 (issued at 00:00) failed five minutes later.
+    host.clock = new Date("2026-09-10T00:05:00.000Z");
+    host.writeFaults.push((path) =>
+      path === HERMES_ROLLED_BACK_PATH ? new Error("ENOSPC: no space left on device") : null,
+    );
+    const events: Array<{ message: string; level?: string }> = [];
+    await recordRolledBack(
+      host,
+      new AgentdError("HERMES_RESTORE_FAILED", "the restore failed"),
+      "cafef00d",
+      ["req-1"],
+      (e) => events.push(e),
+    );
+    expect(host.files.has(HERMES_ROLLED_BACK_PATH)).toBe(false);
+    expect(events.some((e) => e.level === "warn" && e.message.includes("not recorded"))).toBe(true);
+
+    // `serve` starts again with no record on disk.
+    expect(await heldResumeRequest(host)).toBeNull();
+
+    // The operator asks again: the apply let through drops the marker.
+    await refuseRecorded(host, "cafef00d", async () =>
+      request({ id: "req-2", issued_at: "2026-09-10T00:10:00.000Z" }),
+    );
+    expect(host.files.has(HERMES_OPERATOR_HOLD_PATH)).toBe(false);
+    expect(await heldResumeRequest(host)).not.toBeNull();
+  });
+
+  /** req-1 failed with HERMES_RESTORE_FAILED at 00:05 and only the marker could be written. */
+  async function markerOnly() {
+    const b = box({ applyRequest: request() });
+    const { host } = b;
+    host.seed(HERMES_HOLD_PATH, "2026-09-10T00:00:00.000Z\n");
+    host.clock = new Date("2026-09-10T00:05:00.000Z");
+    host.writeFaults.push((path) =>
+      path === HERMES_ROLLED_BACK_PATH ? new Error("ENOSPC: no space left on device") : null,
+    );
+    await recordRolledBack(
+      host,
+      new AgentdError("HERMES_RESTORE_FAILED", "the restore failed"),
+      "cafef00d",
+      ["req-1"],
+    );
+    host.writeFaults.length = 0;
+    expect(host.files.has(HERMES_ROLLED_BACK_PATH)).toBe(false);
+    expect(host.files.has(HERMES_OPERATOR_HOLD_PATH)).toBe(true);
+    return b;
+  }
+
+  test("an unrecorded operator hold refuses the failed request re-delivered after a restart, and any request issued before it", async () => {
+    const { host, deps } = await markerOnly();
+    host.advance(60_000);
+
+    for (const asked of [
+      request(),
+      request({ id: "req-0", issued_at: "2026-09-10T00:04:59.000Z" }),
+      request({ id: "resume-held-swap-x", issued_at: "2026-09-10T00:06:00.000Z" }),
+      null,
+    ]) {
+      const err = await refuseRecorded(host, "cafef00d", async () => asked).catch((e: unknown) => e);
+      expect(NEEDS_OPERATOR.has((err as AgentdError).code)).toBe(true);
+      expect(host.files.has(HERMES_OPERATOR_HOLD_PATH)).toBe(true);
+    }
+    // The converge the heartbeat hands over is refused before anything is applied.
+    const err = await convergeOnce(deps, request(), idle).catch((e: unknown) => e);
+    expect(NEEDS_OPERATOR.has((err as AgentdError).code)).toBe(true);
+    expect(host.commands.some((c) => c.startsWith("systemctl"))).toBe(false);
+  });
+
+  test("…while a request issued after the hold passes it and drops the marker", async () => {
+    const { host } = await markerOnly();
+    await refuseRecorded(host, "cafef00d", async () =>
+      request({ id: "req-2", issued_at: "2026-09-10T00:06:00.000Z" }),
+    );
+    expect(host.files.has(HERMES_OPERATOR_HOLD_PATH)).toBe(false);
+  });
+
+  test("a stale rolled-back record for another config does not let the failed request past the marker", async () => {
+    const { host } = await markerOnly();
+    host.seed(
+      HERMES_ROLLED_BACK_PATH,
+      `${JSON.stringify({ config_hash: "0therc0f", request_ids: ["req-0"], code: "HERMES_UPGRADE_ROLLED_BACK" })}\n`,
+    );
+
+    const err = await refuseRecorded(host, "cafef00d", async () => request()).catch((e: unknown) => e);
+
+    expect(NEEDS_OPERATOR.has((err as AgentdError).code)).toBe(true);
+    expect(host.files.has(HERMES_OPERATOR_HOLD_PATH)).toBe(true);
   });
 });

@@ -10,12 +10,15 @@ import type { BoxAddress, HermesChatOptions } from "./hermes-chat-types.ts";
 import type { Rpc } from "./hermes-chat-rpc.ts";
 import { arr, isoOrNull, num, rec, str } from "./hermes-chat-wire.ts";
 import { botDeliveryPreview } from "./bot-delivery.ts";
+import { displacedRoot, type MovedBotChats } from "./hermes-chat-moved.ts";
 import { processNoticePreview } from "./process-notice.ts";
 import type { ChatRole, Session, SessionKind, SessionOrigin } from "../../schema/index.ts";
 
 /** What `createChatSessions` needs, and nothing more. */
 export interface ChatSessionsDeps {
   connect(box: BoxAddress, signal: AbortSignal | undefined): Promise<Rpc>;
+  /** The moved-aside Bot Chats the listing window may have lost; absent, the window is all there is. */
+  moved?: MovedBotChats | undefined;
 }
 
 export function createChatSessions(deps: ChatSessionsDeps) {
@@ -27,7 +30,26 @@ export function createChatSessions(deps: ChatSessionsDeps) {
     checkAbort(opts.signal, "chat.sessions");
     const rpc = await deps.connect(box, opts.signal);
     try {
-      return mapSessions(box, bot, await listSessions(rpc, bot));
+      const raw = await listSessions(rpc, bot);
+      const listed = arr(rec(raw)?.sessions ?? raw);
+      // Only a gateway-minted Bot Chat (or none) can have moved-aside ones before it.
+      const holder = listed.map(rec).find((r) => (str(r?.root_title) ?? str(r?.title)) === "Bot Chat");
+      const current = str(holder?.id) ?? "";
+      if (!deps.moved || (holder && !current.startsWith("local-")))
+        return mapSessions(box, bot, listed);
+      const ids = new Set(listed.map((r) => str(rec(r)?.id)));
+      // The walk is extra history, never the listing itself: a box whose dashboard
+      // cannot answer it still lists what the window holds.
+      const moved = await deps.moved
+        .moved((m, p) => rpc.request(m, p), box, bot, current, opts)
+        .catch((error: unknown) => {
+          if (opts.signal?.aborted) throw error;
+          return [];
+        });
+      return mapSessions(box, bot, [
+        ...listed,
+        ...moved.filter((m) => !ids.has(str(m.row.id))).map((m) => m.row),
+      ]);
     } finally {
       rpc.close();
     }
@@ -55,11 +77,14 @@ export function createChatSessions(deps: ChatSessionsDeps) {
 export function mapSessions(box: BoxAddress, bot: string, raw: unknown): Session[] {
   const rows = arr(rec(raw)?.sessions ?? raw);
   const out: Session[] = [];
+  const displaced: Session[] = [];
+  /** Upstream's started_at per displaced row, so the newest can stand in for a missing Bot Chat. */
+  const started = new Map<Session, number>();
   for (const entry of rows) {
     const row = rec(entry);
     const id = str(row?.session_id) ?? str(row?.id) ?? str(row?.stored_session_id);
-    if (!id || (str(row?.profile) && row?.profile !== bot)) continue;
-    out.push({
+    if (!row || !id || (str(row?.profile) && row?.profile !== bot)) continue;
+    const session: Session = {
       id,
       instance: box.instance,
       bot: str(row?.profile) ?? str(row?.bot) ?? bot,
@@ -99,9 +124,27 @@ export function mapSessions(box: BoxAddress, bot: string, raw: unknown): Session
       ),
       unread: 0,
       turn_count: Math.max(0, Math.trunc(num(row?.message_count) ?? num(row?.turn_count) ?? 0)),
-    });
+    };
+    if (!displacedRoot(row)) {
+      out.push(session);
+      continue;
+    }
+    displaced.push(session);
+    started.set(session, num(row.started_at) ?? 0);
   }
-  return out;
+  if (displaced.length === 0) return out;
+  // A Bot Chat upstream moved aside is the canonical conversation's earlier
+  // history (`render/hermes-canonical.ts`), never a thread of its own: its
+  // turns count toward the canonical row, and with no current Bot Chat the
+  // newest of them is the canonical one.
+  const turns = displaced.reduce((sum, s) => sum + s.turn_count, 0);
+  const current = out.find((s) => s.kind === "canonical");
+  if (current) {
+    current.turn_count += turns;
+    return out;
+  }
+  const newest = displaced.reduce((a, b) => ((started.get(b) ?? 0) > (started.get(a) ?? 0) ? b : a));
+  return [{ ...newest, kind: "canonical", turn_count: turns }, ...out];
 }
 
 const SESSION_KINDS = new Set<string>(["canonical", "thread", "routine"]);

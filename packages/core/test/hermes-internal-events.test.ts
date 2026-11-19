@@ -28,6 +28,27 @@ describe("hermes internal events", () => {
     ).toBeNull();
   });
 
+  test("Hermes v0.23.1's new broadcasts and side channels are internal (G3, G5)", () => {
+    for (const name of [
+      "projects.changed",
+      "skills.changed",
+      "onboarding.ended",
+      "free_tier.challenge",
+      "voice.partial",
+      "agent.print",
+      "bot_relay.outbox.pending",
+      "preview.open",
+      "preview.close",
+      "billing.step_up.verification",
+      "tool.progress",
+    ])
+      expect(isHermesInternalEvent(name), name).toBe(true);
+    // Kept for boxes still on v0.21.5.
+    expect(isHermesInternalEvent("layout.apply")).toBe(true);
+    // Mapped by the turn: it closes approval cards, so it is never dropped unread.
+    expect(isHermesInternalEvent("approval.cancelled")).toBe(false);
+  });
+
   test("an event this build cannot read is not internal, so it still renders", () => {
     expect(isHermesInternalEvent("workspace.checkpoint")).toBe(false);
     // Mapped or deliberately left to render: dropping any of these blanks a row.

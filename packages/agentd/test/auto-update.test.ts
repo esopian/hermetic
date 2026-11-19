@@ -17,7 +17,9 @@ import { makeAws } from "../src/aws.ts";
 import { BOOTSTRAP_UNIT } from "../src/bootstrap.ts";
 import { FLEET_CACHE_PATH } from "../src/fleet.ts";
 import { HERMETICD_PATH, STAGES_DIR } from "../src/stages.ts";
-import { BOOT_ID_PATH, INSTALL_LOCK_PATH } from "../src/install-lock.ts";
+import { APPLY_LOCK_PATH, BOOT_ID_PATH, INSTALL_LOCK_PATH } from "../src/install-lock.ts";
+import { HERMES_HOLD_PATH } from "../src/apply/hermes-upgrade.ts";
+import { convergeOnce } from "../src/converge.ts";
 import {
   EMPTY_UPDATE_STATE,
   UPDATE_STATE_PATH,
@@ -48,6 +50,12 @@ const output = captureOutput();
 
 const enc = (text: string): Uint8Array => new TextEncoder().encode(text);
 const BINARY = "ELF-hermeticd";
+const applyRequest = {
+  id: "req-1",
+  config_hash: "cafef00d",
+  issued_at: "2026-09-10T00:00:00.000Z",
+  issued_by: "evan",
+};
 const NEW_BINARY = "ELF-hermeticd-0.2.0";
 
 /** A release manifest, with the switch as given; `undefined` leaves the field out. */
@@ -450,6 +458,65 @@ describe("maybeUpdate's auto check", () => {
     // The same box, asked for a full update, still takes the release: the
     // switch gates the backstop only.
     expect(await maybeUpdate(host, deps)).toMatchObject({ binaryChanged: true });
+  });
+});
+
+describe("maybeUpdate never restarts hermeticd under an apply", () => {
+  test("defers while an apply holds the apply lock, and goes ahead once it is released", async () => {
+    const { host, deps, keysFetched } = rig(release(NEW_BINARY, false));
+    host.livePids.add(4242);
+    const lock = JSON.stringify({
+      holder: "apply",
+      pid: 4242,
+      boot_id: null,
+      taken_at: "2026-09-01T11:59:00Z",
+    });
+    host.seed(APPLY_LOCK_PATH, lock);
+
+    expect(await maybeUpdate(host, deps)).toBeNull();
+    expect(keysFetched()).toEqual([]);
+    expect(host.files.get(HERMETICD_PATH)?.content).toBe(BINARY);
+
+    host.livePids.delete(4242);
+    expect(await maybeUpdate(host, deps)).toMatchObject({ binaryChanged: true });
+  });
+
+  test("a held box with no apply running still takes the release; serve resumes the swap", async () => {
+    const { host, deps } = rig(release(NEW_BINARY, false));
+    host.seed(HERMES_HOLD_PATH, "2026-09-01T11:59:00.000Z\n");
+
+    expect(await maybeUpdate(host, deps)).toMatchObject({ binaryChanged: true });
+    expect(host.files.has(HERMES_HOLD_PATH)).toBe(true);
+  });
+
+  test("holds the apply lock through its restart, so a converge started meanwhile defers", async () => {
+    const { host, deps } = rig(release(NEW_BINARY, false));
+    const outcomes: unknown[] = [];
+    const exec = host.exec.bind(host);
+    host.exec = async (argv, opts) => {
+      if (argv.join(" ") === "systemctl restart hermeticd.service") {
+        const converge = { ...deps, paramPrefix: `/hermes/fleet/${TEST_NAME}/` };
+        outcomes.push(await convergeOnce(converge, applyRequest, async () => false));
+      }
+      return exec(argv, opts);
+    };
+
+    expect(await maybeUpdate(host, deps)).toMatchObject({ binaryChanged: true, restarted: true });
+    expect(outcomes).toEqual([{ kind: "deferred", reason: "another hermeticd apply is running" }]);
+    // This fake restart returns, as a failed one would: the lock goes with it.
+    expect(host.files.has(APPLY_LOCK_PATH)).toBe(false);
+  });
+
+  test("releases the apply lock when the update fails or finds nothing to do", async () => {
+    const r = rig(release(BINARY, false));
+    expect(await maybeUpdate(r.host, r.deps)).toMatchObject({ upToDate: true });
+    expect(r.host.files.has(APPLY_LOCK_PATH)).toBe(false);
+    expect(await maybeUpdate(r.host, r.deps, { auto: true })).toBe("off");
+    expect(r.host.files.has(APPLY_LOCK_PATH)).toBe(false);
+
+    r.publish(brokenRelease(r));
+    await expect(maybeUpdate(r.host, r.deps)).rejects.toThrow();
+    expect(r.host.files.has(APPLY_LOCK_PATH)).toBe(false);
   });
 });
 

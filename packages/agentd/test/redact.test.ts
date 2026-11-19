@@ -207,6 +207,29 @@ describe("the high-entropy fallback", () => {
     );
   });
 
+  /**
+   * Live 2026-11-16: the journal printed `/data/hermetic-backups/«redacted»`,
+   * the one path the upgrade runbook sends the operator to read.
+   */
+  test("a Hermes backup directory survives; a token beside it does not", () => {
+    for (const name of [
+      "hermes-v2026.9.24-20261116T221216Z",
+      "post-v0.23.1-20261116T214213Z",
+      "hermes-v2026.10.30-20261116T221216Z.2",
+    ]) {
+      const line = `Hermes backup taken at /data/hermetic-backups/${name}`;
+      expect(redactValue(line)).toBe(line);
+      expect(looksSecret(name)).toBe(false);
+    }
+    const token = "Xk7Qp2LmRt9VbNc4ZfWyJh6Ds1Ag8Ue5Ko3Ii0Pq";
+    expect(redactValue(`/data/hermetic-backups/${token}`)).toBe(`/data/hermetic-backups/${REDACTED}`);
+    expect(redactValue(`/data/hermetic-backups/hermes-${token}-20261116T221216Z`)).toContain(REDACTED);
+    expect(redactValue("Authorization: Bearer abcDEF1234567890ghijKLMNopqrstUVWX")).toBe(
+      `Authorization: Bearer ${REDACTED}`,
+    );
+    expect(redactValue(`key ${REAL_KEY}`)).toBe(`key ${REDACTED}`);
+  });
+
   test("a short token is not long enough to be worth guessing about", () => {
     expect(looksSecret("Ab1Cd2Ef3Gh4Ij5Kl6")).toBe(false);
   });

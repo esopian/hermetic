@@ -282,6 +282,8 @@ export {
   MANAGED_ENV_BEGIN,
   MANAGED_ENV_END,
   hermesConfigGetArgv,
+  hermesTagVersion,
+  HERMES_CLI_ENV,
 } from "./hermes.ts";
 export { hermesConfigLeaves, hermesOwnedDrift } from "./hermes-owned.ts";
 export type { OwnedKeyDrift } from "./hermes-owned.ts";

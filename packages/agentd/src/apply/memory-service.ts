@@ -12,15 +12,18 @@
  * The credential the server's own model calls use is `secrets.ts`
  * (`materialiseMemoryLlm`).
  *
- * Every step runs as the `hermes` account, not as root, for the reason
+ * Every step but the managed Python (root's, on the root volume) runs as the
+ * `hermes` account, not as root, for the reason
  * `installAccountDir` gives: all of it lives under `/data/hermes`, whose names
  * the account can replace with symlinks, so a root write there could be
  * steered anywhere and an unprivileged one cannot gain anything. Every step
  * probes first, so a converged box runs no `uv`, `git` or `curl`.
  */
-import type { AgentConfig } from "@hermetic/core/schema";
+import { compareVersions, type AgentConfig } from "@hermetic/core/schema";
 import {
   HONCHO_PLUGIN_CONFIG_LINK,
+  MEMORY_PROVIDERS,
+  MEMORY_PROVIDER_IDS,
   MEMORY_SERVICE_ROOT,
   MEMORY_SERVICE_UNIT,
   MEMORY_SERVICE_UNITS,
@@ -35,6 +38,7 @@ import {
   memoryServiceOf,
   type MemoryProvider,
   type MemoryServiceId,
+  type MemoryServicePlugin,
   type MemoryServiceSpec,
 } from "@hermetic/core/shared";
 import { asHermes, installAccountDir } from "../account-dirs.ts";
@@ -53,7 +57,9 @@ import {
   MEMORY_PIN_MARKER,
   NET_ATTEMPTS,
   NET_RETRY_MS,
+  PLUGIN_REF_MARKER,
   ensureCheckout,
+  ensureManagedPython,
   writeAsHermes,
 } from "./memory-shared.ts";
 import type { ApplyResult } from "./shared.ts";
@@ -133,19 +139,28 @@ export function assertMemoryPin(manifest: AgentConfig): void {
  * 2. the venv, and the pinned packages in it, recorded in `MEMORY_PIN_MARKER`;
  * 3. the model file, when the spec seeds one, verified by size and sha256;
  *    for prism, fastembed's model and tiktoken's encoding (`ensurePrismCaches`);
- * 4. the Hermes plugin: a catalog checkout at its pinned commit when the spec
- *    names one, else the one hermeticd ships (`BUNDLED_MEMORY_PLUGINS`), if any.
+ * 4. the Hermes plugin (`ensurePlugin`).
  *
- * A server built from a source checkout (honcho) replaces 2-4 with its own
+ * A server built from a source checkout (honcho) replaces 2-3 with its own
  * steps (`memory-honcho.ts`): distro Postgres, a second managed Python, the
  * checkout and its locked sync, the database cluster and the plugin's config
  * link.
  *
+ * An in-process provider with a catalog plugin (holographic) gets step 4
+ * alone. Every manifest, whatever its provider, first loses the plugin
+ * checkouts a later Hermes needed and this one does not
+ * (`removeOutdatedPlugins`).
+ *
+ * The Hermes version is the manifest's: `ensureHermes` ran before this and
+ * either found the checkout reporting it or installed it and checked that it
+ * does, failing the apply otherwise.
+ *
  * Before the files phase, so the server's directories exist, the account's,
  * before anything else could create them. After `ensureHermes`, which
- * puts `uv` and the uv-managed Python 3.11 on the box (the venv is built on
- * that interpreter, as the account, which could not install one into the
- * root-owned `UV_PYTHON_INSTALL_DIR` itself), and after `ensureAccounts`.
+ * puts `uv` on the box, and after `ensureAccounts`. The venv is built as the
+ * account on the spec's uv-managed Python, which root installs first
+ * (`ensureManagedPython`) when it is not already there: the account could not
+ * install one into the root-owned `UV_PYTHON_INSTALL_DIR` itself.
  *
  * Returns `installed: true` when any of 2-4 (or of honcho's steps) did (or,
  * on a dry run, would do) work — the caller restarts the server and Hermes
@@ -158,38 +173,38 @@ export async function ensureMemoryService(input: {
   dryRun: boolean;
   result?: ApplyResult;
 }): Promise<{ installed: boolean }> {
-  const { host, manifest, emit, dryRun: dry } = input;
-  if (!manifest.memory?.pin) return { installed: false };
+  const { host, manifest, emit, dryRun: dry, result } = input;
+  const hermes = manifest.hermes_version;
+  const removed = await removeOutdatedPlugins(host, hermes, emit, dry, result);
+  const chosen = manifest.memory?.provider;
+  if (chosen !== undefined && !isServiceId(chosen)) {
+    const plugin = await ensurePlugin(host, chosen, hermes, emit, dry, result);
+    return { installed: removed || plugin };
+  }
+  if (!manifest.memory?.pin) return { installed: removed };
   const service = serviceOf(manifest);
-  if (service === null) return { installed: false };
+  if (service === null) return { installed: removed };
   const { provider, spec } = service;
   const dir = memoryServiceDir(provider);
 
   if (!dry) await ensureServiceDirs(host, provider, dir);
   if (spec.source !== null) {
-    return ensureHoncho({
-      host,
-      spec,
-      dir,
-      emit,
-      dry,
-      ...(input.result ? { result: input.result } : {}),
-    });
+    const honcho = await ensureHoncho({ host, spec, dir, emit, dry, ...(result ? { result } : {}) });
+    const plugin = await ensurePlugin(host, provider, hermes, emit, dry, result);
+    return { installed: removed || honcho.installed || plugin };
   }
   const venv = await ensureServiceVenv(host, provider, spec, dir, emit, dry);
   const model =
     provider === "prism"
       ? await ensurePrismCaches(host, spec, dir, venv, emit, dry)
       : await ensureModel(host, provider, spec, dir, emit, dry);
-  const plugin = await ensurePlugin(host, provider, spec, emit, dry);
+  const plugin = await ensurePlugin(host, provider, hermes, emit, dry, result);
 
-  if (input.result) {
-    if (venv) input.result.installed.push(`memory:${spec.pin}`);
-    if (model && spec.model) input.result.installed.push(`model:${spec.model.file}`);
-    if (plugin)
-      input.result.installed.push(`plugin:${provider}${spec.plugin ? `@${spec.plugin.sha}` : ""}`);
+  if (result) {
+    if (venv) result.installed.push(`memory:${spec.pin}`);
+    if (model && spec.model) result.installed.push(`model:${spec.model.file}`);
   }
-  return { installed: venv || model || plugin };
+  return { installed: removed || venv || model || plugin };
 }
 
 /**
@@ -301,6 +316,8 @@ async function ensureServiceVenv(
     emit(opEvent("packages", 0.36, `${provider} server ${spec.pin} already installed`, host.now()));
     return false;
   }
+  // Hermes's own interpreter is not necessarily the spec's (3.14 from v0.23).
+  if (!hasPython) await ensureManagedPython(host, spec.python, provider, emit, dry);
   emit(opEvent("packages", 0.36, `installing the ${provider} server (${spec.pin})`, host.now()));
   if (dry) return true;
 
@@ -361,7 +378,20 @@ async function ensureModel(
   await must(host, asHermes(["rm", "-f", part]), ACCOUNT_EXEC);
   await must(
     host,
-    asHermes(["curl", "-fsSL", "--retry", String(NET_ATTEMPTS), "-o", part, model.url]),
+    asHermes([
+      "curl",
+      "-fsSL",
+      "--connect-timeout",
+      "10",
+      // curl's own bound, as on every other download hermeticd makes (`node-web.ts`).
+      "--max-time",
+      "300",
+      "--retry",
+      String(NET_ATTEMPTS),
+      "-o",
+      part,
+      model.url,
+    ]),
     { env: { ...ACCOUNT_ENV }, ...ACCOUNT_EXEC },
   );
   const size = (await host.stat(part))?.size ?? null;
@@ -447,27 +477,44 @@ async function ensurePrismCaches(
 }
 
 /**
+ * The provider's catalog checkout for the Hermes `version`, or null where that
+ * Hermes bundles the provider itself (below `hermes_min`). Hermes's memory
+ * loader lets a bundled provider win over `$HERMES_HOME/plugins/<name>`, so a
+ * checkout there would do nothing but disagree with what runs.
+ */
+function pluginFor(provider: MemoryProvider, version: string): MemoryServicePlugin | null {
+  const plugin = MEMORY_PROVIDERS[provider].plugin;
+  if (plugin?.hermes_min && compareVersions(version, plugin.hermes_min) < 0) return null;
+  return plugin;
+}
+
+/**
  * The Hermes plugin for the provider, in `hermesPluginDir(<Hermes's name for
- * it>)`: at the commit the spec pins, a sparse checkout of just the plugin's
- * subdirectory (`ensureCheckout`); with no pinned checkout, the plugin
+ * it>)`: at the commit `pluginFor` pins, a checkout of just the plugin's
+ * directory (`ensureCheckout`); with no checkout for this Hermes, the plugin
  * hermeticd embeds, written as the account (`ensureBundledPlugin`); with
  * neither, nothing (Hermes bundles it).
  */
 async function ensurePlugin(
   host: Host,
-  provider: MemoryServiceId,
-  spec: MemoryServiceSpec,
+  provider: MemoryProvider,
+  hermes: string,
   emit: Emit,
   dry: boolean,
+  result: ApplyResult | undefined,
 ): Promise<boolean> {
-  const plugin = spec.plugin;
+  const plugin = pluginFor(provider, hermes);
   const name = hermesMemoryProviderName(provider);
   if (plugin === null) {
-    const files = BUNDLED_MEMORY_PLUGINS[provider];
+    const files = isServiceId(provider) ? BUNDLED_MEMORY_PLUGINS[provider] : undefined;
     // Fatal, like a failed checkout: without it Hermes silently runs built-in memory.
-    return files ? ensureBundledPlugin(host, emit, dry, { name, files, fatal: true }) : false;
+    const wrote = files
+      ? await ensureBundledPlugin(host, emit, dry, { name, files, fatal: true })
+      : false;
+    if (wrote) result?.installed.push(`plugin:${provider}`);
+    return wrote;
   }
-  return ensureCheckout(
+  const checkedOut = await ensureCheckout(
     host,
     {
       repo: plugin.repo,
@@ -480,6 +527,44 @@ async function ensurePlugin(
     dry,
     0.38,
   );
+  if (checkedOut) result?.installed.push(`plugin:${provider}@${plugin.sha}`);
+  return checkedOut;
+}
+
+/**
+ * Remove each plugin checkout hermeticd made (`PLUGIN_REF_MARKER` inside) for
+ * a provider this Hermes bundles: what a rollback below `hermes_min` leaves.
+ * The bundled copy wins either way on v0.21.5, so this keeps the box honest
+ * rather than fixing a load; a directory without the marker is the
+ * operator's and stays. As the account, whose `$HERMES_HOME` it is in.
+ * Returns whether it removed (or, on a dry run, would remove) any.
+ */
+async function removeOutdatedPlugins(
+  host: Host,
+  hermes: string,
+  emit: Emit,
+  dry: boolean,
+  result: ApplyResult | undefined,
+): Promise<boolean> {
+  let removed = false;
+  for (const provider of MEMORY_PROVIDER_IDS) {
+    if (MEMORY_PROVIDERS[provider].plugin === null || pluginFor(provider, hermes) !== null) continue;
+    const dir = hermesPluginDir(hermesMemoryProviderName(provider));
+    // `lstat`, not a read: root only looks under the account's home, every apply.
+    if ((await host.lstat(`${dir}/${PLUGIN_REF_MARKER}`)) === null) continue;
+    emit(
+      opEvent(
+        "packages",
+        0.38,
+        `removing the ${provider} Hermes plugin checkout: Hermes ${hermes} bundles its own`,
+        host.now(),
+      ),
+    );
+    result?.changed.push(dir);
+    removed = true;
+    if (!dry) await must(host, asHermes(["rm", "-rf", dir]), ACCOUNT_EXEC);
+  }
+  return removed;
 }
 
 /** How long the units phase waits for a restarted memory server before starting Hermes anyway. */

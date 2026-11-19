@@ -21,6 +21,7 @@ import type {
 import type { Backend, DirectoryApi } from "./backend/types.ts";
 import type { HermeticdCandidate } from "./release/artifacts.ts";
 import type { HermesMirrorFn } from "./release/hermes-mirror.ts";
+import type { BoxBusy } from "./agents/upgrade-idle.ts";
 import type { BrowserMirrorFn } from "./release/browser-mirror.ts";
 import type { GitBuildInfo } from "./release/git.ts";
 import type { TailnetDnsProbe } from "./fleet/tailnet-dns.ts";
@@ -264,7 +265,14 @@ export interface HermeticDeps {
    * answering within a poll or two; the defaults (`converge.ts`) are what a
    * real fleet gets.
    */
-  rollout?: { convergeTimeoutMs?: number; convergePollMs?: number };
+  rollout?: {
+    convergeTimeoutMs?: number;
+    convergePollMs?: number;
+    /** `upgrade --now`'s wait for an idle box (`upgrade-idle.ts`); `boxBusy` replaces the gateway probe. */
+    idleTimeoutMs?: number;
+    idlePollMs?: number;
+    boxBusy?: BoxBusy;
+  };
   /**
    * Path of the compiled `hermeticd` this build ships, so `init` and `upgrade`
    * can push it (§3.6). Absent, `resolveHermeticd` is asked instead.

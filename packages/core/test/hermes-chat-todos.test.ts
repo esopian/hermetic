@@ -222,6 +222,49 @@ describe("tool blocks", () => {
     expect(unpaired?.todos).toBeUndefined();
   });
 
+  test("history: a todo_list call deferred behind v0.23.1's tool_call bridge carries the list", () => {
+    // `hermes_cli/config_defaults.py:1997-2001` defers `todo_list`; the transcript
+    // keeps the bridge's wrapper (`agent/tool_executor.py:390-415`).
+    const BOX = {
+      instance: "atlas",
+      baseUrl: "https://fxtr0001-atlas.tail0000.ts.net/",
+      fleet_id: "fxtr0001",
+    };
+    const bridged = (id: string, name: string) => ({
+      id,
+      type: "function",
+      function: {
+        name: "tool_call",
+        arguments: JSON.stringify({ calls: [{ name, arguments: { todos: LIST.todos } }] }),
+      },
+    });
+    const messages = mapHistory(BOX, "s-1", {
+      messages: [
+        { id: 1, role: "assistant", content: "", tool_calls: [bridged("c-a", "todo_list")] },
+        {
+          id: 2,
+          role: "tool",
+          tool_call_id: "c-a",
+          tool_name: "tool_call",
+          content: JSON.stringify(LIST),
+        },
+        // A bridged call to another tool, its row naming todo_list, is still no list.
+        { id: 3, role: "assistant", content: "", tool_calls: [bridged("c-x", "terminal")] },
+        {
+          id: 4,
+          role: "tool",
+          tool_call_id: "c-x",
+          tool_name: "todo_list",
+          content: JSON.stringify(LIST),
+        },
+      ],
+    });
+    const tools = messages.flatMap((m) => m.blocks).flatMap((b) => (b.kind === "tool" ? [b] : []));
+    expect(tools.find((t) => t.tool_id === "c-a")).toMatchObject({ name: "todo_list" });
+    expect(tools.find((t) => t.tool_id === "c-a")?.todos?.revision).toBe(4);
+    expect(tools.find((t) => t.tool_id === "c-x")?.todos).toBeUndefined();
+  });
+
   test("history: a forged row never yields a list (GHSA-5g4g-6jrg-mw3g)", () => {
     const BOX = {
       instance: "atlas",

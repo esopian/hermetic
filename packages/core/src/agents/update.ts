@@ -28,6 +28,8 @@ import { assertBrowserSupported } from "../release/browser-mirror.ts";
 import {
   AgentRefInput as AgentRefInputSchema,
   FLEET_KEY,
+  HERMES_OLD_VERSION_RUNNING,
+  HERMES_ROLLBACK_FAILED,
   hermesBundleKey,
   releaseKey,
   RerunInput as RerunInputSchema,
@@ -49,10 +51,19 @@ import { checkAbort } from "../abort.ts";
 import {
   CONVERGE_POLL_MS,
   HERMES_CONVERGE_TIMEOUT_MS,
+  HERMES_SWAP_CONVERGE_TIMEOUT_MS,
   convergeDeferral,
   createConverge,
+  hermesHeldDeferral,
+  hermesHeldDown,
 } from "./converge.ts";
 import { LOCK_TTL_MS } from "../fleet/fleet-lock.ts";
+import {
+  UPGRADE_IDLE_POLL_MS,
+  UPGRADE_IDLE_TIMEOUT_MS,
+  waitForIdle,
+  type BoxBusy,
+} from "./upgrade-idle.ts";
 import { followRelease, releaseIdentityOf } from "../fleet/hermeticd-rollout.ts";
 import type { CoreContext } from "../context.ts";
 
@@ -81,16 +92,31 @@ export interface UpdateDeps {
    */
   rolloutWaitMs?: number | undefined;
   rolloutPollMs?: number | undefined;
+  /** Whether a box has a session running, for `--now`'s idle wait (`upgrade-idle.ts`). */
+  boxBusy: BoxBusy;
+  /** The idle wait's budget and poll; tests shrink both. */
+  idleTimeoutMs?: number | undefined;
+  idlePollMs?: number | undefined;
 }
 
-/** What one agent's `--hermes` upgrade came to, for the run's closing tally. */
-type UpgradeOutcome = "pinned" | "converged" | "skipped" | "unconverged";
+/**
+ * What one agent's `--hermes` upgrade came to, for the run's closing tally.
+ * `refused`: the row is as it was — the box stayed busy, or failed before it
+ * touched Hermes and the previous pin was put back.
+ */
+type UpgradeOutcome = "pinned" | "converged" | "skipped" | "unconverged" | "refused";
 
 export function createUpdate(deps: UpdateDeps) {
   const { hermesRef, hermesMirror } = deps;
   const converge = createConverge({
     ctx: deps.ctx,
     timeoutMs: deps.convergeTimeoutMs ?? HERMES_CONVERGE_TIMEOUT_MS,
+    pollMs: deps.convergePollMs ?? CONVERGE_POLL_MS,
+  });
+  /** A version change waits out install, gate and rollback; the test knob shrinks both. */
+  const swapConverge = createConverge({
+    ctx: deps.ctx,
+    timeoutMs: deps.convergeTimeoutMs ?? HERMES_SWAP_CONVERGE_TIMEOUT_MS,
     pollMs: deps.convergePollMs ?? CONVERGE_POLL_MS,
   });
   const {
@@ -470,6 +496,12 @@ export function createUpdate(deps: UpdateDeps) {
     const issuedBy = await actor();
     const version = parsed.hermes as string;
     const now = parsed.now === true;
+    const idle = {
+      ctx: deps.ctx,
+      busy: deps.boxBusy,
+      timeoutMs: deps.idleTimeoutMs ?? UPGRADE_IDLE_TIMEOUT_MS,
+      pollMs: deps.idlePollMs ?? UPGRADE_IDLE_POLL_MS,
+    };
     /**
      * The command that lands a pin in place, as the no-`--now` lines name it —
      * in the order `hermetic upgrade --help` prints its usage, target first.
@@ -497,10 +529,72 @@ export function createUpdate(deps: UpdateDeps) {
      */
     async function* upgradeOne(target: Agent, index: number): AsyncGenerator<OpEvent, UpgradeOutcome> {
       const progress = barAt(index, 1);
-      let agent = await acquireLock(target, owner);
+      /**
+       * D4, before anything is written: a refused wait publishes nothing. A
+       * box that is not up has nothing running to cut and takes the pin at
+       * its next boot, so it is not waited on.
+       */
+      if (now && parsed.force !== true && convergeDeferral(target) === null) {
+        if (!(yield* waitForIdle(idle, target, barAt(index, 0.1), opts.signal))) {
+          yield evt(
+            `${target.name}:refused`,
+            progress,
+            `${target.name} not upgraded — it did not show idle within ` +
+              `${String(Math.round(idle.timeoutMs / 60_000))}m, and nothing was changed; ` +
+              `try again later, or add --force to stop Hermes mid-session`,
+            nowIso(),
+            "warn",
+          );
+          return "refused";
+        }
+      }
+      let agent = await acquireLock(await getAgent(target.name), owner);
+      // An earlier upgrade the box answered after its wait ended is settled
+      // first, so `before` is the Hermes the box actually runs.
+      try {
+        agent = (await converge.reconcileRolledBack(agent, issuedBy)).agent;
+      } catch (e) {
+        await releaseLock(agent).catch(() => undefined);
+        throw e;
+      }
+      const before = {
+        hermes_version: agent.hermes_version,
+        config_hash: agent.config_hash ?? null,
+        config_key: agent.resources.config_key,
+      };
       let asked: string | null = null;
+      let requestId: string | undefined;
       try {
         checkAbort(opts.signal, "upgrade");
+        /**
+         * `before` is what a failed swap puts back, so it must be what the box
+         * runs: a pin set without `--now` names a Hermes the box has not
+         * installed. Refused rather than read off the box, which reports no
+         * config key and a Hermes version too loose to write back as a pin.
+         */
+        if (
+          now &&
+          before.hermes_version !== version &&
+          convergeDeferral(agent) === null &&
+          (agent.applied_config_hash ?? null) !== before.config_hash
+        ) {
+          yield evt(
+            `${agent.name}:refused`,
+            progress,
+            `${agent.name} not upgraded — its box has not applied its current config ` +
+              `${before.config_hash ?? "(none)"} (hermes ${before.hermes_version}), so a failed upgrade ` +
+              `could not tell which Hermes to put back; ` +
+              // `plan rollout` defers a held row, and `agent set`/`recreate` are refused for it.
+              (hermesHeldDeferral(agent, deps.ctx.hermesVersion) !== null
+                ? `pin without --now (\`hermetic upgrade --hermes ${version} ${agent.name}\`), then ` +
+                  `\`hermetic plan rollout --agent ${agent.name}\` and \`hermetic apply\``
+                : `converge it first with \`hermetic plan rollout --agent ${agent.name}\``) +
+              `, and nothing was changed`,
+            nowIso(),
+            "warn",
+          );
+          return "refused";
+        }
         agent = await backend.store.agents.update(agent.name, agent.version, {
           hermes_version: version,
         });
@@ -551,8 +645,9 @@ export function createUpdate(deps: UpdateDeps) {
           );
           return "converged";
         }
-        agent = await converge.request(agent, rendered.config_hash, issuedBy, "upgrade");
+        agent = await converge.request(agent, rendered.config_hash, issuedBy, "upgrade", before);
         asked = rendered.config_hash;
+        requestId = agent.apply_request?.id;
       } finally {
         const latest = await backend.store.agents.get(agent.name);
         if (latest?.lock?.owner === owner) await releaseLock(latest);
@@ -564,7 +659,8 @@ export function createUpdate(deps: UpdateDeps) {
         `${agent.name} asked to apply ${asked}; waiting for the box to restart Hermes on ${version}`,
         nowIso(),
       );
-      const outcome = await converge.waitForConverge(agent.name, asked, opts.signal);
+      const waiter = before.hermes_version === version ? converge : swapConverge;
+      const outcome = await waiter.waitForConverge(agent.name, asked, opts.signal, requestId);
       // An abort ends the wait early; it is the operator hanging up, not a box
       // that stayed silent, and is reported as such rather than as unconverged.
       checkAbort(opts.signal, "converge");
@@ -577,10 +673,91 @@ export function createUpdate(deps: UpdateDeps) {
         );
         return "converged";
       }
+      if (outcome === "failed") {
+        const failed = await getAgent(agent.name);
+        const code = failed.apply_failure?.code ?? "INTERNAL";
+        if (hermesHeldDown(code)) {
+          const undo = code === HERMES_ROLLBACK_FAILED ? "roll back" : "restore its previous Hermes";
+          const why =
+            `${agent.name} failed hermes ${version} and could not ${undo} (${code}): Hermes is down on the box. ` +
+            `Nothing was deleted; \`hermetic agent history ${agent.name}\` names the backup and the ` +
+            "state moved aside";
+          yield evt(`${agent.name}:failed`, progress, why, nowIso(), "error");
+          throw new HermeticError("HERMES_UPGRADE_FAILED", why, {
+            name: agent.name,
+            hermes: version,
+            code,
+          });
+        }
+        if (!HERMES_OLD_VERSION_RUNNING.includes(code)) {
+          yield evt(
+            `${agent.name}:failed`,
+            progress,
+            `${agent.name} failed to apply config ${asked} (${code}); the pin to hermes ${version} ` +
+              `stands, so the next apply repairs forward — \`hermetic agent history ${agent.name}\` has what it said`,
+            nowIso(),
+            "warn",
+          );
+          return "unconverged";
+        }
+        /**
+         * The box still runs the version it had — it stopped before touching
+         * the checkout, or rolled back to it — so the row goes back to naming
+         * it, unless someone moved the row on since, whose pin this must not undo.
+         */
+        const rolledBack = code === "HERMES_UPGRADE_ROLLED_BACK";
+        /**
+         * The lock was given back for the wait, so another operation may hold
+         * it now. That must not turn this outcome into `--all`'s "locked;
+         * skipped": the pin waits for the next writer, which reconciles first.
+         */
+        const row = await acquireLock(failed, owner).catch((e: unknown) => {
+          if (e instanceof HermeticError && e.code === "LOCKED") return null;
+          throw e;
+        });
+        if (row !== null) {
+          try {
+            await converge.reconcileRolledBack(row, issuedBy);
+          } finally {
+            const latest = await backend.store.agents.get(row.name);
+            if (latest?.lock?.owner === owner) await releaseLock(latest);
+          }
+        }
+        const pinNow =
+          row !== null
+            ? `its pin is back to ${before.hermes_version}`
+            : `its pin could not be restored yet (another operation holds ${agent.name}'s lock); ` +
+              `the next upgrade or rollout of ${agent.name} puts it back to ${before.hermes_version}`;
+        if (rolledBack) {
+          // The new version is bad on this box: the run fails here rather than
+          // carrying it to the next one.
+          const why =
+            `${agent.name} rolled back and is running hermes ${before.hermes_version}; the upgrade to ` +
+            `${version} failed on the box (${code}), and ${pinNow} — ` +
+            `\`hermetic agent history ${agent.name}\` has the box's timeline and backup`;
+          yield evt(`${agent.name}:failed`, progress, why, nowIso(), "error");
+          throw new HermeticError("HERMES_UPGRADE_ROLLED_BACK", why, {
+            name: agent.name,
+            hermes: version,
+            running: before.hermes_version,
+            code,
+          });
+        }
+        yield evt(
+          `${agent.name}:refused`,
+          progress,
+          `${agent.name} refused hermes ${version} before touching its Hermes (${code}) and still runs ` +
+            `${before.hermes_version}; ${pinNow} — ` +
+            `\`hermetic agent history ${agent.name}\` has what it said`,
+          nowIso(),
+          "warn",
+        );
+        return "refused";
+      }
       yield evt(
         `${agent.name}:unconverged`,
         progress,
-        converge.unconvergedMessage(agent.name, asked),
+        waiter.unconvergedMessage(agent.name, asked),
         nowIso(),
         "warn",
       );
@@ -604,6 +781,7 @@ export function createUpdate(deps: UpdateDeps) {
     let converged = 0;
     let deferred = 0;
     let unconverged = 0;
+    let refused = 0;
     for (const [index, target] of targets.entries()) {
       checkAbort(opts.signal, "upgrade");
       let outcome: UpgradeOutcome;
@@ -627,7 +805,22 @@ export function createUpdate(deps: UpdateDeps) {
           locked += 1;
           continue;
         }
+        const rest = targets.slice(index + 1).map((a) => a.name);
+        if (
+          e instanceof HermeticError &&
+          (e.code === "HERMES_UPGRADE_ROLLED_BACK" || e.code === "HERMES_UPGRADE_FAILED") &&
+          rest.length > 0
+        ) {
+          throw new HermeticError(e.code, `${e.message}; not attempted: ${rest.join(", ")}`, {
+            ...e.details,
+            not_attempted: rest,
+          });
+        }
         throw e;
+      }
+      if (outcome === "refused") {
+        refused += 1;
+        continue;
       }
       done += 1;
       if (outcome === "converged") converged += 1;
@@ -644,9 +837,10 @@ export function createUpdate(deps: UpdateDeps) {
         "done",
         1,
         `pinned ${done} agent(s) to hermes ${version}: ${converged} converged, ` +
-          `${skipped} skipped, ${unconverged} unconverged`,
+          `${skipped} skipped, ${unconverged} unconverged` +
+          (refused === 0 ? "" : `; ${refused} refused and left as they were`),
         nowIso(),
-        skipped + unconverged === 0 ? undefined : "warn",
+        skipped + unconverged + refused === 0 ? undefined : "warn",
       );
       return;
     }

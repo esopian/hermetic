@@ -24,6 +24,7 @@ import {
   drain,
   freshFleet,
   installTestStages,
+  onBuildHermes,
   testHermetic,
   settle,
 } from "./helpers.ts";
@@ -38,6 +39,16 @@ import {
 function seeded(directory: FixtureDirectoryMode = "absent") {
   const backend = seedFixtureFleet(new MemoryBackend({ directory }));
   return { backend, hermetic: testHermetic({ backend, config: FIXTURE_CONFIG }) };
+}
+
+/**
+ * `seeded()` with every live row on this build's Hermes: `set` and `recreate`
+ * refuse a row held on another (§6.5), and the fixture seeds most rows older.
+ */
+function seededOnPin() {
+  const fleet = seeded();
+  onBuildHermes(fleet.backend);
+  return fleet;
 }
 
 /**
@@ -166,7 +177,7 @@ describe("agents.history", () => {
 
 describe("agents.set", () => {
   test("records the change and says when it takes effect", async () => {
-    const { backend, hermetic } = seeded();
+    const { backend, hermetic } = seededOnPin();
     const next = await hermetic.agents.set({ name: "fathom", secrets: "bitwarden", size: "large" });
     expect(next.secrets_mode).toBe("bitwarden");
     expect(next.size).toBe("large");
@@ -184,7 +195,7 @@ describe("agents.set", () => {
    * invisible on the box.
    */
   test("re-renders the config so a rerun carries the change", async () => {
-    const { hermetic } = seeded();
+    const { hermetic } = seededOnPin();
     const before = await hermetic.agents.get("fathom");
     const next = await hermetic.agents.set({
       name: "fathom",
@@ -197,7 +208,7 @@ describe("agents.set", () => {
 
   /** `--model X` states one field; it must not clear the rest (§6.4). */
   test("merges hermes settings rather than replacing them", async () => {
-    const { hermetic } = seeded();
+    const { hermetic } = seededOnPin();
     await hermetic.agents.set({ name: "fathom", hermes: { max_turns: 40 } });
     // A granted Bedrock model: `fathom` is a bedrock row and the grant check
     // now covers this door too.
@@ -235,7 +246,7 @@ describe("agents.set", () => {
   });
 
   test("setting a value on a row from before --hold leaves it without a list", async () => {
-    const { hermetic } = seeded();
+    const { hermetic } = seededOnPin();
     expect((await hermetic.agents.get("fathom")).hermes_hold).toBeUndefined();
     const next = await hermetic.agents.set({ name: "fathom", hermes: { max_turns: 40 } });
     expect(next.hermes_hold).toBeUndefined();
@@ -249,7 +260,7 @@ describe("agents.set", () => {
    * restart — which is `apply`'s job, not `set`'s.
    */
   test("switching to a keyed provider is staged, not applied", async () => {
-    const { hermetic } = seeded();
+    const { hermetic } = seededOnPin();
     const next = await hermetic.agents.set({ name: "fathom", provider: "openrouter" });
     expect(next.provider).toBe("bedrock");
     expect(next.pending).toMatchObject({
@@ -264,7 +275,7 @@ describe("agents.set", () => {
   /** A switch resets the model: a model id from one catalog aimed at another
    * provider's endpoint is not a setting worth carrying over. */
   test("a profile switch resets the model unless one is stated in the same call", async () => {
-    const { hermetic } = seeded();
+    const { hermetic } = seededOnPin();
     // A model the fleet's role may actually invoke: `fathom` is on Bedrock, and
     // a bare `--model` on an unstaged row is checked against the grant.
     await hermetic.agents.set({ name: "fathom", model: "zai.glm-4.7-flash" });
@@ -303,7 +314,7 @@ describe("agents.set", () => {
    * agent on" has one answer wherever it is asked (§8.3).
    */
   test("--refresh-profile on a legacy row picks up the fleet's designation", async () => {
-    const { hermetic } = seeded();
+    const { hermetic } = seededOnPin();
     const next = await hermetic.agents.set({ name: "fathom", refresh_profile: true });
     expect(next.pending).toMatchObject({
       provider: "bedrock",
@@ -317,7 +328,7 @@ describe("agents.set", () => {
    * re-pins that one rather than refusing or moving it to the newcomer.
    */
   test("--refresh-profile with an ambiguous designation re-pins the profile it runs on", async () => {
-    const { hermetic } = seeded();
+    const { hermetic } = seededOnPin();
     await hermetic.providers.create({
       provider: "bedrock",
       name: "bedrock-spare",
@@ -330,7 +341,7 @@ describe("agents.set", () => {
 
   /** …and a refusal when its provider has no profile at all, rather than a silent no-op. */
   test("--refresh-profile with no profile of the row's provider is refused", async () => {
-    const { backend, hermetic } = seeded();
+    const { backend, hermetic } = seededOnPin();
     const settings = backend.fleetItem!.settings!;
     const { [FIXTURE_PROFILE_IDS.bedrock]: _bedrock, ...rest } = settings.profiles!;
     backend.fleetItem = { ...backend.fleetItem!, settings: { ...settings, profiles: rest } };
@@ -351,7 +362,7 @@ describe("agents.set", () => {
    * `AccessDeniedException`, with nothing on the laptop having said so.
    */
   test("a bare --model onto an ungranted Bedrock model is MODEL_NOT_GRANTED", async () => {
-    const { backend, hermetic } = seeded();
+    const { backend, hermetic } = seededOnPin();
     const before = (await backend.store.agents.get("fathom"))!;
     expect(before.provider).toBe("bedrock");
     expect(before.pending ?? null).toBeNull();
@@ -376,7 +387,7 @@ describe("agents.set", () => {
    * guard.
    */
   test("hermes.model onto an ungranted Bedrock model is MODEL_NOT_GRANTED too", async () => {
-    const { backend, hermetic } = seeded();
+    const { backend, hermetic } = seededOnPin();
     const before = (await backend.store.agents.get("fathom"))!;
 
     let error: HermeticError | null = null;
@@ -393,7 +404,7 @@ describe("agents.set", () => {
 
   /** A granted model on the same branch still goes through, so the guard is a guard. */
   test("a bare --model onto a granted Bedrock model is written", async () => {
-    const { hermetic } = seeded();
+    const { hermetic } = seededOnPin();
     const next = await hermetic.agents.set({ name: "fathom", model: "zai.glm-4.7-flash" });
     expect(next.hermes?.model).toBe("zai.glm-4.7-flash");
     expect(next.pending ?? null).toBeNull();
@@ -900,7 +911,7 @@ describe("agents.recreate", () => {
    * and be read as this one's (§4.2).
    */
   test("stamps the fleet's release and clears the previous boot's state", async () => {
-    const { backend, hermetic } = seeded();
+    const { backend, hermetic } = seededOnPin();
     // `heron` is the seeded failure: an older hermeticd, a failed stage, and —
     // as of the rerun below — an unacked command.
     await hermetic.agents.rerun({ name: "heron" });
@@ -984,7 +995,7 @@ describe("agents.recreate", () => {
   });
 
   test("refuses an agent that is not settled", async () => {
-    const { backend, hermetic } = seeded();
+    const { backend, hermetic } = seededOnPin();
     await backend.store.agents.update("heron", backend.agents.get("heron")!.version, {
       status: "destroying",
     });
@@ -1035,7 +1046,7 @@ describe("agents.recreate", () => {
    */
   test("clears the terminated node's tailnet identity on both paths", async () => {
     for (const name of ["atlas", "heron"] as const) {
-      const { backend, hermetic } = seeded();
+      const { backend, hermetic } = seededOnPin();
       const before = (await backend.store.agents.get(name))!;
       // `atlas` is ready and drains through `stopping`; `heron` is in `error`
       // and goes straight back to `bootstrapping` — the path that cleared
@@ -1193,7 +1204,7 @@ describe("tailnet device cleanup", () => {
    * joins with. A delete after the mint would be a race the corpse wins.
    */
   test("recreate deletes the agent's devices before it mints the new auth key", async () => {
-    const { backend, hermetic } = seeded();
+    const { backend, hermetic } = seededOnPin();
     expect(hostnames(backend)).toContain("fxtr0001-corvid.hermetic.ts.net");
     expect(hostnames(backend)).toContain("fxtr0001-corvid-2.hermetic.ts.net");
 
@@ -1678,7 +1689,7 @@ describe("tailnet device cleanup", () => {
 
   /** The fleet whose OAuth client was never re-scoped: one warning, then on. */
   test("no devices:core scope is one warning and a completed op", async () => {
-    const { backend, hermetic } = seeded();
+    const { backend, hermetic } = seededOnPin();
     backend.tailscaleDevices = null;
     const events = await drain(hermetic.agents.recreate({ name: "corvid", yes: true }));
     const tailnet = events.filter((e) => e.phase === "tailnet");
@@ -1692,7 +1703,7 @@ describe("tailnet device cleanup", () => {
 
   /** A client that can read devices but not write them: the same one warning. */
   test("a forbidden delete warns once and stops trying", async () => {
-    const { backend, hermetic } = seeded();
+    const { backend, hermetic } = seededOnPin();
     backend.tailscale.deleteDevice = async (): Promise<TailscaleDeleteOutcome> => "forbidden";
     const events = await drain(hermetic.agents.recreate({ name: "corvid", yes: true }));
     const tailnet = events.filter((e) => e.phase === "tailnet");
@@ -1704,7 +1715,7 @@ describe("tailnet device cleanup", () => {
 
   /** A device somebody deleted in the console first is the state we wanted. */
   test("a device that is already gone is not news", async () => {
-    const { backend, hermetic } = seeded();
+    const { backend, hermetic } = seededOnPin();
     backend.tailscale.deleteDevice = async (): Promise<TailscaleDeleteOutcome> => "not_found";
     const events = await drain(hermetic.agents.recreate({ name: "corvid", yes: true }));
     expect(events.filter((e) => e.phase === "tailnet")).toEqual([]);
@@ -1713,7 +1724,7 @@ describe("tailnet device cleanup", () => {
 
   /** A tailnet hiccup must never fail a recreate that already killed the box. */
   test("an API failure on the delete is a warning, not a failed op", async () => {
-    const { backend, hermetic } = seeded();
+    const { backend, hermetic } = seededOnPin();
     backend.tailscale.deleteDevice = async (): Promise<TailscaleDeleteOutcome> => {
       throw new HermeticError("TAILSCALE_UNAVAILABLE", "tailscale is down (HTTP 502)", {});
     };
@@ -2213,6 +2224,7 @@ describe("an op consumed to its end records no failure", () => {
   for (const { label, run } of stops) {
     test(`${label} consumed to its done event and then abandoned writes no failed event`, async () => {
       const { backend, hermetic } = seeded();
+      if (label === "recreate") onBuildHermes(backend);
       const name = { stop: "atlas", start: "juniper", destroy: "corvid", recreate: "fathom" }[
         label
       ] as string;

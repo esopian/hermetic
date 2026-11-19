@@ -355,8 +355,61 @@ export const ApplyRequest = z.object({
   config_hash: z.string().min(1),
   issued_at: Iso,
   issued_by: z.string(),
+  /**
+   * The pin this request moved the row off, written by `upgrade --hermes V
+   * --now` when it changes the Hermes version: what the row goes back to if
+   * the box reports, even after the laptop stopped waiting, that it still runs
+   * the old Hermes (`HERMES_OLD_VERSION_RUNNING`). Optional — a rollout and an
+   * older laptop write none, and a reader that predates it drops it.
+   */
+  upgrade_from: z
+    .object({
+      hermes_version: z.string().min(1),
+      config_hash: z.string().nullable(),
+      config_key: z.string().optional(),
+    })
+    .optional(),
 });
 export type ApplyRequest = z.infer<typeof ApplyRequest>;
+
+/**
+ * A converge the box could not apply (§6.5), written by hermeticd on its own
+ * row: which request failed and hermeticd's error code. Never cleared — a
+ * reader matches `request_id` against the request it wrote, so a stale one
+ * describes an older request and says nothing about the current one.
+ * `code` is a plain string because it is hermeticd's vocabulary
+ * (`AgentdErrorCode`), not core's.
+ */
+export const ApplyFailure = z.object({
+  request_id: z.string(),
+  config_hash: z.string().min(1),
+  code: z.string().min(1).max(64),
+  at: Iso,
+});
+export type ApplyFailure = z.infer<typeof ApplyFailure>;
+
+/**
+ * hermeticd's codes for a Hermes install that failed and left the box running
+ * its old Hermes: refused before the checkout was touched (a writer still
+ * running, no validated pre-upgrade copy, a downgrade with no copy to
+ * restore, a pre-fetch or other step that failed first), or rolled back
+ * to the pre-upgrade copy after the swap failed.
+ * `upgrade --now` puts the row's previous pin back for these; any other
+ * failure keeps the new pin and the next apply repairs forward.
+ */
+export const HERMES_OLD_VERSION_RUNNING: readonly string[] = [
+  "HERMES_SWAP_ABORTED",
+  "HERMES_UNITS_ACTIVE",
+  "HERMES_BACKUP_FAILED",
+  "HERMES_RESTORE_REFUSED",
+  "HERMES_UPGRADE_ROLLED_BACK",
+];
+
+/** The rollback itself failed: Hermes is down on the box, and `upgrade` stops. */
+export const HERMES_ROLLBACK_FAILED = "HERMES_ROLLBACK_FAILED";
+
+/** A downgrade failed after its restore, or with the checkout half-moved: Hermes is down and held, as above. */
+export const HERMES_RESTORE_FAILED = "HERMES_RESTORE_FAILED";
 
 /** The `agents` row (§4.2). Field names are the DynamoDB attribute names. */
 export const Agent = z.object({
@@ -483,6 +536,8 @@ export const Agent = z.object({
    * rolled out has none.
    */
   apply_request: ApplyRequest.nullish(),
+  /** The box's report of the last converge it could not apply (§6.5). */
+  apply_failure: ApplyFailure.nullish(),
   provider: Provider,
   /**
    * The provider profile this agent's running configuration came from, and the

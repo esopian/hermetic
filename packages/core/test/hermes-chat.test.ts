@@ -35,11 +35,14 @@ import { createSideQuestions } from "../src/chat/hermes/hermes-chat-btw.ts";
 import type { SessionSockets, SharedRpc } from "../src/chat/hermes/hermes-chat-session-socket.ts";
 import { DURABLE_TOOL_ROWS, SESSION_HISTORY_PARAM_KEYS } from "./fixtures/hermes-history-contract.ts";
 import { HermeticError } from "../src/errors.ts";
+import { readRpc } from "../src/chat/hermes/hermes-chat-rpc.ts";
 import { HERMES_INTERNAL_EVENTS } from "../src/shared/hermes-internal-events.ts";
 import { Bot, ChatFrame, ChatMessage } from "../src/schema/index.ts";
 import type { ChatBlock } from "../src/schema/index.ts";
 import {
   AGENTS_LIST_RESULT,
+  approvalCancelledFrame,
+  approvalRequestFrame,
   BLANK_FRAME,
   DASHBOARD_HTML,
   DASHBOARD_HTML_NO_TOKEN,
@@ -65,6 +68,8 @@ import {
   SESSION_ID,
   SESSION_LIST_POPULATED,
   SESSION_LIST_RESULT,
+  SKILLS_CHANGED,
+  TOOL_PROGRESS_TICK,
   TRUNCATED_FRAME,
   UNKNOWN_EVENT,
   UNKNOWN_TOOL_COMPLETE,
@@ -96,12 +101,16 @@ interface BoxScript {
   history?: readonly unknown[];
   /** Override the durable read response for auth and protocol failures. */
   historyReply?: (url: URL) => { status?: number; json: unknown };
+  /** The dashboard's session list (`GET /api/sessions`), paged by `offset`/`limit`. */
+  listed?: readonly unknown[];
+  /** The HTTP status `GET /api/sessions` answers with. */
+  listedStatus?: number;
   /** RPC method → result. A method with no entry answers `{}`. */
   results?: Record<string, unknown>;
   /** RPC method → one result per call, in order; the last repeats. Beats `results`. */
   sequence?: Record<string, readonly unknown[]>;
   /** RPC method → JSON-RPC error object. */
-  errors?: Record<string, { code: number; message: string }>;
+  errors?: Record<string, { code: number; message: string; data?: Record<string, unknown> }>;
   /** Source-derived closed parameter contracts, enforced before returning canned data. */
   allowedParams?: Record<string, readonly string[]>;
   /** RPC method → event frames pushed straight after its reply. */
@@ -153,6 +162,8 @@ interface FakeSocket extends ChatSocket {
   headers: Record<string, string> | undefined;
   sent: { id: number; method: string; params: Record<string, unknown> }[];
   isClosed(): boolean;
+  /** A frame the gateway pushes later, unprompted (a relay's); dropped once closed. */
+  inject(frame: string): void;
 }
 
 interface Harness {
@@ -176,6 +187,19 @@ function harness(script: BoxScript = {}): Harness {
     fetches.push({ url: String(input), headers });
     if (script.htmlThrows) return Promise.reject(new Error("getaddrinfo ENOTFOUND"));
     const url = new URL(String(input));
+    if (url.pathname === "/api/sessions") {
+      const offset = Number(url.searchParams.get("offset"));
+      const sessions = (script.listed ?? []).slice(
+        offset,
+        offset + Number(url.searchParams.get("limit")),
+      );
+      return Promise.resolve(
+        new Response(JSON.stringify({ sessions }), {
+          status: script.listedStatus ?? 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    }
     if (url.pathname.startsWith("/api/sessions/")) {
       const rows = script.history ?? [];
       const limit = Number(url.searchParams.get("limit"));
@@ -223,6 +247,9 @@ function harness(script: BoxScript = {}): Harness {
       headers: opts.headers,
       sent,
       isClosed: () => closed,
+      inject: (frame) => {
+        if (!closed) q.push(frame);
+      },
       // The message a refused upgrade actually carries, verbatim from
       // `chat.ts`'s `runtimeSocket` — and therefore carrying the live session
       // token in its query string. The adapter must not let it through.
@@ -1156,7 +1183,9 @@ describe("hermes-chat · abort", () => {
   test("an idle bot abort is a no-op, with no create or interrupt", async () => {
     const h = harness({ results: { "session.list": { sessions: [] } } });
     expect(await createHermesChat(h.deps).abort(BOX, "default")).toBe(false);
+    // The title lookup, and the dashboard's list a missing Bot Chat is looked for in.
     expect(h.sockets[0]?.sent.map((call) => call.method)).toEqual(["session.list"]);
+    expect(h.fetches.filter((f) => new URL(f.url).pathname === "/api/sessions")).toHaveLength(1);
   });
 
   test("external abort resumes the exact profile and stops only an explicitly running runtime", async () => {
@@ -3284,6 +3313,36 @@ describe("semantic live activity and requests", () => {
     expect(frames.flatMap((frame) => (frame.type === "delta" ? [frame.text] : []))).toEqual(["pong"]);
   });
 
+  test("v0.23.1: a progress tick and a skills broadcast draw nothing; approval.cancelled closes its card", async () => {
+    const h = harness(
+      turnScript([
+        approvalRequestFrame("srq-1", "apr-1"),
+        TOOL_PROGRESS_TICK,
+        SKILLS_CHANGED,
+        // Another runtime's cancellation is not this conversation's.
+        approvalCancelledFrame(["apr-2"], "other-runtime"),
+        approvalCancelledFrame(["apr-1"]),
+        RECORDED_MESSAGE_COMPLETE,
+      ]),
+    );
+    const frames = await collect(createHermesChat(h.deps).send(BOX, "default", "go"));
+    expect(blocks(frames).filter((block) => block.kind === "unknown")).toEqual([]);
+    expect(blocks(frames)).toContainEqual(
+      expect.objectContaining({ kind: "approval", request_id: "srq-1" }),
+    );
+    // Keyed by the card's server request id, not the approval queue's.
+    const closes = blocks(frames).filter((block) => block.kind === "activity" && block.request_id);
+    expect(closes).toEqual([
+      expect.objectContaining({
+        key: "request:srq-1",
+        request_id: "srq-1",
+        state: "done",
+        reason: "interrupted",
+      }),
+    ]);
+    expect(frames.at(-1)?.type).toBe("done");
+  });
+
   test("interim prose is sealed once and usage ticks do not split the final sentence", async () => {
     const h = harness(
       turnScript([
@@ -3617,6 +3676,271 @@ describe("hermes-chat · connection requests in a turn", () => {
     expect(notices.map((b) => (b.kind === "activity" ? b.payload : null))).toEqual([
       { op_id: "op1", seq: 1, deadline_at: 1_760_000_000 },
       { op_id: "op1", seq: 3, deadline_at: 1_760_000_000 },
+    ]);
+  });
+});
+
+/**
+ * A chat the gateway's durable FIFO owns (a Bot Chat it delivers into) at
+ * Hermes v0.23.1: `prompt.submit` is forwarded to the owner, or refused with
+ * 4090 and a `data.reason` (`tui_gateway/methods_prompt.py:721-766`).
+ */
+describe("hermes-chat · a chat the gateway's FIFO owns", () => {
+  const refusing = (reason: string) =>
+    harness({
+      results: { "session.create": SESSION_CREATE_RESULT },
+      errors: { "prompt.submit": { code: 4090, message: `refused: ${reason}`, data: { reason } } },
+    });
+  const sentMethods = (h: Harness) => h.sockets.flatMap((s) => s.sent.map((c) => c.method));
+
+  test("the rpc layer passes a refusal's data.reason through, typed", async () => {
+    const h = refusing("SESSION_OWNER_BUSY");
+    const rpc = readRpc(h.deps.openSocket("wss://fixture.invalid/api/ws", {}), 1_000, "atlas");
+    const error = await rpc.request("prompt.submit", {}).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(HermeticError);
+    expect((error as HermeticError).details).toEqual({ code: 4090, reason: "SESSION_OWNER_BUSY" });
+  });
+
+  test.each([
+    ["SESSION_OWNER_BUSY", "CHAT_SESSION_BUSY"],
+    ["SESSION_NOT_OWNED", "SESSION_NOT_OWNED"],
+    ["SESSION_OWNER_UNCONFIRMED", "CHAT_SEND_UNCERTAIN"],
+  ])("4090 %s is %s, and nothing is interrupted", async (reason, code) => {
+    const h = refusing(reason);
+    const frames = await collect(createHermesChat(h.deps).send(BOX, "d", "go"));
+    expect(frames.at(-1)).toMatchObject({
+      type: "error",
+      code,
+      message: `${BOX.instance}: refused: ${reason}`,
+      failure: { code },
+    });
+    expect(sentMethods(h)).not.toContain("session.interrupt");
+  });
+
+  test("a 4090 naming another reason keeps the protocol code", async () => {
+    const h = refusing("invalid_params");
+    const frames = await collect(createHermesChat(h.deps).send(BOX, "d", "go"));
+    expect(frames.at(-1)).toMatchObject({ type: "error", code: "CHAT_PROTOCOL" });
+  });
+
+  test("a forwarded send shows the reply the owner's relay carries", async () => {
+    const h = harness({
+      results: {
+        "session.create": SESSION_CREATE_RESULT,
+        "prompt.submit": { status: "queued", admission_id: "adm1", forwarded: true },
+      },
+      // The relay carries `message.start` and `message.complete`, never deltas.
+      after: {
+        "prompt.submit": [
+          eventFrame("message.start", 2, {}),
+          eventFrame("message.complete", 3, { text: "from the owner", status: "complete" }),
+        ],
+      },
+    });
+    const frames = await collect(createHermesChat(h.deps).send(BOX, "d", "go"));
+    expect(frames.flatMap((f) => (f.type === "delta" ? [f.text] : [])).join("")).toBe("from the owner");
+    expect(frames.at(-1)).toMatchObject({ type: "done" });
+    expect(sentMethods(h)).not.toContain("session.interrupt");
+  });
+
+  test("a forwarded send outlives the first-frame deadline, and a stop never interrupts it", async () => {
+    const h = harness({
+      results: {
+        "session.create": SESSION_CREATE_RESULT,
+        "prompt.submit": { status: "queued", admission_id: "adm1", forwarded: true },
+      },
+      slotWaitMs: 20,
+    });
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 150);
+    const frames = await collect(
+      createHermesChat(h.deps).send(BOX, "d", "go", { signal: controller.signal }),
+    );
+    // Not CHAT_NO_SLOT after 20 ms: the owner runs it after its own turn.
+    expect(frames.some((f) => f.type === "error")).toBe(false);
+    expect(frames.at(-1)).toMatchObject({ type: "done", incomplete: true });
+    expect(sentMethods(h)).not.toContain("session.interrupt");
+  });
+});
+
+describe("hermes-chat · a stopped forwarded send", () => {
+  const FORWARDED = { status: "queued", admission_id: "adm1", forwarded: true };
+  test("says it is still queued, and its reply never reaches the next turn", async () => {
+    const h = harness({
+      results: {
+        "session.create": SESSION_CREATE_RESULT,
+        "session.resume": SESSION_CREATE_RESULT,
+        "prompt.submit": FORWARDED,
+      },
+    });
+    const chat = createHermesChat(h.deps);
+    const stop = new AbortController();
+    setTimeout(() => stop.abort(), 30);
+    const first = await collect(chat.send(BOX, "d", "A", { signal: stop.signal }));
+    expect(blocks(first)).toContainEqual(
+      expect.objectContaining({ kind: "activity", key: "forwarded", state: "warning" }),
+    );
+    expect(first.at(-1)).toMatchObject({ type: "done", incomplete: true });
+    // Closed rather than kept for the next turn: the relay's socket.
+    const relay = h.sockets.find((s) => s.sent.some((c) => c.method === "prompt.submit"));
+    expect(relay?.isClosed()).toBe(true);
+
+    // The next send on the same conversation, while the box still runs A.
+    const stopB = new AbortController();
+    const second = collect(
+      chat.send(BOX, "d", "B", {
+        session: SESSION_CREATE_RESULT.stored_session_id,
+        signal: stopB.signal,
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    relay?.inject(eventFrame("message.start", 2, {}));
+    relay?.inject(eventFrame("message.complete", 3, { text: "A's reply", status: "complete" }));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    stopB.abort();
+    const frames = await second;
+    expect(frames.some((f) => f.type === "delta")).toBe(false);
+    expect(frames.at(-1)).toMatchObject({ type: "done", incomplete: true });
+    const sent = h.sockets.filter((s) => s.sent.some((c) => c.method === "prompt.submit"));
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).not.toBe(relay);
+  });
+});
+
+/**
+ * A Bot Chat the v0.23.1 gateway moved aside (`gateway/session_bot.py:327-336`)
+ * reads as the earlier part of the canonical conversation.
+ */
+describe("hermes-chat · a moved-aside Bot Chat", () => {
+  const ROWS: Record<string, { id: number; role: string; content: string }[]> = {
+    old1: [
+      { id: 1, role: "user", content: "a" },
+      { id: 2, role: "assistant", content: "b" },
+    ],
+    "local-x": [
+      { id: 3, role: "user", content: "c" },
+      { id: 4, role: "assistant", content: "d" },
+    ],
+  };
+  const OLD1 = { id: "old1", title: "Bot Chat (hermetic old1)", source: "hermetic", started_at: 1 };
+  const displaced = (): BoxScript => ({
+    sequence: {
+      // The "Bot Chat" lookup, then the moved-aside row's exact-title lookup.
+      "session.list": [
+        { sessions: [{ id: "local-x", title: "Bot Chat", source: "local" }] },
+        { sessions: [OLD1] },
+      ],
+    },
+    listed: [{ id: "local-x", title: "Bot Chat", source: "local", started_at: 2 }, OLD1],
+    historyReply: (url) => {
+      const id = decodeURIComponent(url.pathname.split("/")[3] ?? "");
+      const rows = ROWS[id] ?? [];
+      const limit = Number(url.searchParams.get("limit"));
+      const page = url.searchParams.get("order") === "latest" ? rows.slice(-limit) : rows;
+      return { json: { session_id: id, messages: page } };
+    },
+  });
+  const texts = (messages: ChatMessage[]) =>
+    messages.map((m) => (m.blocks[0]?.kind === "text" ? m.blocks[0].markdown : null));
+
+  test("the whole history reads the moved-aside root first, then the current Bot Chat", async () => {
+    const h = harness(displaced());
+    const messages = await createHermesChat(h.deps).history(BOX, "default");
+    expect(texts(messages)).toEqual(["a", "b", "c", "d"]);
+    // Each part keeps its own session, so the ids it had before the move do not change.
+    expect(messages.map((m) => m.session)).toEqual(["old1", "old1", "local-x", "local-x"]);
+  });
+
+  test("a bounded read fills the rest of its window from the moved-aside root", async () => {
+    const h = harness(displaced());
+    const messages = await createHermesChat(h.deps).history(BOX, "default", { limit: 3 });
+    expect(texts(messages)).toEqual(["b", "c", "d"]);
+    const reads = h.fetches.filter((f) => f.url.includes("/messages"));
+    expect(reads.map((f) => new URL(f.url).searchParams.get("limit"))).toEqual(["3", "1"]);
+  });
+
+  test("past session.list's window, the session list still counts it as canonical", async () => {
+    const h = harness({
+      sequence: {
+        "session.list": [
+          // The windowed listing: routines pushed the moved-aside row out of it.
+          {
+            sessions: [
+              { id: "local-x", title: "Bot Chat", source: "local", message_count: 2 },
+              { id: "r1", title: "Hourly", source: "cron", message_count: 1 },
+            ],
+          },
+          // Its exact-title lookup, which has no window.
+          { sessions: [{ ...OLD1, message_count: 72 }] },
+        ],
+      },
+      listed: [OLD1],
+    });
+    const sessions = await createHermesChat({ ...h.deps, pooled: false }).sessions(BOX, "default");
+    expect(sessions.map((s) => [s.id, s.kind, s.turn_count])).toEqual([
+      ["local-x", "canonical", 74],
+      ["r1", "thread", 1],
+    ]);
+  });
+
+  /** The dashboard's session list failing, or never ending, costs older history, never the chat. */
+  const walkFails = (listed: Partial<BoxScript>): BoxScript => ({
+    ...displaced(),
+    ...listed,
+    sequence: {
+      "session.list": [
+        { sessions: [{ id: "local-x", title: "Bot Chat", source: "local" }] },
+        { sessions: [{ id: "local-x", title: "Bot Chat", source: "local", message_count: 2 }] },
+      ],
+    },
+  });
+  const endless = Array.from({ length: 20_100 }, (_, i) => ({ id: `t${i}`, title: "a thread" }));
+
+  for (const [name, listed] of [
+    ["answers 503", { listedStatus: 503 }],
+    ["never ends", { listed: endless }],
+  ] as const) {
+    test(`a session list that ${name} still reads and lists the current Bot Chat`, async () => {
+      const h = harness(walkFails(listed));
+      const chat = createHermesChat({ ...h.deps, pooled: false });
+      const messages = await chat.history(BOX, "default");
+      expect(texts(messages)).toEqual(["c", "d"]);
+      const sessions = await chat.sessions(BOX, "default");
+      expect(sessions.map((s) => [s.id, s.kind])).toEqual([["local-x", "canonical"]]);
+      // The failed walk is remembered, so the session list did not walk again.
+      const walks = h.fetches.filter((f) => new URL(f.url).pathname === "/api/sessions");
+      expect(walks).toHaveLength(name === "answers 503" ? 1 : 200);
+    });
+  }
+
+  test("the session list never shows it as a thread, and counts its turns as canonical", async () => {
+    const sessions = mapSessions(BOX, "default", {
+      sessions: [
+        { id: "local-x", title: "Bot Chat", source: "local", message_count: 2 },
+        { id: "old1", title: "Bot Chat (hermetic old1)", source: "hermetic", message_count: 72 },
+        // The title format with someone else's id is a user's thread.
+        { id: "t1", title: "Bot Chat (hermetic old1)", source: "hermetic", message_count: 1 },
+        { id: "t2", title: "Bot Chat (notes)", source: "hermetic", message_count: 1 },
+      ],
+    });
+    expect(sessions.map((s) => [s.id, s.kind, s.turn_count])).toEqual([
+      ["local-x", "canonical", 74],
+      ["t1", "thread", 1],
+      ["t2", "thread", 1],
+    ]);
+  });
+
+  test("with no current Bot Chat, the newest moved-aside one is the canonical row", async () => {
+    const sessions = mapSessions(BOX, "default", {
+      sessions: [
+        { id: "t1", title: "Notes", source: "hermetic", message_count: 1 },
+        { id: "old2", title: "Bot Chat (hermetic old2)", started_at: 5, message_count: 3 },
+        { id: "old1", title: "Bot Chat (API old1)", started_at: 1, message_count: 4 },
+      ],
+    });
+    expect(sessions.map((s) => [s.id, s.kind, s.turn_count])).toEqual([
+      ["old2", "canonical", 7],
+      ["t1", "thread", 1],
     ]);
   });
 });

@@ -28,6 +28,7 @@ import {
   originOf,
   socketUrl,
   stripToken,
+  timedRead,
 } from "./hermes-chat-wire.ts";
 import { TapSlot, type TapSource } from "./hermes-chat-devtap.ts";
 import { REDACTED } from "../chat-redact.ts";
@@ -80,10 +81,12 @@ export function createChatConnection(deps: ChatConnectionDeps): ChatConnection {
     signal: AbortSignal | undefined,
     tap?: TapSlot,
   ): Promise<string> {
-    const token = await scrapeOnce(box, signal).catch((e: unknown) => {
-      tap?.conn("token.scrape", { url: box.baseUrl, error: describe(e) }, "in");
-      throw e;
-    });
+    const token = await timedRead(box.instance, signal, (s) => scrapeOnce(box, s)).catch(
+      (e: unknown) => {
+        tap?.conn("token.scrape", { url: box.baseUrl, error: describe(e) }, "in");
+        throw e;
+      },
+    );
     // The value never reaches a record, whatever the redaction setting says.
     tap?.conn("token.scrape", { url: box.baseUrl, found: true, token: REDACTED }, "in");
     return token;

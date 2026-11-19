@@ -170,6 +170,11 @@ const NUDGES: ReadonlyMap<string, ProcessNoticeVariant> = new Map([
     "network_cut",
   ],
   [
+    // Hermes v0.23.1's wording (`conversation_loop.py:989-994`); the one above is its legacy stub.
+    "[System: The previous response was cut off by a network error mid-stream — a transport interruption, NOT a change in your capabilities. Your tools are still fully available; call them as normal and ignore any earlier claim that you lack tool access. Continue the task from where you left off. Do not restart or repeat prior text.]",
+    "network_cut",
+  ],
+  [
     "[System: Your previous response contained only internal reasoning and never produced a visible answer or tool call. Do not keep thinking. Produce your final answer as plain text now (or make the tool call you were planning).]",
     "reasoning_only",
   ],
@@ -654,6 +659,8 @@ export function parseReplyContext(text: string): { quote: string; text: string }
 const FAILED_TURN_NOTICES: ReadonlySet<string> = new Set([
   "Your request was not processed. Send it again if you still want me to carry it out.",
   "This turn did not complete. Some actions may already have run; verify their effects before resending.",
+  // v0.23.1 (`turn_failure_copy.py:68-71`): an automated turn lost to a restart, never re-run.
+  "An automated delivery was interrupted and was not run again. Some actions may already have run; verify their effects.",
 ]);
 
 /**

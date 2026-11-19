@@ -14,6 +14,7 @@ import { cleanup, screen, userEvent, waitFor, within } from "../dom.ts";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { HermeticError } from "@hermetic/core";
 import { MEMORY_PROVIDERS } from "@hermetic/core/shared";
+import { BUILD_VERSIONS } from "../../../core/src/build-versions.ts";
 import { type FlowHarness, flowHarness, gotoHash, mountPortal } from "./bridge.ts";
 
 let harness: FlowHarness | null = null;
@@ -565,6 +566,12 @@ test("agent detail: switching memory saves, rolls out, and the row names the new
   mountPortal();
   const user = userEvent.setup();
 
+  // `fathom` is seeded on an older Hermes, and a memory switch re-renders, which
+  // a row held on another Hermes than this build's refuses (§6.5): pin it first.
+  for await (const _ of h.ctx.hermetic().upgrade({ name: "fathom", hermes: BUILD_VERSIONS.hermes })) {
+    // Drained for its side effects.
+  }
+  await h.poll();
   const fathom = await openConfig(user, "fathom");
   await waitFor(() => expect(within(fathom).getByText("Built-in only")).toBeTruthy());
   await user.click(within(fathom).getByRole("button", { name: "Change memory provider" }));

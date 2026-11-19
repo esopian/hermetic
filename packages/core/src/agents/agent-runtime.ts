@@ -66,6 +66,8 @@ export interface AgentRuntimeDeps {
   attach?: { pollMs?: number; progressMs?: number; tailnetOfflineMs?: number } | undefined;
   /** The post-handoff watch's budget and poll (`handoff.ts`); off by default. */
   handoff?: { budgetMs?: number; pollMs?: number } | undefined;
+  /** The Hermes this build renders (`ctx.hermesVersion`); `BUILD_VERSIONS.hermes` when absent. */
+  hermesVersion?: string | undefined;
 }
 
 export type AgentRuntime = ReturnType<typeof createAgentRuntime>;
@@ -595,6 +597,45 @@ export function createAgentRuntime(deps: AgentRuntimeDeps) {
   }
 
   const renderFor = renderAgentRow;
+  const buildHermes = deps.hermesVersion ?? BUILD_VERSIONS.hermes;
+
+  /**
+   * Refuse, before anything is written, an operation that would render a new
+   * config for a row naming another Hermes than this build's (§6.5). Every
+   * render pins this build's `hermes_ref` (`renderAgentRow`), so the result
+   * pairs the row's version with a ref that installs another one, and the box
+   * refuses it (`MANIFEST_REFUSED`) — after a recreate has already replaced the
+   * instance. `plan rollout` and a push's config phase defer such a row instead
+   * (`hermesHeldDeferral`, the same comparison); `upgrade` is what moves it.
+   */
+  function assertOnBuildHermes(
+    agent: Pick<Agent, "name" | "hermes_version">,
+    /** The version a `set` would pin; the row's is what it renders when absent. */
+    requested?: string,
+  ): void {
+    if ((requested ?? agent.hermes_version) === buildHermes) return;
+    if (agent.hermes_version === buildHermes) {
+      // The row is fine; the target is not, and `upgrade` would not help.
+      throw new HermeticError(
+        "HERMES_UPGRADE_REQUIRED",
+        `this build renders only Hermes ${buildHermes}, so ${agent.name} cannot be pinned to ${requested} from this build; ` +
+          `nothing was changed`,
+        {
+          name: agent.name,
+          hermes_version: agent.hermes_version,
+          build_hermes: buildHermes,
+          requested_hermes_version: requested,
+        },
+      );
+    }
+    throw new HermeticError(
+      "HERMES_UPGRADE_REQUIRED",
+      `${agent.name} is on Hermes ${agent.hermes_version}, and this build renders only ${buildHermes}: ` +
+        `a new config would name ${agent.hermes_version} with this build's Hermes ref, which the box refuses. ` +
+        `Nothing was changed; run \`hermetic upgrade --hermes ${buildHermes} ${agent.name} --now\` first`,
+      { name: agent.name, hermes_version: agent.hermes_version, build_hermes: buildHermes },
+    );
+  }
 
   /**
    * Refuse to render a configuration the fleet's *published* hermeticd could not
@@ -712,6 +753,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps) {
     configPrefix,
     isHandedOff,
     renderFor,
+    assertOnBuildHermes,
     assertReleaseCanApply,
     assertCanApply,
     ensureConfig,

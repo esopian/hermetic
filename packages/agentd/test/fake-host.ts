@@ -186,8 +186,25 @@ export class FakeHost implements Host {
     (op: "rename" | "link" | "remove", path: string, to?: string) => Error | null
   > = [];
   readonly writeFaults: Array<(path: string) => Error | null> = [];
+  /** `lstat`'s `mtimeMs`, from the clock: set by `seed`, `writeFile` and an `appendFile` that writes. */
+  readonly mtimes = new Map<string, number>();
   /** `[path, mode]` for every chmod, including ones on directories. */
   readonly chmods: Array<[string, string]> = [];
+  /**
+   * A directory's mode and `owner:group`, where something set them. Absent is
+   * `0755` and root's, which is what a root `mkdir` under umask 022 leaves.
+   */
+  readonly dirAttrs = new Map<string, { mode?: string; ownership?: string }>();
+  /** Names `stat` maps to ids; an unknown name is given the next free id, as `useradd` would. */
+  readonly userIds = new Map<string, number>([
+    ["root", 0],
+    ["hermes", 1000],
+  ]);
+  /**
+   * Hooks over the bytes each `copyFile` writes, in order: how a test makes a
+   * copy land different from its source without the copy itself failing.
+   */
+  readonly copyCorruptions: Array<(from: string, to: string, bytes: Uint8Array) => Uint8Array> = [];
 
   // systemd, as far as `systemctl` moves it.
   readonly enabledUnits = new Set<string>();
@@ -197,6 +214,25 @@ export class FakeHost implements Host {
   readonly stopped: string[] = [];
   /** Units up as far as `start|restart|stop` says; `is-active` never reads it. */
   readonly runningUnits = new Set<string>();
+  /**
+   * Units `stop` brought down, when this host models unit state (`BoxHost`
+   * does): `is-active` then answers `inactive` for these and `active` for every
+   * other unit, the box's default; `start`, `restart` and `enable --now` bring
+   * one back. Unmodelled, `is-active` always answers `active`.
+   */
+  readonly downUnits = new Set<string>();
+  protected readonly modelsUnitState: boolean = false;
+  /**
+   * `ConditionPathExists=!<path>` lines from unit drop-ins, per unit, as of the
+   * last `daemon-reload`. A start or restart while one of the paths exists is
+   * skipped (`skippedStarts`), not failed.
+   */
+  readonly startConditions = new Map<string, string[]>();
+  readonly skippedStarts: string[] = [];
+  /** Units `stop` cannot bring down: a writer that survives it. */
+  readonly stuckUnits = new Set<string>();
+  /** Transient scopes under a user manager (`systemctl --user -M <user>@`); `stop <glob>` removes the matches. */
+  readonly userScopes = new Set<string>();
   /** What `systemctl show` reports; no entry answers `active (running)`. */
   readonly unitStates = new Map<string, string | { ActiveState: string; SubState: string }>();
   readonly daemonReloads: string[] = [];
@@ -288,6 +324,7 @@ export class FakeHost implements Host {
   seed(path: string, content: string, mode = "0644"): void {
     this.markDirs(path);
     this.files.set(path, { content, mode });
+    this.mtimes.set(path, this.clock.getTime());
   }
 
   /** `seed` for the byte-shaped ones: a half-downloaded zip a killed apply left. */
@@ -496,16 +533,74 @@ export class FakeHost implements Host {
       if (ownership && path && file) this.files.set(path, { ...file, ownership });
       return ok();
     }
+    // `du -sk -- <dir>`: the tree's bytes in KiB, rounded up.
+    if (bin === "du" && args[0] === "-sk" && args[1] === "--") {
+      const path = args[2] ?? "";
+      let bytes = 0;
+      for (const [key, file] of this.files) {
+        if (key === path || key.startsWith(`${path}/`)) {
+          bytes += file.bytes?.byteLength ?? new TextEncoder().encode(file.content).byteLength;
+        }
+      }
+      return ok(`${Math.ceil(bytes / 1024)}\t${path}\n`);
+    }
+    // `cp -a -- <dir> <new>`: the tree copied whole, modes and links kept.
+    if (bin === "cp" && args[0] === "-a" && args[1] === "--") {
+      const [from = "", to = ""] = args.slice(2);
+      if (!this.dirs.has(from) && !this.files.has(from)) {
+        return fail(1, `cp: cannot stat '${from}': No such file or directory`);
+      }
+      const moved = (key: string): string => to + key.slice(from.length);
+      const under = (key: string): boolean => key === from || key.startsWith(`${from}/`);
+      for (const [key, file] of [...this.files])
+        if (under(key)) this.files.set(moved(key), { ...file });
+      for (const dir of [...this.dirs]) if (under(dir)) this.dirs.add(moved(dir));
+      for (const link of [...this.symlinks]) {
+        if (!under(link)) continue;
+        this.symlinks.add(moved(link));
+        const target = this.linkTargets.get(link);
+        if (target !== undefined) this.linkTargets.set(moved(link), target);
+      }
+      return ok();
+    }
     return null;
   }
 
   private systemctl(args: readonly string[]): ExecResult {
     const [verb, ...rest] = args;
     const unit = rest.filter((a) => !a.startsWith("-"))[0] ?? "";
+    if (verb === "--user" && rest.includes("stop")) {
+      // A user manager down (`user@<uid>.service` in `downUnits`) has no bus to ask.
+      if ([...this.downUnits].some((u) => u.startsWith("user@"))) {
+        return fail(
+          1,
+          "Failed to connect to user scope bus via machine transport: No such file or directory",
+        );
+      }
+      // As systemd: a glob matching nothing exits 0.
+      const glob = new RegExp(
+        `^${(rest.at(-1) ?? "")
+          .split("*")
+          .map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+          .join(".*")}$`,
+      );
+      for (const scope of [...this.userScopes]) if (glob.test(scope)) this.userScopes.delete(scope);
+      return ok();
+    }
     switch (verb) {
-      case "daemon-reload":
+      case "daemon-reload": {
         this.daemonReloads.push("daemon-reload");
+        // Drop-ins are read here, as systemd reads them: only a reload sees a new one.
+        this.startConditions.clear();
+        for (const [file, { content }] of this.files) {
+          const unit = /^\/etc\/systemd\/system\/([^/]+)\.d\/[^/]+\.conf$/.exec(file)?.[1];
+          if (unit === undefined) continue;
+          for (const m of content.matchAll(/^ConditionPathExists=!(\S+)$/gm)) {
+            this.startConditions.set(unit, [...(this.startConditions.get(unit) ?? []), m[1] as string]);
+          }
+        }
         return ok();
+      }
       case "is-enabled":
         if (this.enabledUnits.has(unit)) return ok("enabled\n");
         // As systemd does: a known unit answers its state on stdout and exits 1;
@@ -522,6 +617,7 @@ export class FakeHost implements Host {
         if (rest.includes("--now")) {
           this.restarted.push(unit);
           this.runningUnits.add(unit);
+          this.downUnits.delete(unit);
         }
         return ok();
       case "disable":
@@ -529,21 +625,40 @@ export class FakeHost implements Host {
         if (rest.includes("--now")) {
           this.stopped.push(unit);
           this.runningUnits.delete(unit);
+          if (this.modelsUnitState) this.downUnits.add(unit);
         }
         return ok();
       case "restart":
       case "start":
+        // An unmet condition is not a failure: systemd skips the start and exits 0.
+        if ((this.startConditions.get(unit) ?? []).some((p) => this.files.has(p))) {
+          this.skippedStarts.push(unit);
+          this.runningUnits.delete(unit);
+          if (this.modelsUnitState) this.downUnits.add(unit);
+          return ok();
+        }
         this.restarted.push(unit);
         this.runningUnits.add(unit);
+        this.downUnits.delete(unit);
         return ok();
       case "stop":
         this.stopped.push(unit);
+        if (this.stuckUnits.has(unit)) return ok();
         this.runningUnits.delete(unit);
+        if (this.modelsUnitState) this.downUnits.add(unit);
         return ok();
       case "show": {
         // The unit is the last operand: `-p <properties>` sits in the middle.
-        const recorded = this.unitStates.get(rest.at(-1) ?? "");
-        const active = typeof recorded === "string" ? recorded : (recorded?.ActiveState ?? "active");
+        const shown = rest.at(-1) ?? "";
+        const recorded = this.unitStates.get(shown);
+        // Stopped, or its last start skipped by a condition: systemd says so.
+        const down =
+          this.downUnits.has(shown) ||
+          (this.skippedStarts.includes(shown) && !this.runningUnits.has(shown));
+        const active =
+          typeof recorded === "string"
+            ? recorded
+            : (recorded?.ActiveState ?? (down ? "inactive" : "active"));
         const sub =
           typeof recorded === "object"
             ? recorded.SubState
@@ -555,7 +670,9 @@ export class FakeHost implements Host {
         return ok(`ActiveState=${active}\nSubState=${sub}\nNRestarts=0\n`);
       }
       case "is-active":
-        return ok("active\n");
+        return this.downUnits.has(unit)
+          ? { code: 3, stdout: "inactive\n", stderr: "" }
+          : ok("active\n");
       default:
         return ok();
     }
@@ -748,16 +865,20 @@ export class FakeHost implements Host {
       mode: mode ?? existing?.mode ?? "0644",
       ...(existing?.ownership ? { ownership: existing.ownership } : {}),
     });
+    this.mtimes.set(path, this.clock.getTime());
   }
 
   async appendFile(path: string, content: string, mode?: string): Promise<void> {
     this.rootFs("appendFile", path);
+    this.writeFault(path);
     const existing = this.files.get(path);
     if (mode) this.chmods.push([path, mode]);
     this.files.set(path, {
       content: (existing?.content ?? "") + content,
       mode: mode ?? existing?.mode ?? "0644",
     });
+    // Appending nothing to a file that exists writes nothing, so its mtime stays, as on Linux.
+    if (!existing || content !== "") this.mtimes.set(path, this.clock.getTime());
   }
 
   /** Direct children, files *and* directories; the latter inferred from deeper paths and `mkdir`. */
@@ -789,32 +910,93 @@ export class FakeHost implements Host {
     });
   }
 
+  /** Every `writeChunks`: the path, and the size of each chunk it was handed. */
+  readonly chunkWrites: Array<{ path: string; sizes: number[] }> = [];
+
+  /** All or nothing, as on the real host: a `chunks` that throws stores nothing. */
+  async writeChunks(path: string, chunks: AsyncIterable<Uint8Array>, mode?: string): Promise<void> {
+    const record = { path, sizes: [] as number[] };
+    this.chunkWrites.push(record);
+    const parts: Uint8Array[] = [];
+    for await (const chunk of chunks) {
+      record.sizes.push(chunk.byteLength);
+      parts.push(chunk);
+    }
+    await this.writeBytes(path, Buffer.concat(parts), mode);
+  }
+
   async stat(path: string): Promise<FileStat | null> {
     this.rootFs("stat", path);
     return this.statOf(path);
   }
 
+  /** `owner:group` names or ids → ids; root's when nothing set it. */
+  private idsOf(ownership: string | undefined): { uid: number; gid: number } {
+    const [owner = "root", group = owner] = (ownership ?? "root:root").split(":");
+    return { uid: this.idOf(owner), gid: this.idOf(group) };
+  }
+
+  private idOf(name: string): number {
+    if (/^\d+$/.test(name)) return Number(name);
+    let id = this.userIds.get(name);
+    if (id === undefined) {
+      id = 2000 + this.userIds.size;
+      this.userIds.set(name, id);
+    }
+    return id;
+  }
+
+  private nameOf(id: number): string {
+    for (const [name, known] of this.userIds) if (known === id) return name;
+    return String(id);
+  }
+
   private statOf(path: string): FileStat | null {
+    const dir = (mode: string, ownership?: string): FileStat => ({
+      mode,
+      size: 0,
+      isDirectory: true,
+      isSymlink: false,
+      isFile: false,
+      ...this.idsOf(ownership),
+    });
     // `/proc` is how the installation lock asks whether its holder is still there.
     const pid = /^\/proc\/(\d+)$/.exec(path);
-    if (pid !== null) {
-      return this.livePids.has(Number(pid[1]))
-        ? { mode: "0555", size: 0, isDirectory: true, isSymlink: false }
-        : null;
-    }
-    if (path === "/proc") return { mode: "0555", size: 0, isDirectory: true, isSymlink: false };
+    if (pid !== null) return this.livePids.has(Number(pid[1])) ? dir("0555") : null;
+    if (path === "/proc") return dir("0555");
     const file = this.files.get(path);
-    if (file)
-      return { mode: file.mode, size: file.content.length, isDirectory: false, isSymlink: false };
-    if (this.dirs.has(path)) return { mode: "0755", size: 0, isDirectory: true, isSymlink: false };
+    if (file) {
+      return {
+        mode: file.mode,
+        size: file.bytes?.byteLength ?? new TextEncoder().encode(file.content).byteLength,
+        isDirectory: false,
+        isSymlink: false,
+        isFile: true,
+        ...this.idsOf(file.ownership),
+        ...(this.mtimes.has(path) ? { mtimeMs: this.mtimes.get(path) } : {}),
+      };
+    }
+    if (this.dirs.has(path)) {
+      const attrs = this.dirAttrs.get(path);
+      return dir(attrs?.mode ?? "0755", attrs?.ownership);
+    }
     return null;
   }
 
   async lstat(path: string): Promise<FileStat | null> {
     this.rootFs("lstat", path);
-    const stat = this.statOf(path);
-    if (stat === null) return null;
-    return { ...stat, isSymlink: this.symlinks.has(path) };
+    if (this.symlinks.has(path)) {
+      return {
+        mode: "0777",
+        size: 0,
+        isDirectory: false,
+        isSymlink: true,
+        isFile: false,
+        uid: 0,
+        gid: 0,
+      };
+    }
+    return this.statOf(path);
   }
 
   async chmod(path: string, mode: string): Promise<void> {
@@ -822,30 +1004,122 @@ export class FakeHost implements Host {
     this.chmods.push([path, mode]);
     const file = this.files.get(path);
     if (file) this.files.set(path, { ...file, mode });
+    else if (this.dirs.has(path)) this.dirAttrs.set(path, { ...this.dirAttrs.get(path), mode });
+  }
+
+  async chown(path: string, uid: number, gid: number): Promise<void> {
+    this.rootFs("chown", path);
+    const ownership = `${this.nameOf(uid)}:${this.nameOf(gid)}`;
+    const file = this.files.get(path);
+    if (file) this.files.set(path, { ...file, ownership });
+    else if (this.dirs.has(path)) this.dirAttrs.set(path, { ...this.dirAttrs.get(path), ownership });
+    else
+      throw Object.assign(new Error(`ENOENT: no such file or directory, lchown '${path}'`), {
+        code: "ENOENT",
+      });
+  }
+
+  /** Refuses a symlink or non-file at `from` and anything at `to`; the copy is root's, 0600. */
+  async copyFile(from: string, to: string): Promise<void> {
+    this.rootFs("copyFile", from);
+    this.writeFault(to);
+    if (this.symlinks.has(from)) {
+      throw Object.assign(new Error(`ELOOP: too many symbolic links, open '${from}'`), {
+        code: "ELOOP",
+      });
+    }
+    const file = this.files.get(from);
+    if (!file) {
+      throw Object.assign(new Error(`ENOENT: no such file or directory, open '${from}'`), {
+        code: "ENOENT",
+      });
+    }
+    this.requireParent(to);
+    if (this.files.has(to) || this.dirs.has(to) || this.symlinks.has(to)) {
+      throw Object.assign(new Error(`EEXIST: file already exists, open '${to}'`), { code: "EEXIST" });
+    }
+    let bytes = file.bytes ?? new TextEncoder().encode(file.content);
+    for (const corrupt of this.copyCorruptions) bytes = corrupt(from, to, bytes);
+    this.files.set(to, { content: new TextDecoder().decode(bytes), bytes, mode: "0600" });
+  }
+
+  async readPrefix(path: string, length: number): Promise<Uint8Array | null> {
+    this.rootFs("readPrefix", path);
+    if (this.symlinks.has(path)) {
+      throw Object.assign(new Error(`ELOOP: too many symbolic links, open '${path}'`), {
+        code: "ELOOP",
+      });
+    }
+    const file = this.files.get(path);
+    if (!file) return null;
+    return (file.bytes ?? new TextEncoder().encode(file.content)).slice(0, length);
   }
 
   // Recursive, like the real one: `mkdir -p /a/b/c` leaves `/a` and `/a/b` as
   // directories too, and a fake that only remembered the leaf would call a
-  // write into `/a/b` parentless.
-  async mkdir(path: string, _mode?: string): Promise<void> {
+  // write into `/a/b` parentless. The mode lands on every directory it creates.
+  async mkdir(path: string, mode?: string): Promise<void> {
     this.rootFs("mkdir", path);
+    const created = [...this.ancestorsOf(path), path].filter((d) => !this.dirs.has(d));
     this.markDirs(path);
     this.dirs.add(path);
+    if (mode) for (const d of created) this.dirAttrs.set(d, { mode });
   }
 
-  // Throws on a missing source, like the real one: silently doing nothing would hide a bug.
+  private ancestorsOf(path: string): string[] {
+    const out: string[] = [];
+    for (let slash = path.indexOf("/", 1); slash !== -1; slash = path.indexOf("/", slash + 1)) {
+      out.push(path.slice(0, slash));
+    }
+    return out;
+  }
+
+  /**
+   * Throws on a missing source, like the real one: silently doing nothing
+   * would hide a bug. A directory moves with everything under it; it may
+   * replace only an empty directory, and a file never replaces a directory.
+   */
   async rename(path: string, to: string): Promise<void> {
     this.rootFs("rename", path);
     this.fault("rename", path, to);
+    const errno = (code: string): Error =>
+      Object.assign(new Error(`${code}: rename '${path}' -> '${to}'`), { code });
     const file = this.files.get(path);
-    if (!file) {
-      throw Object.assign(new Error(`ENOENT: no such file or directory, rename '${path}' -> '${to}'`), {
-        code: "ENOENT",
-      });
-    }
+    if (!file && !this.dirs.has(path)) throw errno("ENOENT");
+    if (this.dirs.has(to) && (file || this.hasChildren(to))) throw errno(file ? "EISDIR" : "ENOTEMPTY");
+    if (!file && this.files.has(to)) throw errno("ENOTDIR");
+    this.requireParent(to);
     this.fsOps.push(`rename ${path} -> ${to}`);
-    this.files.set(to, file);
-    this.files.delete(path);
+    if (file) {
+      this.files.set(to, file);
+      this.files.delete(path);
+      return;
+    }
+    const prefix = `${path}/`;
+    const moved = (key: string): string => to + key.slice(path.length);
+    for (const key of [...this.files.keys()].filter((k) => k.startsWith(prefix))) {
+      this.files.set(moved(key), this.files.get(key) as FakeFile);
+      this.files.delete(key);
+    }
+    for (const dir of [...this.dirs].filter((d) => d === path || d.startsWith(prefix))) {
+      this.dirs.delete(dir);
+      this.dirs.add(moved(dir));
+      const attrs = this.dirAttrs.get(dir);
+      this.dirAttrs.delete(dir);
+      if (attrs) this.dirAttrs.set(moved(dir), attrs);
+    }
+    for (const link of [...this.symlinks].filter((l) => l.startsWith(prefix))) {
+      this.symlinks.delete(link);
+      this.symlinks.add(moved(link));
+      const target = this.linkTargets.get(link);
+      this.linkTargets.delete(link);
+      if (target !== undefined) this.linkTargets.set(moved(link), target);
+    }
+  }
+
+  private hasChildren(dir: string): boolean {
+    const prefix = `${dir}/`;
+    return [...this.files.keys(), ...this.dirs, ...this.symlinks].some((k) => k.startsWith(prefix));
   }
 
   /** A hard link, modelled as a copy: the *source* is still there afterwards (§6.5). */
@@ -886,10 +1160,20 @@ export class FakeHost implements Host {
     this.fault("remove", path);
     this.fsOps.push(`remove ${path}`);
     this.files.delete(path);
-    // Recursive, like the real host: a directory goes with its contents.
+    // Recursive, like the real host: a directory goes with its contents, a
+    // symlink goes itself and its target stays.
     const prefix = path.endsWith("/") ? path : path + "/";
     for (const key of [...this.files.keys()]) if (key.startsWith(prefix)) this.files.delete(key);
-    this.dirs.delete(path);
+    for (const dir of [...this.dirs]) {
+      if (dir !== path && !dir.startsWith(prefix)) continue;
+      this.dirs.delete(dir);
+      this.dirAttrs.delete(dir);
+    }
+    for (const link of [...this.symlinks]) {
+      if (link !== path && !link.startsWith(prefix)) continue;
+      this.symlinks.delete(link);
+      this.linkTargets.delete(link);
+    }
   }
 
   async sha256File(path: string): Promise<string | null> {

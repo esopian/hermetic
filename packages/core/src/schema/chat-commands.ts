@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SessionRef } from "./common.ts";
 import { AgentName, BotName } from "./requests.ts";
 
 /**
@@ -17,7 +18,7 @@ import { AgentName, BotName } from "./requests.ts";
 export const ChatCommandsInput = z.object({
   instance: AgentName,
   bot: BotName,
-  session: z.string().min(1).optional(),
+  session: SessionRef.optional(),
 });
 export type ChatCommandsInput = z.infer<typeof ChatCommandsInput>;
 

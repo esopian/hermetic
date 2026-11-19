@@ -38,6 +38,8 @@ const TOOL_RENDER: Record<string, ToolRender> = {
   screenshot: "screenshot",
   computer: "screenshot",
   browser_screenshot: "screenshot",
+  // Hermes v0.23.1's one browser tool (`tools/browser_use_cli.py:1036`): `{success, exit_code, output, …}`.
+  browser_exec: "terminal",
   image: "image",
   sql: "table",
   query: "table",

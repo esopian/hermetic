@@ -60,6 +60,8 @@ const TEXT = {
     "[System: Your previous response was truncated by the output length limit. Continue exactly where you left off. Do not restart or repeat prior text. Finish the answer directly.]",
   networkCut:
     "[System: The previous response was cut off by a network error mid-stream. Continue exactly where you left off. Do not restart or repeat prior text. Finish the answer directly.]",
+  networkCutV23:
+    "[System: The previous response was cut off by a network error mid-stream — a transport interruption, NOT a change in your capabilities. Your tools are still fully available; call them as normal and ignore any earlier claim that you lack tool access. Continue the task from where you left off. Do not restart or repeat prior text.]",
   gwResume:
     "[System note: The previous turn was interrupted by a gateway restart; the gateway is now back online. Any restart/shutdown command in the history has already run — do NOT re-execute or verify it. Address the user's NEW message below FIRST and focus on what the user is asking now. Do NOT re-execute old tool calls — skip any unfinished work from the conversation history.]\n\nis #108 pushed yet?",
   gwResumeAlone:
@@ -94,6 +96,8 @@ const TEXT = {
     '[IMPORTANT: The user has invoked the "review" skill, indicating they want you to follow its instructions. The full skill content is loaded below.]\n\n# review\nRead the diff, then report bugs first, then anything else worth fixing.\n\nThe user has provided the following instruction alongside the skill invocation: the diff on #108',
   failed:
     "This turn did not complete. Some actions may already have run; verify their effects before resending.",
+  deliveryInterrupted:
+    "An automated delivery was interrupted and was not run again. Some actions may already have run; verify their effects.",
 } as const;
 
 /* ── the rows, as the dashboard returns them ──────────────────────────────── */
@@ -206,6 +210,9 @@ injectedIds.push(
 bot("08:30:15", "Will do; CI on #108 is green, so merging it now.");
 you("08:31:00", "and land #110 too");
 bot("08:31:40", TEXT.failed, { display_kind: "failed_turn" });
+// Appended, not interleaved: the flow indexes rows by position.
+injected("08:32:00", TEXT.networkCutV23);
+bot("08:32:30", TEXT.deliveryInterrupted, { display_kind: "failed_turn" });
 
 /**
  * The transcript, mapped by the history reader and stamped with kestrel as the

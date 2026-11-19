@@ -79,6 +79,8 @@ const unitPath = (unit: string): string => `${UNIT_DIR}/${unit}`;
 const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const HERMES_UNITS = ["hermes-dashboard.service", "hermes-gateway.service"];
 const OV_MODEL = MEMORY_SERVICES.openviking.model!;
+/** A Hermes whose memory plugins are catalog checkouts (`MemoryServicePlugin.hermes_min`). */
+const HERMES_023 = { hermes_version: "0.23.1", hermes_ref: "v0.23.1" };
 
 type Vendor = "openai" | "anthropic";
 type Choice = MemoryProvider | "none";
@@ -185,10 +187,14 @@ function memoryPart(
 }
 
 /** The agent's whole manifest with `provider` as its memory and `vendor` as its model's. */
-function agent(provider: Choice, options: { vendor?: Vendor; hash?: string } = {}): AgentConfig {
+function agent(
+  provider: Choice,
+  options: { vendor?: Vendor; hash?: string; hermes?: typeof HERMES_023 } = {},
+): AgentConfig {
   const vendor = options.vendor ?? "openai";
   const part = memoryPart(provider, vendor);
   const base = makeManifest({
+    ...options.hermes,
     provider: vendor,
     ...(part.memory ? { memory: part.memory } : {}),
     hermesConfigBody:
@@ -220,6 +226,7 @@ class SwitchBox extends HonchoBox {
   constructor() {
     super();
     this.curlBodies.set(OV_MODEL.url, blob(OV_MODEL.sha256, OV_MODEL.size));
+    this.hermes(HERMES_023.hermes_version);
   }
 
   override async exec(argv: readonly string[], opts?: ExecOptions): Promise<ExecResult> {
@@ -353,7 +360,7 @@ const DATA: Record<MemoryProvider, Array<[string, string]>> = {
 function rootsOf(provider: MemoryProvider): string[] {
   switch (provider) {
     case "holographic":
-      return [`${HERMES_HOME}/memory_store.db`];
+      return [`${HERMES_HOME}/memory_store.db`, hermesPluginDir("holographic")];
     case "hindsight":
       return [
         memoryServiceDir("hindsight"),
@@ -361,9 +368,9 @@ function rootsOf(provider: MemoryProvider): string[] {
         hermesPluginDir("hindsight"),
       ];
     case "openviking":
-      return [memoryServiceDir("openviking")];
+      return [memoryServiceDir("openviking"), hermesPluginDir("openviking")];
     case "honcho":
-      return [memoryServiceDir("honcho")];
+      return [memoryServiceDir("honcho"), hermesPluginDir("honcho")];
     case "prism":
       return [memoryServiceDir("prism"), hermesPluginDir(hermesMemoryProviderName("prism"))];
   }
@@ -425,6 +432,32 @@ describe("a memory switch away and back keeps the first provider's data and reus
       for (const unit of HERMES_UNITS) expect(host.restarted).toContain(unit);
       // And b's data is kept in its turn.
       for (const [path, content] of DATA[b]) expect(host.files.get(path)?.content).toBe(content);
+    });
+  }
+});
+
+describe("on Hermes 0.23, a switch away and back keeps the first provider's plugin checkout", () => {
+  for (const [a, b] of [
+    ["holographic", "honcho"],
+    ["openviking", "hindsight"],
+    ["honcho", "prism"],
+  ] as const) {
+    test(`${a} → ${b} → ${a}`, async () => {
+      const { host, f } = await bootstrapped(agent(a, { hermes: HERMES_023 }));
+      const dir = hermesPluginDir(a);
+      const before = snapshot(host, a);
+      expect(before.has(`${dir}/__init__.py`)).toBe(true);
+
+      expect((await f.rollOut(agent(b, { hermes: HERMES_023 }))).kind).toBe("applied");
+      expect(host.files.has(`${hermesPluginDir(b === "prism" ? "prme" : b)}/__init__.py`)).toBe(true);
+      expectNotRan(host, `rm -rf ${esc(dir)}$`);
+      host.reset();
+
+      expect((await f.rollOut(agent(a, { hermes: HERMES_023, hash: `${a}-again` }))).kind).toBe(
+        "applied",
+      );
+      expect(snapshot(host, a)).toEqual(before);
+      expectNotRan(host, INSTALL_WORK);
     });
   }
 });

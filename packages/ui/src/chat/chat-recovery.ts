@@ -46,6 +46,8 @@ const SWITCH_LAYERS = new Set(["auth", "billing", "endpoint", "provider"]);
  */
 const CODE_PLANS: Record<string, Partial<RecoveryPlan>> = {
   SESSION_NOT_OWNED: { retry: false, newSession: true },
+  // It may already be queued on the box: a Retry could run it twice.
+  CHAT_SEND_UNCERTAIN: { retry: false, editMessage: true },
   content_policy_blocked: { editMessage: true, retry: false },
   context_overflow: { compact: true, retry: false, newSession: true },
   loop_error: { newSession: true },

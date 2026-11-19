@@ -105,6 +105,7 @@ export function createAgentSet(deps: SetDeps) {
     nowIso,
     actor,
     assertCanApply,
+    assertOnBuildHermes,
     ensureConfig,
     appendEvent,
     view,
@@ -140,6 +141,8 @@ export function createAgentSet(deps: SetDeps) {
         { name: agent.name, expected: parsed.expected_version, actual: agent.version },
       );
     }
+    // Every `set` re-renders below; judged on the Hermes the row will name.
+    assertOnBuildHermes(agent, parsed.hermes_version);
 
     /**
      * §6.2: the memory provider the agent has after this call. A stated choice

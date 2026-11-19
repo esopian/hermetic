@@ -26,8 +26,10 @@
  * directory, case-insensitively) and `_SENSITIVE_MANAGED_DIR_NAMES`
  * (`mcp-tokens`, `pairing`, as any component). The control-character refusal
  * is `tools/path_security.py`'s `has_unsafe_path_chars`. hermetic adds its own:
- * key and certificate extensions anywhere (`.pem`, `.key`, `.p12`, `.pfx`) and
- * the browser profiles under `/data/hermes/browser` (cookies, logins).
+ * key and certificate extensions anywhere (`.pem`, `.key`, `.p12`, `.pfx`),
+ * the browser profiles under `/data/hermes/browser` (cookies, logins), and
+ * the root-only pre-upgrade backup tree (`HERMES_BACKUP_ROOT`), refused by
+ * name though it is outside the allowlist anyway.
  *
  * Like upstream's, this is defence in depth and not the only line: the
  * account can read these files and could copy one somewhere innocent first.
@@ -42,6 +44,7 @@ import {
   HERMES_ACCOUNT_HOME,
   HERMES_HOME,
 } from "@hermetic/core/shared";
+import { HERMES_BACKUP_ROOT } from "../apply/hermes-backup.ts";
 import { FilesError } from "./errors.ts";
 
 /** Control characters and Unicode line separators (`has_unsafe_path_chars`). */
@@ -66,8 +69,18 @@ const HERMES_CREDENTIAL_PATHS: readonly string[] = [
   "google_oauth_pending.json",
   "auth/google_oauth.json",
   "webhook_subscriptions.json",
+  // Secret-value caches: at the root since v0.22 (`hermes_cli/home_data_layout.py`
+  // `SECRET_CACHE_STORES`), and where earlier releases kept them.
+  "bws_cache.json",
+  "bws_cache.enc.json",
+  "op_cache.json",
+  "photon-sidecar.json",
   "cache/bws_cache.json",
   "cache/bws_cache.enc.json",
+  "cache/op_cache.json",
+  "runtime/photon-sidecar.json",
+  "webapp",
+  "installs",
   "pairing",
   "mcp-tokens",
   "sessions",
@@ -75,6 +88,15 @@ const HERMES_CREDENTIAL_PATHS: readonly string[] = [
   ...sqlite("state.db"),
   ...sqlite("kanban.db"),
 ];
+
+/**
+ * A root entry (at `$HERMES_HOME` or a profile) named by pattern, not exactly:
+ * the saved-gateways stores with their `.lock` and secret-bearing
+ * `.corrupt-<ms>` sidecars (upstream's `GATEWAY_CONNECTION_STORE_RE`), and
+ * the gateway's control socket with its `.path` pointer.
+ */
+const HERMES_CREDENTIAL_ENTRY_RE =
+  /^(?:gateway-connections?(?:-tokens)?\.json(?:\..+)?|gateway\.sock.*)$/;
 
 /** Under the account's home: upstream's home subpaths, plus hermetic's browser profiles. */
 const HOME_CREDENTIAL_PATHS: readonly string[] = [".config", "browser", "Library/Keychains"];
@@ -136,6 +158,8 @@ export function isCredentialPath(path: string): boolean {
     for (const rel of HERMES_CREDENTIAL_PATHS) {
       if (isUnder(path, `${root}/${rel}`)) return true;
     }
+    const entry = path.startsWith(`${root}/`) ? path.slice(root.length + 1).split("/")[0] : "";
+    if (entry && HERMES_CREDENTIAL_ENTRY_RE.test(entry)) return true;
   }
   return false;
 }
@@ -163,6 +187,9 @@ export function normaliseSharePath(raw: string): string {
  * Run on the written path and again on the resolved one; never touches disk.
  */
 export function checkSharePath(path: string): void {
+  if (isUnder(path, HERMES_BACKUP_ROOT)) {
+    throw refused("FORBIDDEN", "the pre-upgrade backup never leaves the box");
+  }
   if (
     isUnder(path, "/run/hermetic") ||
     isUnder(path, FILES_SECRET_DIR) ||

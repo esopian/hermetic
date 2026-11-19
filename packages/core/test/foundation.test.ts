@@ -440,21 +440,23 @@ describe("the upstream Hermes check", () => {
   });
 
   test("an older upstream tag is not an update", async () => {
-    const status = await withUpstream(answering("v1.0.0")).foundation.status();
-    expect(status.hermes?.latest).toBe("1.0.0");
+    const status = await withUpstream(answering("v0.1.0")).foundation.status();
+    expect(status.hermes?.latest).toBe("0.1.0");
     expect(status.hermes?.update_available).toBe(false);
   });
 
   /**
-   * The comparison is tag-against-tag on purpose. Upstream tags by date
-   * (`v2026.8.31`) and its `pyproject` carries a semver (`0.21.0`); ordering
-   * the tag against `pinned` would make every date newer than every semver and
-   * report an update forever.
+   * The comparison is tag-against-tag on purpose. Through 0.21.5 upstream
+   * tagged by date (`v2026.9.24`) while `pyproject` carried a semver, and
+   * ordering a date against `pinned` would report an update forever. Since
+   * v0.21.6 the tag is `vX.Y.Z`, so the pinned ref must be the pinned version's
+   * own tag; a bump that moves one without the other fails here.
    */
-  test("it compares against the pinned ref, not the pinned semver", async () => {
+  test("it compares against the pinned ref, which is the pinned version's tag", async () => {
+    expect(BUILD_VERSIONS.hermes_ref).toBe(`v${BUILD_VERSIONS.hermes}`);
     const status = await withUpstream(answering(BUILD_VERSIONS.hermes_ref)).foundation.status();
     expect(status.hermes?.pinned).toBe(BUILD_VERSIONS.hermes);
-    expect(status.hermes?.pinned).not.toBe(status.hermes?.latest);
+    expect(status.hermes?.latest).toBe(BUILD_VERSIONS.hermes);
     expect(status.hermes?.update_available).toBe(false);
   });
 

@@ -76,10 +76,15 @@ export const SECRET_SHAPES: ReadonlyArray<{ label: string; re: RegExp; replaceme
    * redacted anyway. That trade is taken knowingly: this pattern runs last, on
    * output that has already failed, and losing an id is recoverable in a way
    * that leaking a token is not (§8.3).
+   *
+   * One shape is exempt by name: a Hermes backup directory under
+   * `/data/hermetic-backups/` (`hermes-v2026.9.24-20261116T221216Z`,
+   * `post-v0.23.1-20261116T214213Z.1`), whose version and UTC stamp make it
+   * long and mixed-case, and whose path is what the operator needs from the log.
    */
   {
     label: "high-entropy token",
-    re: /(?<![A-Za-z0-9+._-])(?=[A-Za-z0-9+._-]{32,})(?=[A-Za-z0-9+._-]*[a-z])(?=[A-Za-z0-9+._-]*[A-Z])(?=[A-Za-z0-9+._-]*[0-9])[A-Za-z0-9+_-]+(?:\.[A-Za-z0-9+_-]+)*={0,2}(?![A-Za-z0-9+._-])/,
+    re: /(?<![A-Za-z0-9+._-])(?!(?:hermes|post)-v?\d+(?:\.\d+)*-\d{8}T\d{6}Z(?:\.\d+)?(?![A-Za-z0-9+._-]))(?=[A-Za-z0-9+._-]{32,})(?=[A-Za-z0-9+._-]*[a-z])(?=[A-Za-z0-9+._-]*[A-Z])(?=[A-Za-z0-9+._-]*[0-9])[A-Za-z0-9+_-]+(?:\.[A-Za-z0-9+_-]+)*={0,2}(?![A-Za-z0-9+._-])/,
   },
 ];
 
