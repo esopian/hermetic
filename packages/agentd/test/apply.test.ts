@@ -1257,7 +1257,7 @@ describe("hermes from the pinned upstream ref", () => {
   /** The install commands, in order, with the noise of the rest of apply gone. */
   function hermesCommands(): string[] {
     return host.commands.filter((c) =>
-      /^(git|uv) |^ln -sfn \/usr\/local\/lib\/hermes-agent|astral\.sh\/uv|^\/usr\/local\/bin\/hermes /.test(
+      /^(timeout \d+ )?(git|uv) |^ln -sfn \/usr\/local\/lib\/hermes-agent|astral\.sh\/uv|^\/usr\/local\/bin\/hermes /.test(
         c,
       ),
     );
@@ -1267,9 +1267,10 @@ describe("hermes from the pinned upstream ref", () => {
     const result = await apply(makeManifest(), { host });
 
     expect(hermesCommands()).toEqual([
-      // uv first, because nothing else in the sequence can run without it.
-      "/bin/sh -c curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh",
       "git clone --depth 1 --branch v2026.8.31 https://github.com/NousResearch/hermes-agent.git /usr/local/lib/hermes-agent",
+      // uv right after the clone, because the checkout says which uv: this
+      // one's `.python-version` is 3.11, so astral's installer, as always.
+      "/bin/sh -c curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh",
       "uv venv --python 3.11 /usr/local/lib/hermes-agent/venv",
       "uv pip install --python /usr/local/lib/hermes-agent/venv/bin/python -e /usr/local/lib/hermes-agent[all,messaging,bedrock]",
       "ln -sfn /usr/local/lib/hermes-agent/venv/bin/hermes /usr/local/bin/hermes",
@@ -1407,8 +1408,17 @@ describe("hermes from the pinned upstream ref", () => {
     await apply(makeManifest({ hermes_ref: "v2026.9.9", hermes_version: "0.22.0" }), { host });
 
     expect(hermesCommands()).toEqual([
-      "git -C /usr/local/lib/hermes-agent fetch --depth 1 https://github.com/NousResearch/hermes-agent.git v2026.9.9",
-      "git -C /usr/local/lib/hermes-agent checkout --detach FETCH_HEAD",
+      // The install being left, read to judge the direction before anything stops.
+      "git -C /usr/local/lib/hermes-agent rev-parse HEAD",
+      // The pre-fetch, bounded, while Hermes still runs: objects only, the checkout unmoved.
+      "timeout 300 git -C /usr/local/lib/hermes-agent fetch --depth 1 https://github.com/NousResearch/hermes-agent.git v2026.9.9",
+      // Read from the fetched commit, not the working tree the running Hermes uses.
+      `git -C /usr/local/lib/hermes-agent rev-parse FETCH_HEAD^{commit}`,
+      `git -C /usr/local/lib/hermes-agent show ${fakeCommitSha("v2026.9.9")}:.python-version`,
+      `git -C /usr/local/lib/hermes-agent cat-file -e ${fakeCommitSha("v2026.9.9")}:pnpm-lock.yaml`,
+      // Read again once its units are down: the commit a rollback returns to.
+      "git -C /usr/local/lib/hermes-agent rev-parse HEAD",
+      `git -C /usr/local/lib/hermes-agent checkout --detach ${fakeCommitSha("v2026.9.9")}`,
       // The venv survives the upgrade; only the editable install re-runs.
       "uv pip install --python /usr/local/lib/hermes-agent/venv/bin/python -e /usr/local/lib/hermes-agent[all,messaging,bedrock]",
       "ln -sfn /usr/local/lib/hermes-agent/venv/bin/hermes /usr/local/bin/hermes",
@@ -1482,11 +1492,20 @@ describe("hermes from the pinned upstream ref", () => {
       host,
     });
 
-    expect(host.commands.filter((c) => /^systemctl (stop|restart) |^(git|uv) /.test(c))).toEqual([
+    expect(
+      host.commands.filter((c) => /^systemctl (stop|restart) |^(timeout \d+ )?(git|uv) /.test(c)),
+    ).toEqual([
+      // The pre-fetch runs while both units are still up.
+      "git -C /usr/local/lib/hermes-agent rev-parse HEAD",
+      "timeout 300 git -C /usr/local/lib/hermes-agent fetch --depth 1 https://github.com/NousResearch/hermes-agent.git v2026.9.9",
+      // Read from the fetched commit, not the working tree the running Hermes uses.
+      `git -C /usr/local/lib/hermes-agent rev-parse FETCH_HEAD^{commit}`,
+      `git -C /usr/local/lib/hermes-agent show ${fakeCommitSha("v2026.9.9")}:.python-version`,
+      `git -C /usr/local/lib/hermes-agent cat-file -e ${fakeCommitSha("v2026.9.9")}:pnpm-lock.yaml`,
       "systemctl stop hermes-dashboard.service",
       "systemctl stop hermes-gateway.service",
-      "git -C /usr/local/lib/hermes-agent fetch --depth 1 https://github.com/NousResearch/hermes-agent.git v2026.9.9",
-      "git -C /usr/local/lib/hermes-agent checkout --detach FETCH_HEAD",
+      "git -C /usr/local/lib/hermes-agent rev-parse HEAD",
+      `git -C /usr/local/lib/hermes-agent checkout --detach ${fakeCommitSha("v2026.9.9")}`,
       "uv pip install --python /usr/local/lib/hermes-agent/venv/bin/python -e /usr/local/lib/hermes-agent[all,messaging,bedrock]",
       "git config --system --get-all safe.directory",
       "git -C /usr/local/lib/hermes-agent rev-parse --is-shallow-repository",
@@ -1545,10 +1564,10 @@ describe("hermes from the pinned upstream ref", () => {
       "systemctl stop hermes-gateway.service",
       "systemctl stop hermes.service",
     ]);
-    // Before git, not after it: the point is the unit is down while the
-    // checkout and the venv are being rewritten.
+    // Before the checkout moves, not after it: the point is the unit is down
+    // while the checkout and the venv are being rewritten.
     expect(after.indexOf("systemctl stop hermes.service")).toBeLessThan(
-      after.findIndex((c) => c.startsWith("git ")),
+      after.findIndex((c) => /^git -C \S+ checkout /.test(c)),
     );
   });
 
@@ -1592,11 +1611,17 @@ describe("a hermes swap that did not finish", () => {
 
   const NEXT = { hermes_ref: "v2026.9.9", hermes_version: "0.22.0" };
 
-  /** A box on the pinned ref with both units installed, then a bump that fails. */
-  /** Returns the hook that lets npm work again. */
+  /**
+   * A box on the pinned ref with both units installed, then a reinstall of the
+   * same ref (its extras changed, its UI unbuilt) that fails. Same ref, because
+   * a version change that fails after its checkout moved is rolled back instead
+   * (`hermes-upgrade.test.ts`). Returns the hook that lets npm work again.
+   */
   async function failMidSwap(): Promise<() => void> {
-    await apply(makeManifest(), { host });
     host.hermesVersionByRef.set(NEXT.hermes_ref, NEXT.hermes_version);
+    await apply(makeManifest(NEXT), { host });
+    await host.remove("/usr/local/lib/hermes-agent/.hermetic-extras");
+    await host.remove("/usr/local/lib/hermes-agent/web/.hermetic-built");
     // The web build: after the stop and the venv swap, long before the units
     // phase — which is the whole shape of the problem.
     const fixNpm = host.when(/\bnpm /, { code: 1, stderr: "ECONNRESET registry.npmjs.org" });
@@ -1987,9 +2012,15 @@ describe("hermes from the fleet's mirror", () => {
     });
 
     expect(gitCommands()).toEqual([
+      "git -C /usr/local/lib/hermes-agent rev-parse HEAD",
       `s3:GetObject ${TEST_BUCKET} hermes/v2026.9.9.bundle`,
       `git -C /usr/local/lib/hermes-agent fetch ${HERMES_BUNDLE_PATH} v2026.9.9`,
-      "git -C /usr/local/lib/hermes-agent checkout --detach FETCH_HEAD",
+      // Read from the fetched commit, not the working tree the running Hermes uses.
+      `git -C /usr/local/lib/hermes-agent rev-parse FETCH_HEAD^{commit}`,
+      `git -C /usr/local/lib/hermes-agent show ${fakeCommitSha("v2026.9.9")}:.python-version`,
+      `git -C /usr/local/lib/hermes-agent cat-file -e ${fakeCommitSha("v2026.9.9")}:pnpm-lock.yaml`,
+      "git -C /usr/local/lib/hermes-agent rev-parse HEAD",
+      `git -C /usr/local/lib/hermes-agent checkout --detach ${fakeCommitSha("v2026.9.9")}`,
       "git config --system --get-all safe.directory",
     ]);
     // The venv is made once and survives the ref change; only the editable

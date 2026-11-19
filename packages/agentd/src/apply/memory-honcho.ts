@@ -49,6 +49,7 @@ import {
   NET_ATTEMPTS,
   NET_RETRY_MS,
   ensureCheckout,
+  ensureManagedPython,
   writeAsHermes,
 } from "./memory-shared.ts";
 import type { ApplyResult } from "./shared.ts";
@@ -110,7 +111,7 @@ export async function ensureHoncho(input: {
   if (conf) result?.changed.push(HONCHO_CREATECLUSTER_CONF);
   const apt = await ensureAptPackages(host, spec, emit, dry);
   result?.installed.push(...apt);
-  const python = await ensureManagedPython(host, spec.python, emit, dry);
+  const python = await ensureManagedPython(host, spec.python, "honcho", emit, dry);
   if (python) result?.installed.push(`python:${spec.python}`);
 
   const checkout = await ensureCheckout(
@@ -171,30 +172,6 @@ async function ensureAptPackages(
   );
   if (!dry) await installPackages(host, missing, false);
   return missing;
-}
-
-/**
- * Step 3: `uv python install <version>` as root, under `UV_ENV` like Hermes's
- * own 3.11, after asking uv whether a managed one is already there
- * (`--managed-python`, so a system interpreter of the same minor never
- * satisfies it: the venv is built on the managed one). The probe is a read,
- * so a dry run asks it too.
- */
-async function ensureManagedPython(
-  host: Host,
-  version: string,
-  emit: Emit,
-  dry: boolean,
-): Promise<boolean> {
-  const env = { env: { ...UV_ENV } };
-  const found = await host.exec(["uv", "python", "find", "--managed-python", version], env);
-  if (found.code === 0) return false;
-  emit(opEvent("packages", 0.358, `installing Python ${version} for the honcho server`, host.now()));
-  if (dry) return true;
-  await retry(host, NET_ATTEMPTS, NET_RETRY_MS, () =>
-    must(host, ["uv", "python", "install", version], env),
-  );
-  return true;
 }
 
 /**

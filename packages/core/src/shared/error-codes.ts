@@ -93,6 +93,27 @@ export const ERROR_CODES = [
    */
   "SNAPSHOTS_UPDATE_FAILED",
   /**
+   * `upgrade --hermes V --now`: the box failed the new Hermes and could not
+   * roll back, so Hermes is down there. The run stops at that agent.
+   */
+  "HERMES_UPGRADE_FAILED",
+  /**
+   * `upgrade --hermes V --now`: the box failed the new Hermes and rolled back,
+   * so it runs the old version again and the row's pin is put back. Not
+   * `HERMES_UPGRADE_FAILED`, because Hermes is up here; still a failure, because
+   * the new version is bad on that box, and `--all` stops there.
+   */
+  "HERMES_UPGRADE_ROLLED_BACK",
+  /**
+   * The operation would render a new config for an agent whose row is held on
+   * a Hermes other than this build's pin (§6.5). Rows carry no `hermes_ref`,
+   * so the render would pair the held version with this build's ref and the
+   * box would refuse it (`MANIFEST_REFUSED`) — after a recreate had already
+   * replaced the instance. Refused on the laptop before anything is written;
+   * `hermetic upgrade --hermes <pin> <name> --now` is the remedy.
+   */
+  "HERMES_UPGRADE_REQUIRED",
+  /**
    * The named volume is attached to an instance. `agent create --volume` will
    * not steal a disk another box is reading, and `volume delete` will not
    * delete one — either would be guessing about whose memory it is (§1).

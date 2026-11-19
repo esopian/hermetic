@@ -11,6 +11,7 @@
  * string, and keeping them together is what makes that rule reviewable.
  */
 import { HermeticError } from "../../errors.ts";
+import { CHAT_ERROR_CODES, chatError } from "./hermes-chat-types.ts";
 
 /**
  * The `source` hermetic stamps on every `session.create` and `session.resume`.
@@ -172,5 +173,55 @@ export function discardBody(response: Response): void {
     response.body?.cancel().catch(() => {});
   } catch {
     // Already consumed, locked, or errored: nothing is held.
+  }
+}
+
+/**
+ * How long one dashboard JSON read may take, headers and body together. A slow
+ * box answers a 500-row transcript page in a few seconds; past this the request
+ * is stuck, not slow. The socket's probe interval (`CHAT_HEARTBEAT_MS`) too.
+ */
+export const REST_READ_MS = 15_000;
+
+/**
+ * Runs one dashboard read under `REST_READ_MS`, ending in `CHAT_UNREACHABLE`.
+ *
+ * Raced as well as aborted, so a `fetch` that ignores its signal still ends;
+ * the caller's own signal still aborts it as before. `AbortController` and
+ * `setTimeout` rather than `AbortSignal.timeout`/`any`, which older WebKit and
+ * React Native lack. Reads only: a write that timed out may still have landed.
+ */
+export async function timedRead<T>(
+  instance: string,
+  signal: AbortSignal | undefined,
+  read: (signal: AbortSignal) => Promise<T>,
+  ms = REST_READ_MS,
+): Promise<T> {
+  const stop = new AbortController();
+  const abort = () => stop.abort(signal?.reason);
+  if (signal?.aborted) abort();
+  else signal?.addEventListener("abort", abort, { once: true });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      // Rejected before the abort, so the race reports the deadline, not the abort it causes.
+      reject(
+        chatError(
+          CHAT_ERROR_CODES.UNREACHABLE,
+          `${instance}: the dashboard did not answer within ${ms / 1000}s`,
+          { instance },
+        ),
+      );
+      stop.abort();
+    }, ms);
+  });
+  const work = read(stop.signal);
+  try {
+    return await Promise.race([work, late]);
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
+    // The loser of the race may still reject; nobody is waiting on it.
+    work.catch(() => {});
   }
 }

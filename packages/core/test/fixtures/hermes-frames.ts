@@ -218,6 +218,54 @@ export const UNKNOWN_EVENT = eventFrame("vault.entry.revealed", 5, {
   detail: { nested: ["a", "b"] },
 });
 
+/* ── Hermes v0.23.1 additions (`tui_gateway/contracts/events.py`) ───────────── */
+
+/** An MCP tool's live progress, session-targeted (`tui_gateway/tool_progress.py:388-392`). */
+export const TOOL_PROGRESS_TICK = eventFrame("tool.progress", 3, {
+  tool_id: "tc_FIXTURE_1",
+  name: "mcp_fixture_index",
+  progress: 2,
+  total: 5,
+  percent: 40,
+  message: "indexing",
+});
+
+/** A change-watcher broadcast (`tui_gateway/change_watcher.py:388`), global: `session_id: ""`. */
+export const SKILLS_CHANGED = eventFrame("skills.changed", 0, {}, "");
+
+/** An approval server request; `request_id` is the approval queue's id, `id` the card's. */
+export function approvalRequestFrame(srq: string, requestId: string): string {
+  return JSON.stringify({
+    jsonrpc: "2.0",
+    id: srq,
+    method: "approval",
+    params: { session_id: SESSION_ID, request_id: requestId, tool_name: "terminal", command: "deploy" },
+  });
+}
+
+/**
+ * Pending approvals dropped on interrupt or teardown, a global broadcast naming
+ * its runtime in the payload (`tui_gateway/session_lifecycle.py:585-590`).
+ */
+export function approvalCancelledFrame(
+  requestIds: string[],
+  runtime = SESSION_ID,
+  reason = "interrupt",
+) {
+  return eventFrame(
+    "approval.cancelled",
+    0,
+    {
+      session_id: runtime,
+      stored_session_id: STORED_SESSION_ID,
+      reason,
+      cancelled_count: requestIds.length,
+      request_ids: requestIds,
+    },
+    "",
+  );
+}
+
 /**
  * Garbage on the wire, in the three shapes that actually happen: a truncated
  * document, a frame carrying two documents in one, and a blank keepalive line.

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { AGENT_NAME_RE } from "../shared/naming.ts";
 export { AGENT_NAME_RE } from "../shared/naming.ts";
-import { Iso, ProfileId, Region, SecretSlug } from "./common.ts";
+import { Iso, ProfileId, Region, SecretSlug, SessionRef } from "./common.ts";
 import { AutoClearRead, NotificationSource, NotificationView } from "./notification.ts";
 import { Plan } from "./ops.ts";
 import { Provider, ROOT_GIB_MAX, ROOT_GIB_MIN, SecretsMode, Size } from "./agent.ts";
@@ -325,6 +325,8 @@ export const UpgradeInput = z
     hermes: z.string().optional(),
     hermeticd: z.string().optional(),
     all: z.boolean().optional(),
+    /** `--hermes V --now` only: skip the wait for an idle box (D4) and stop Hermes mid-session. */
+    force: z.boolean().optional(),
     ...HermeticdRolloutOptions,
   })
   .refine((v) => v.hermes !== undefined || v.hermeticd !== undefined, {
@@ -343,6 +345,9 @@ export const UpgradeInput = z
         "--no-rollout and --rollout-wait-ms are about a hermeticd release, so they need --hermeticd",
     },
   )
+  .refine((v) => v.force !== true || (v.now === true && v.hermes !== undefined), {
+    message: "--force skips --hermes --now's wait for an idle box, so it needs both",
+  })
   .refine(rolloutFlagsAgree, ROLLOUT_FLAGS_CONFLICT);
 export type UpgradeInput = z.infer<typeof UpgradeInput>;
 
@@ -1087,7 +1092,7 @@ export type ChatSessionsInput = z.infer<typeof ChatSessionsInput>;
 export const ChatHistoryInput = z.object({
   instance: AgentName,
   bot: BotName,
-  session: z.string().min(1).optional(),
+  session: SessionRef.optional(),
   limit: z.number().int().min(1).max(500).optional(),
   /**
    * Also report the usage the gateway holds for the session while it is live
@@ -1121,7 +1126,7 @@ export const ChatSendInput = z
     /** May be empty only when the turn carries attachments: their framing is then the whole prompt. */
     message: z.string().max(200_000),
     /** Continue a session; omitted means the bot's canonical one. */
-    session: z.string().min(1).optional(),
+    session: SessionRef.optional(),
     new_session: z.boolean().optional(),
     /**
      * Ask the gateway to queue this message behind a turn already running in the
@@ -1159,7 +1164,7 @@ export type ChatSendInput = z.infer<typeof ChatSendInput>;
 export const ChatOpenInput = z.object({
   instance: AgentName,
   bot: BotName,
-  session: z.string().min(1).optional(),
+  session: SessionRef.optional(),
   new_session: z.boolean().optional(),
 });
 export type ChatOpenInput = z.infer<typeof ChatOpenInput>;
@@ -1167,7 +1172,7 @@ export type ChatOpenInput = z.infer<typeof ChatOpenInput>;
 export const ChatCompactInput = z.object({
   instance: AgentName,
   bot: BotName,
-  session: z.string().min(1).optional(),
+  session: SessionRef.optional(),
   focus_topic: z.string().max(4000).optional(),
 });
 export type ChatCompactInput = z.infer<typeof ChatCompactInput>;
@@ -1175,7 +1180,7 @@ export type ChatCompactInput = z.infer<typeof ChatCompactInput>;
 export const ChatArchiveInput = z.object({
   instance: AgentName,
   bot: BotName,
-  session: z.string().min(1),
+  session: SessionRef,
 });
 export type ChatArchiveInput = z.infer<typeof ChatArchiveInput>;
 
@@ -1183,7 +1188,7 @@ export const ChatRespondInput = z
   .object({
     instance: AgentName,
     bot: BotName,
-    session: z.string().min(1),
+    session: SessionRef,
     request_id: z.string().min(1),
     kind: z.enum(["approval", "question"]),
     choice: z.enum(["once", "session", "always", "deny"]).optional(),
@@ -1226,7 +1231,7 @@ export type ChatRespondInput = z.infer<typeof ChatRespondInput>;
 export const ChatAbortInput = z.object({
   instance: AgentName,
   bot: BotName,
-  session: z.string().min(1).optional(),
+  session: SessionRef.optional(),
   /** Stop one delegated child instead of the turn; the turn continues. */
   subagent_id: z.string().min(1).optional(),
 });
@@ -1244,7 +1249,7 @@ export type ChatAbortInput = z.infer<typeof ChatAbortInput>;
 export const ChatSteerInput = z.object({
   instance: AgentName,
   bot: BotName,
-  session: z.string().min(1).nullish(),
+  session: SessionRef.nullish(),
   text: z.string().trim().min(1).max(200_000),
   /** Steer one delegated child (applied at its next tool call) instead of the turn. */
   subagent_id: z.string().min(1).optional(),
@@ -1263,7 +1268,7 @@ export type ChatSteerInput = z.infer<typeof ChatSteerInput>;
 export const ChatBtwInput = z.object({
   instance: AgentName,
   bot: BotName,
-  session: z.string().min(1).nullish(),
+  session: SessionRef.nullish(),
   text: z.string().trim().min(1).max(200_000),
 });
 export type ChatBtwInput = z.infer<typeof ChatBtwInput>;
@@ -1286,7 +1291,7 @@ export const ChatBranchInput = z
   .object({
     instance: AgentName,
     bot: BotName,
-    session: z.string().min(1).nullish(),
+    session: SessionRef.nullish(),
     until: Iso.nullish(),
     until_message: z.string().min(1).nullish(),
     question: z.string().trim().min(1).max(200_000).nullish(),
@@ -1316,7 +1321,7 @@ export const ChatObserveInput = z.object({
   instance: AgentName,
   bot: BotName,
   /** Watch one session; omitted means the bot's canonical one. */
-  session: z.string().min(1).optional(),
+  session: SessionRef.optional(),
 });
 export type ChatObserveInput = z.infer<typeof ChatObserveInput>;
 

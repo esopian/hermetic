@@ -82,6 +82,8 @@ describe("recoveryPlan", () => {
         ["newSession"],
       ],
       ["session owned elsewhere (core code)", failure(undefined, "SESSION_NOT_OWNED"), ["newSession"]],
+      ["busy owner (core code)", failure(undefined, "CHAT_SESSION_BUSY"), ["retry"]],
+      ["unconfirmed send (core code)", failure(undefined, "CHAT_SEND_UNCERTAIN"), ["editMessage"]],
       ["billing", failure({ layer: "billing", code: "billing", retryable: false }), ["switchProvider"]],
     ];
     for (const [name, input, expected] of rows)

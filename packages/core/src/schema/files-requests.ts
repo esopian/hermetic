@@ -9,7 +9,7 @@ import {
   FilesStageResult,
   SecretTextAsMode,
 } from "./files.ts";
-import { Sha256 } from "./common.ts";
+import { SessionRef, Sha256 } from "./common.ts";
 import { OpEvent } from "./ops.ts";
 import { AgentName } from "./requests.ts";
 
@@ -52,7 +52,7 @@ export const FilesStageInput = z.object({
   /** The operator confirmed a key-looking file is not a secret (D6). */
   not_secret: z.boolean().optional(),
   /** The chat session the upload is for, recorded on the staged entry. */
-  session: z.string().min(1).max(256).optional(),
+  session: SessionRef.max(256).optional(),
 });
 export type FilesStageInput = z.infer<typeof FilesStageInput>;
 

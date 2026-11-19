@@ -22,7 +22,7 @@ import { LEGACY_BEDROCK_MODEL_IDS } from "../src/profiles/provider-profiles.ts";
 import { defaultFleetSettings } from "../src/schema/index.ts";
 import type { FleetSettings } from "../src/schema/index.ts";
 import { HermeticError } from "../src/errors.ts";
-import { testHermetic } from "./helpers.ts";
+import { onBuildHermes, testHermetic } from "./helpers.ts";
 
 const sharedSecretPath = (slug: string): string => sharedSecretPathFor(FIXTURE_CONFIG.fleet_id, slug);
 
@@ -544,6 +544,7 @@ describe("providers.delete", () => {
    */
   test("refuses while an agent is staged onto it and not yet applied", async () => {
     const { backend, hermetic } = fleet();
+    onBuildHermes(backend);
     // Nothing *runs* on vercel-gw; stage one agent onto it.
     expect(
       (await hermetic.providers.list()).profiles.find((p) => p.name === "vercel-gw")!.linked_agents,
@@ -565,7 +566,8 @@ describe("providers.delete", () => {
    * calling it linked would misreport what the profile is serving.
    */
   test("`linked_agents` is what runs on it; `pending_agents` is what is staged", async () => {
-    const { hermetic } = fleet();
+    const { backend, hermetic } = fleet();
+    onBuildHermes(backend);
     await hermetic.providers.update({ profile: "vercel-gw", enabled: true, api_key: NEW_KEY });
     await hermetic.agents.set({ name: "fathom", provider_profile: "vercel-gw" });
 

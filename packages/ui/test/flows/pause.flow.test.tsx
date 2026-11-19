@@ -6,7 +6,8 @@
  * The drawer header's "⏸ Pause" does not run the op; it lands on Lifecycle
  * with that same confirm open. Resume loses nothing, so it runs directly.
  *
- * `atlas` is seeded `ready`, `marrow` `paused` (`fixture-agents.ts`).
+ * `atlas` is seeded `ready` on this build's Hermes, `granite` `ready` on an older
+ * one, `marrow` `paused` (`fixture-agents.ts`).
  */
 import { cleanup, screen, userEvent, waitFor, within } from "../dom.ts";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -50,10 +51,10 @@ describe("Pause", () => {
     mountPortal();
     const user = userEvent.setup();
 
-    const d = await openAgent("atlas");
+    const d = await openAgent("granite");
     await user.click(within(d).getByRole("tab", { name: "Lifecycle" }));
     const card = within(d).getByRole("region", { name: "Pause" });
-    // One Recommended per grid: atlas is behind, so Upgrade holds it and Pause does not.
+    // One Recommended per grid: granite is behind, so Upgrade holds it and Pause does not.
     const tagged = within(d)
       .getAllByRole("region")
       .filter((r) => (r.textContent ?? "").includes("Recommended"))

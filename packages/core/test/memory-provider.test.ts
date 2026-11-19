@@ -562,6 +562,38 @@ describe("rendering an agent with each memory provider", () => {
     expect(holo.manifest.units).not.toContain(MEMORY_SERVICE_UNIT);
   });
 
+  test("holographic from 0.22 mirrors built-in memory writes; 0.21 and other providers render no section", () => {
+    const at = (memory: RenderInput["memory"], hermes_version: string) =>
+      file(
+        renderAgentConfig({
+          name: "atlas",
+          size: "small",
+          provider: "openai",
+          secrets_mode: "none",
+          hermes_version,
+          hermes_ref: "v" + hermes_version,
+          chrome_ref: "153.0.8010.12",
+          region: "us-east-1",
+          tailnet: "tail0.ts.net",
+          ...(memory === undefined ? {} : { memory }),
+        }),
+        HERMES_MANAGED_CONFIG,
+      );
+    expect(at({ provider: "holographic" }, "0.23.1")).toInclude(
+      "  auto_update_check_hours: 0\n  hermes-memory-store:\n    mirror_memory_writes: true\n",
+    );
+    expect(at({ provider: "holographic" }, "0.22.0")).toInclude("mirror_memory_writes: true");
+    expect(file(holo, HERMES_MANAGED_CONFIG)).not.toInclude("hermes-memory-store");
+    expect(at({ provider: "holographic" }, "0.21.5")).not.toInclude("hermes-memory-store");
+    for (const memory of [
+      undefined,
+      { provider: "openviking" as const },
+      { provider: "honcho" as const },
+    ]) {
+      expect(at(memory, "0.23.1")).not.toInclude("hermes-memory-store");
+    }
+  });
+
   test("a service provider adds its unit, orders Hermes behind it, and asks for both capabilities", () => {
     for (const r of [hind, ov]) {
       expect(r.manifest.units).toContain(MEMORY_SERVICE_UNIT);
@@ -759,6 +791,7 @@ describe("agents.create with a memory provider", () => {
         "browser-stack",
         "provider-key-ref",
         "managed-env",
+        "hermes-0.22-install",
         MEMORY_PROVIDER_CAPABILITY,
       ],
     };

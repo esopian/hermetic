@@ -18,6 +18,7 @@ import type { AgentConfig, RenderedFile } from "@hermetic/core/schema";
 import {
   HERMES_DASHBOARD_UNIT,
   HERMES_GATEWAY_UNIT,
+  HERMES_LEGACY_DASHBOARD_UNIT,
   MEMORY_LLM_ENV_PATH,
   MEMORY_SERVICE_UNIT,
   MEMORY_SERVICE_UNITS,
@@ -65,7 +66,23 @@ import {
   HERMES_PLUGIN_NAME,
   ensureBundledPlugin,
 } from "./plugins.ts";
-import { ensureGitSafeDirectory, ensureHermes, ensureHermesRevision } from "./hermes.ts";
+import {
+  checkoutPython,
+  ensureGitSafeDirectory,
+  ensureHermes,
+  ensureHermesRevision,
+  gateStartedSwap,
+  rollBackPendingSwap,
+  syncsLocked,
+} from "./hermes.ts";
+import {
+  HERMES_HOLD_PATH,
+  countHeldResume,
+  holdDropIn,
+  readSwapGate,
+  releaseHold,
+  verifySwap,
+} from "./hermes-upgrade.ts";
 import { ensureNode, ensureWebUi } from "./node-web.ts";
 import { ensureMemoryDeps } from "./memory.ts";
 import {
@@ -174,6 +191,82 @@ export async function apply(
   manifest: AgentConfig,
   opts: ApplyOptions & { readonly fileSecrets?: ApplyFileSecrets },
 ): Promise<ApplyResult> {
+  const step: SwapStep = { swap: false, unstarted: null, hermes: false };
+  const reapply = (previous: AgentConfig) => apply(previous, { ...opts, rollingBack: true });
+  // A rollback a crash interrupted is finished before anything else runs: its
+  // restore may already be done, and the new Hermes must never start on it.
+  const interrupted = opts.dryRun === true ? null : await readSwapGate(opts.host);
+  // A swap hermeticd died in while held (the new Hermes never started) is
+  // resumed a bounded number of times, then undone the same way.
+  const tooMany =
+    interrupted !== null &&
+    interrupted.rolling_back === undefined &&
+    opts.rollingBack !== true &&
+    (await opts.host.lstat(HERMES_HOLD_PATH)) !== null
+      ? await countHeldResume(opts.host, interrupted)
+      : null;
+  if (interrupted !== null && (interrupted.rolling_back !== undefined || tooMany !== null)) {
+    try {
+      await rollBackPendingSwap(manifest, opts, tooMany, reapply, true);
+    } catch (error) {
+      // Rolled back: a configuration for another ref than the one undone is applied as asked.
+      const done = error instanceof AgentdError && error.code === "HERMES_UPGRADE_ROLLED_BACK";
+      if (!done || interrupted.to_ref === manifest.hermes_ref) throw error;
+    }
+  }
+  // A swap hermeticd died in after the new Hermes started is gated first.
+  if (interrupted !== null) await gateStartedSwap(manifest, opts, reapply);
+  try {
+    return await applyOnce(manifest, opts, step);
+  } catch (error) {
+    /**
+     * A forward Hermes swap whose new version was never seen healthy — this
+     * apply's, or a crashed earlier one's — is rolled back rather than left
+     * down when the swap itself failed: building the new Hermes (its install,
+     * its web build), starting its units, or the runtime gate. The box goes
+     * back to the old version, its state and the old configuration, re-applied
+     * (`rollBackPendingSwap`), which throws `HERMES_UPGRADE_ROLLED_BACK` or
+     * `HERMES_ROLLBACK_FAILED`. So is any failure while the new Hermes has
+     * not yet been started: a held, down box must not wait for an apply
+     * nobody schedules. Once it has been up, any other failure (an apt blip,
+     * a memory plugin) is rethrown as it was, never rolled back: when this
+     * apply started it, after the swap is gated (a gate failure rolls back);
+     * otherwise the swap was already gated before `applyOnce` (`gateStartedSwap`).
+     */
+    const unstarted =
+      step.unstarted ?? (await opts.host.lstat(HERMES_HOLD_PATH).catch(() => null)) !== null;
+    if (opts.dryRun !== true && (step.swap || unstarted)) {
+      await rollBackPendingSwap(manifest, opts, error, reapply, !step.hermes);
+    } else if (opts.dryRun !== true && step.unstarted === false) {
+      // This apply started the new Hermes, then failed elsewhere: gated now,
+      // so no ungated swap is left for a later apply's gate to undo days on.
+      try {
+        await verifySwap(opts.host, opts.emit ?? (() => {}), manifest.hermes_ref);
+      } catch (gate) {
+        await rollBackPendingSwap(manifest, opts, gate, reapply);
+        // A downgrade's gate failed: Hermes is now held down, which outranks the first error.
+        if (gate instanceof AgentdError && gate.code === "HERMES_RESTORE_FAILED") throw gate;
+      }
+    }
+    throw error;
+  }
+}
+
+/** Where `applyOnce` is in a Hermes swap: what a failure there rolls back. */
+interface SwapStep {
+  /** Running one of the swap's own steps. */
+  swap: boolean;
+  /** From the units phase on: the new Hermes held and not yet started. Before it, the hold says. */
+  unstarted: boolean | null;
+  /** `ensureHermes` has been reached: before it, a held swap's marker may still name the old ref. */
+  hermes: boolean;
+}
+
+async function applyOnce(
+  manifest: AgentConfig,
+  opts: ApplyOptions & { readonly fileSecrets?: ApplyFileSecrets },
+  step: SwapStep,
+): Promise<ApplyResult> {
   const { host } = opts;
   const emit = opts.emit ?? (() => {});
   const dry = opts.dryRun === true;
@@ -281,6 +374,8 @@ export async function apply(
   if (chrome?.installed) result.installed.push(`chrome@${chrome.ref}`);
 
   // Hermes is not an apt package: a venv pinned to the manifest's version (§6.4).
+  step.swap = true;
+  step.hermes = true;
   const hermesChanged = await ensureHermes(manifest, opts, result, emit, dry);
   // Both outside `ensureHermes` on purpose: it returns early for a checkout
   // already on the pinned ref, and every box installed before these two lines
@@ -293,6 +388,7 @@ export async function apply(
   // here from the checkout above, with a Node apt cannot supply.
   await ensureNode(opts, result, emit, dry);
   await ensureWebUi(manifest, opts, result, emit, dry);
+  step.swap = false;
   // After `ensureHermes`, which builds the venv these go into (and puts `uv` on
   // the box), and before the units phase starts Hermes on it.
   const memoryDepsInstalled = await ensureMemoryDeps(host, manifest, result, emit, dry);
@@ -306,7 +402,7 @@ export async function apply(
 
   // ─── 2c. the gateway unit, if upstream has not written it yet ──────────────
   emit(opEvent("units", 0.38, `checking ${HERMES_GATEWAY_UNIT}`, at()));
-  const gatewayInstalled = await ensureGatewayUnit(host, dry);
+  const gatewayInstalled = await ensureGatewayUnit(host, dry, syncsLocked(await checkoutPython(host)));
   await ensureHermesHomeOwnership(host, dry);
   // After the account exists and after `ensureHermes`, which is what puts `uv`
   // on the box.
@@ -475,6 +571,8 @@ export async function apply(
   const dashboardLegacyRemoved = manifest.units.includes(HERMES_DASHBOARD_UNIT)
     ? await removeLegacyDashboardUnit(host, result, emit, dry)
     : false;
+  // A swap held the old unit too; its hold drop-in goes with it.
+  if (dashboardLegacyRemoved) await host.remove(holdDropIn(HERMES_LEGACY_DASHBOARD_UNIT));
   // Not a rename but the same shape: memory-server units this agent no longer
   // has, which nothing else would ever stop, and honcho's plugin config link
   // (`removeMemoryService`).
@@ -659,6 +757,9 @@ export async function apply(
   // The obligation restated, now that it is a fact rather than a prediction:
   // these units, and no others, are what this apply owes from here.
   if (!dry) await writeApplyPending(host, toRestart, manifest.config_hash);
+  // A Hermes swap's hold (`hermes-upgrade.ts`) ends here, where Hermes is started.
+  step.unstarted = !dry && (await host.lstat(HERMES_HOLD_PATH)) !== null;
+  if (!dry) await releaseHold(host);
   let memoryServerRestarted = false;
   for (const unit of toRestart) {
     /**
@@ -671,7 +772,10 @@ export async function apply(
       await awaitMemoryServer(host, manifest, emit);
     }
     emit(opEvent("units", 0.75, `restarting ${unit}`, at()));
+    step.swap = unit === HERMES_DASHBOARD_UNIT || unit === HERMES_GATEWAY_UNIT;
     if (!dry) await must(host, ["systemctl", "restart", unit]);
+    if (step.swap) step.unstarted = false;
+    step.swap = false;
     result.restarted.push(unit);
     if (!dry && unit === MEMORY_SERVICE_UNIT) memoryServerRestarted = true;
     // The oneshot read `MANIFEST_PATH`, which a converge has not moved yet:
@@ -690,6 +794,12 @@ export async function apply(
   // it is not restarted above — it is the unit the units phase has just deleted,
   // and a deleted unit needs no start.)
   if (!dry) await clearApplyPending(host);
+
+  // A forward Hermes swap is not done until the new version is seen up; a
+  // failure here is rolled back by `apply`.
+  step.swap = true;
+  if (!dry) await verifySwap(host, emit, manifest.hermes_ref);
+  step.swap = false;
 
   /**
    * The superseded Chrome trees, now that nothing is running from them.

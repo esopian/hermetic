@@ -102,6 +102,23 @@ describe("every write is all of it or none of it (§8.3)", () => {
     expect(await stat(path).catch(() => null)).toBeNull();
   });
 
+  test("a chunked write lands every chunk at its mode, and one whose chunks throw lands nothing", async () => {
+    const path = join(dir, "hermes.bundle");
+    async function* chunks(fail: boolean): AsyncGenerator<Uint8Array> {
+      yield new TextEncoder().encode("one ");
+      yield new TextEncoder().encode("two");
+      if (fail) throw new Error("CHECKSUM_MISMATCH");
+    }
+
+    await expect(host.writeChunks(path, chunks(true), "0600")).rejects.toThrow("CHECKSUM_MISMATCH");
+    expect(await readdir(dir)).toEqual([]);
+
+    await host.writeChunks(path, chunks(false), "0600");
+    expect(await readFile(path, "utf8")).toBe("one two");
+    expect(octal((await stat(path)).mode)).toBe("0600");
+    expect(await readdir(dir)).toEqual(["hermes.bundle"]);
+  });
+
   /**
    * These writes happen as root into directories a less privileged account may
    * be able to create entries in. A staging name anyone can predict is a file

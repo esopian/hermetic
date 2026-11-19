@@ -20,10 +20,16 @@ import {
   type ChatSteerStatus,
   type SendOptions,
 } from "./hermes-chat-types.ts";
-import { createConnectionGate, hermesActivity, hermesRequest } from "./hermes-chat-activity.ts";
+import {
+  approvalsCancelled,
+  createConnectionGate,
+  hermesActivity,
+  hermesRequest,
+} from "./hermes-chat-activity.ts";
 import { chatFailure, contextUsageBlock, mapUsage, toolBlock } from "./hermes-chat-blocks.ts";
 import { todoSeedBlock } from "./hermes-chat-todos.ts";
 import { createTurnResume, reconnectBlock, type TurnPump } from "./hermes-chat-resume.ts";
+import { FORWARDED_STILL_QUEUED, forwardedPump } from "./hermes-chat-forwarded.ts";
 import { advertiseServerRequests, type Rpc } from "./hermes-chat-rpc.ts";
 import { turnTrace, type TurnTrace } from "./hermes-chat-devtap.ts";
 import { attachToTurn, detachQueued } from "./hermes-chat-attach.ts";
@@ -84,6 +90,20 @@ function rejectedQueued(e: unknown): boolean {
     e.details?.code === INVALID_PARAMS &&
     /invalid params for prompt\.submit:[^\n]*\bqueued\b/.test(e.message)
   );
+}
+
+/**
+ * A `prompt.submit` refused because the gateway's FIFO owns the chat
+ * (`tui_gateway/methods_prompt.py:721-766` at v0.23.1), as a frame code; else null.
+ * `SESSION_OWNER_UNCONFIRMED` may have been queued, so it is never a rejection.
+ */
+function ownerRefusal(e: unknown): string | null {
+  if (!(e instanceof HermeticError) || e.details?.code !== 4090) return null;
+  const reason = e.details.reason;
+  if (reason === "SESSION_OWNER_UNCONFIRMED") return CHAT_ERROR_CODES.SEND_UNCERTAIN;
+  if (reason === "SESSION_OWNER_BUSY") return CHAT_ERROR_CODES.SESSION_BUSY;
+  if (reason === "SESSION_NOT_OWNED") return CHAT_ERROR_CODES.SESSION_NOT_OWNED;
+  return null;
 }
 
 /** An error frame, with `failure` always filled (and its surface when upstream sent one). */
@@ -283,6 +303,8 @@ export function createChatTurn(deps: ChatTurnDeps) {
     // `session.interrupt` (see `stopBox`).
     let prompted = false;
     let ended = false;
+    /** A forwarded prompt left unfinished: its hold is closed, not kept (`hermes-chat-forwarded.ts`). */
+    let forwardStopped = false;
     const key = turnKey(box, bot);
     /**
      * Tell the box to stop a turn this scope is leaving unfinished.
@@ -435,6 +457,17 @@ export function createChatTurn(deps: ChatTurnDeps) {
       }
       const submitted = rec(submittedRaw);
       accepted = true;
+      // Queued behind the gateway's own turn in the FIFO that owns this chat
+      // (`hermes-chat-forwarded.ts`): it may wait minutes, so no first-frame
+      // deadline, and it does not run on this session, so no interrupt either.
+      // The owner's `message.start`/`message.complete` are relayed here; an
+      // empty completion means the relay lost the owner, and the reply then
+      // reaches the transcript, which the next history read shows.
+      const forwarded = submitted?.forwarded === true;
+      if (forwarded)
+        pump = forwardedPump(pump, () => {
+          forwardStopped = true;
+        });
       // Everything the socket delivered before this point — `gateway.ready`,
       // `session.info` — arrived because the socket opened, not because a turn
       // started. The snapshot is what lets the deadline below distinguish "the
@@ -458,7 +491,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
         session,
         message,
         opts.signal,
-        waitMs,
+        forwarded ? null : waitMs,
         arrivedAtSubmit,
         baseline,
         delegation,
@@ -510,6 +543,8 @@ export function createChatTurn(deps: ChatTurnDeps) {
       // because a turn that reconnected ends on a socket this scope never
       // opened, and that is the one the hold must keep.
       lease.release(pump ? pump.detach() : rpc);
+      // shortcut: a send within ws_orphan_reap_grace_s (20 s) reattaches this runtime and the forwarded relay can deliver the stopped reply into that turn; upgrade to draining the hold until the relay's message.complete and making the next lease wait on it.
+      if (forwardStopped && active?.stored) deps.sockets.close(box, bot, active.stored);
     }
   }
 
@@ -532,7 +567,8 @@ export function createChatTurn(deps: ChatTurnDeps) {
     session: string,
     message: string,
     signal: AbortSignal | undefined,
-    deadlineMs: number,
+    /** Null: a forwarded prompt, which has no first-frame deadline. */
+    deadlineMs: number | null,
     arrivedAtSubmit: number,
     baseline: number,
     delegation: ReturnType<typeof subagentTurn>,
@@ -559,6 +595,8 @@ export function createChatTurn(deps: ChatTurnDeps) {
     // Connection-request notices replace by key, so an update older than the
     // one shown (a replay, the resume snapshot) must not reach a head.
     const connections = createConnectionGate();
+    /** An approval queue `request_id` to the `srq-…` id its card carries (`approval.cancelled`). */
+    const approvalCards = new Map<string, string>();
 
     /**
      * Every block leaves through here, because every block that is not text
@@ -735,6 +773,9 @@ export function createChatTurn(deps: ChatTurnDeps) {
         yield* flushReasoning(lastSeq);
         // Likewise the words a `MEDIA:` line held back.
         yield* flushMedia(lastSeq);
+        // A forwarded prompt (no deadline) still runs on the owner, and says so.
+        if (deadlineMs === null)
+          yield { type: "block", seq: lastSeq, message, block: FORWARDED_STILL_QUEUED };
         // Incomplete rather than failed: `ChatMessage.incomplete` is documented
         // for exactly this — aborted, timed out, a reconnect that ran out of
         // attempts — and an operator who pressed stop did not encounter an error.
@@ -745,7 +786,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
       if (step.kind === "timeout") {
         await interrupt();
         yield* flushReasoning(lastSeq);
-        const seconds = Math.round(deadlineMs / 1000);
+        const seconds = Math.round((deadlineMs ?? 0) / 1000);
         // `CHAT_NO_SLOT` is a specific claim about *why* nothing came back, and
         // it is only defensible when nothing came back at all. A model that
         // thinks for thirty-one seconds before its first token looks identical
@@ -858,6 +899,9 @@ export function createChatTurn(deps: ChatTurnDeps) {
         seenContent = true;
         yield* flushReasoning(seq);
         yield* flushMedia(seq);
+        const queued = str(rec(payload.params)?.request_id);
+        if (payload.method === "approval" && queued && str(payload.id))
+          approvalCards.set(queued, String(payload.id));
         for (const block of hermesRequest(
           str(payload.method) ?? "request",
           str(payload.id) ?? "unknown",
@@ -887,6 +931,14 @@ export function createChatTurn(deps: ChatTurnDeps) {
       }
       if (connections.stale(type, payload)) {
         trace?.drop("replay");
+        continue;
+      }
+      // A global broadcast that names its runtime in the payload, like `session.reclaimed`.
+      if (type === "approval.cancelled") {
+        if (str(payload.session_id) === session)
+          for (const closed of approvalsCancelled(payload, (id) => approvalCards.get(id) ?? id))
+            yield { type: "block", seq, message, block: closed };
+        else trace?.drop("internal");
         continue;
       }
       const activity = hermesActivity(type, payload);
@@ -1279,7 +1331,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
 
   function errorFrame(e: unknown): ChatFrame {
     const code = e instanceof HermeticError ? String(e.code) : CHAT_ERROR_CODES.PROTOCOL;
-    return fail(code, describe(e));
+    return fail(ownerRefusal(e) ?? code, describe(e));
   }
   return { send, abort, steer };
 }

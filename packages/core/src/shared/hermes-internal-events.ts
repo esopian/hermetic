@@ -33,6 +33,12 @@ export const HERMES_INTERNAL_EVENTS: readonly string[] = Object.freeze([
   "sessions.changed",
   "platforms.changed",
   "pairing.changed",
+  // Hermes v0.23.1 change-watcher additions (`tui_gateway/change_watcher.py:386-390`):
+  // lifecycle.ts:81 (projects), the TUI's slash catalog (skills), and the
+  // hermes-bots relay's drain signal (plugins/hermes-bots/relay.ts:828).
+  "projects.changed",
+  "skills.changed",
+  "bot_relay.outbox.pending",
   // session-info.ts:147, :472 — session metadata. The chat adapter still lifts
   // `session.info`'s usage context window before dropping the rest.
   "session.info",
@@ -52,6 +58,22 @@ export const HERMES_INTERNAL_EVENTS: readonly string[] = Object.freeze([
   // tools.ts handles the completed tool, while Desktop draws no row for the
   // gateway's advisory output-risk event.
   "tool.output_risk",
+  // tools.ts:87 — an MCP call's live progress (v0.23.1, up to 2/s per call),
+  // drawn by Desktop on the running tool, never as a row of its own.
+  "tool.progress",
+  // use-preview-routing.ts:97, :140 — Desktop's preview pane.
+  "preview.open",
+  "preview.close",
+  // settings/billing/use-step-up.ts:116 — a billing verification code for
+  // Desktop's settings, not the transcript.
+  "billing.step_up.verification",
+  // onboarding.ts:10, free-tier.ts:13 — Desktop's own onboarding and
+  // anonymous free-tier dialogs (v0.23.1).
+  "onboarding.ended",
+  "free_tier.challenge",
+  // A status line printed during a local viewer's turn (v0.23.1,
+  // `hermes_cli/gateway_agent.py:1516`); Desktop has no consumer.
+  "agent.print",
   // plugins/hermes-bots/screen-*.tsx — the virtual display's side channel.
   "display.install.done",
   "display.install.log",
@@ -66,6 +88,7 @@ export const HERMES_INTERNAL_EVENTS: readonly string[] = Object.freeze([
   "voice.status",
   "voice.transcript",
   "voice.interrupted",
+  "voice.partial",
 ]);
 
 const INTERNAL = new Set(HERMES_INTERNAL_EVENTS);

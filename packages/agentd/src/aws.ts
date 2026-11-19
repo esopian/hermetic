@@ -44,6 +44,7 @@ import { GetParameterCommand, GetParametersByPathCommand, SSMClient } from "@aws
 import type {
   Agent,
   AgentStatus,
+  ApplyFailure,
   BootstrapState,
   FleetManifest,
   Health,
@@ -77,7 +78,7 @@ function defaultWarn(message: string): void {
 
 /** Anything with a `send`: the real document client, or a test recorder. */
 export interface CommandSink {
-  send(command: unknown): Promise<unknown>;
+  send(command: unknown, options?: { abortSignal?: AbortSignal }): Promise<unknown>;
 }
 
 export interface AwsDeps {
@@ -121,7 +122,8 @@ export interface Aws {
    * never written to disk except by the caller that materialises them on tmpfs.
    */
   getParametersByPath(path: string): Promise<Array<{ name: string; value: string }>>;
-  getObjectBytes(bucket: string, key: string): Promise<Uint8Array>;
+  /** `signal` cancels the request; the caller bounds the body read itself. */
+  getObjectBytes(bucket: string, key: string, signal?: AbortSignal): Promise<Uint8Array>;
   /**
    * The fleet manifest (§4.2 step 2). It needs S3 and nothing else — which is
    * what lets it be fetched *before* the DynamoDB table names are known, since
@@ -167,6 +169,12 @@ export interface Aws {
    * another one — which the next poll will pick up. No version bump.
    */
   ackCommand(name: string, commandId: string): Promise<boolean>;
+  /**
+   * Record on the row that a converge failed and with which code (§6.5), so
+   * `upgrade --now` can tell a failure that left Hermes untouched from one
+   * that did not. No version bump, like the heartbeat. False when the row is gone.
+   */
+  reportApplyFailure(name: string, failure: Omit<ApplyFailure, "at">): Promise<boolean>;
   appendEvent(input: EventInput): Promise<void>;
 }
 
@@ -296,6 +304,28 @@ export async function fetchFleetManifest(s3: CommandSink, bucket: string): Promi
   return parseFleetManifest(new TextDecoder().decode(await bodyBytes(out.Body)));
 }
 
+/**
+ * `GetObject`'s body unread, for an object too large to hold: the Hermes
+ * bundle is ~100 MB, and buffering it is what got hermeticd OOM-killed on a
+ * 2 GB box with Hermes and Chrome running.
+ */
+export async function getObjectStream(
+  s3: CommandSink,
+  bucket: string,
+  key: string,
+  signal?: AbortSignal,
+): Promise<ReadableStream<Uint8Array>> {
+  const { Body: body } = (await s3.send(
+    new GetObjectCommand({ Bucket: bucket, Key: key }),
+    signal ? { abortSignal: signal } : undefined,
+  )) as { Body?: unknown };
+  if (body instanceof ReadableStream) return body;
+  if (typeof (body as { transformToWebStream?: unknown })?.transformToWebStream === "function") {
+    return (body as { transformToWebStream(): ReadableStream<Uint8Array> }).transformToWebStream();
+  }
+  throw new AgentdError("INTERNAL", "unrecognised S3 response body");
+}
+
 /** The most pages one `scanAgents` reads before it gives up. */
 export const SCAN_MAX_PAGES = 50;
 
@@ -378,10 +408,11 @@ export function makeAws(deps: AwsDeps): Aws {
       throw new AgentdError("INTERNAL", `SSM kept paginating under ${path}`, { path });
     },
 
-    async getObjectBytes(bucket, key) {
-      const out = (await deps.s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }))) as {
-        Body?: unknown;
-      };
+    async getObjectBytes(bucket, key, signal) {
+      const out = (await deps.s3.send(
+        new GetObjectCommand({ Bucket: bucket, Key: key }),
+        signal ? { abortSignal: signal } : undefined,
+      )) as { Body?: unknown };
       return await bodyBytes(out.Body);
     },
 
@@ -631,6 +662,25 @@ export function makeAws(deps: AwsDeps): Aws {
               "#updated_at": "updated_at",
             },
             ExpressionAttributeValues: { ":id": commandId, ":now": nowIso() },
+          }),
+        );
+        return true;
+      } catch (e) {
+        if ((e as { name?: string }).name !== "ConditionalCheckFailedException") throw e;
+        return false;
+      }
+    },
+
+    async reportApplyFailure(name, failure) {
+      try {
+        await deps.ddb.send(
+          new UpdateCommand({
+            TableName: deps.agentsTable,
+            Key: { name },
+            UpdateExpression: "SET #af = :af",
+            ConditionExpression: "attribute_exists(#name)",
+            ExpressionAttributeNames: { "#name": "name", "#af": "apply_failure" },
+            ExpressionAttributeValues: { ":af": { ...failure, at: nowIso() } },
           }),
         );
         return true;

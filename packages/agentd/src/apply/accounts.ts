@@ -11,6 +11,7 @@ import {
   HERMES_ACCOUNT,
   HERMES_ACCOUNT_HOME,
   HERMES_BIN,
+  HERMES_CLI_ENV,
   HERMES_DASHBOARD_UNIT,
   HERMES_GATEWAY_UNIT,
   HERMES_HOME,
@@ -321,6 +322,16 @@ export async function ensureAccounts(host: Host, dry: boolean): Promise<void> {
  * since `hermesCmd()` goes through `runuser -u hermes`, which sets `HOME` to
  * the same directory. Only this one root-run command disagreed.
  *
+ * From v0.23 (`hermes_constants.py:72-96`, `hermes_cli/gateway.py:2216-2227`)
+ * "native" is the *account's* home, read from passwd for the invoking uid, so a
+ * root process is native only to `/root/.hermes` whatever its `HOME`, and the
+ * installer wrote `hermes-gateway-c5b5bead.service` on a real box. The one
+ * other home upstream calls native is `SUDO_USER`'s, which is what
+ * `sudo hermes gateway install --system` (its documented invocation) carries,
+ * so `accountNamed` passes `SUDO_USER=hermes` as well. Both answers name the
+ * same account, and the `hermes` CLI run as that account (the dashboard's
+ * `sudo -n hermes gateway restart` included) names the bare unit too.
+ *
  * Nothing in the unit's *contents* moves with it. In the `system=True` branch
  * the unit's `HERMES_HOME` is `_hermes_home_for_target_user(home_dir)`, which
  * lands on `/data/hermes/.hermes` whether it takes the remap branch (new) or
@@ -353,7 +364,11 @@ export async function ensureAccounts(host: Host, dry: boolean): Promise<void> {
  * installer already wrote one under another name (checked *before* reinstalling
  * over it) or because this one wrote nothing at all. See below.
  */
-export async function ensureGatewayUnit(host: Host, dry: boolean): Promise<boolean> {
+export async function ensureGatewayUnit(
+  host: Host,
+  dry: boolean,
+  accountNamed = false,
+): Promise<boolean> {
   const path = `${UNIT_DIR}/${HERMES_GATEWAY_UNIT}`;
   const present = (await host.stat(path)) !== null;
   if (dry) return false;
@@ -375,7 +390,8 @@ export async function ensureGatewayUnit(host: Host, dry: boolean): Promise<boole
         "GATEWAY_UNIT_MISSING",
         `no unit at ${path}, but hermes gateway install has already written ${found}. ` +
           `Upstream derives the name from HERMES_HOME (${HERMES_HOME}) against the invoking ` +
-          `process's own HOME (${HERMES_ACCOUNT_HOME}) and hermetic expects no profile suffix; ` +
+          `account's native home (${HERMES_ACCOUNT_HOME}: HOME on v0.21, the passwd entry or ` +
+          "SUDO_USER from v0.23) and hermetic expects no profile suffix; " +
           "the installer is not run again over what is there",
         { path, hermes_home: HERMES_HOME, home: HERMES_ACCOUNT_HOME, found },
       );
@@ -384,7 +400,14 @@ export async function ensureGatewayUnit(host: Host, dry: boolean): Promise<boole
       host,
       [HERMES_BIN, "gateway", "install", "--system", "--run-as-user", HERMES_USER, "--no-start-now"],
       {
-        env: { HERMES_HOME, HOME: HERMES_ACCOUNT_HOME },
+        env: {
+          HERMES_HOME,
+          HOME: HERMES_ACCOUNT_HOME,
+          // shortcut: keyed to the 3.14 checkout (v0.21.6 on), not to the release that moved the
+          // naming basis; harmless where unneeded, gated only so a v0.21.5 install stays byte-for-byte.
+          ...(accountNamed ? { SUDO_USER: HERMES_USER } : {}),
+          ...HERMES_CLI_ENV,
+        },
       },
     );
   }
@@ -397,8 +420,8 @@ export async function ensureGatewayUnit(host: Host, dry: boolean): Promise<boole
    * native `~/.hermes`; hermetic arranges for it to *be* that home by running
    * the installer with the `hermes` account's `HOME` (above), which is why
    * there is no suffix. But "arranges for" is an assumption about someone
-   * else's code — one whose basis upstream already moved once, at `v2026.9.14`
-   * — and the failure it produces is silent: `manifest.units` would
+   * else's code — one whose basis upstream has moved twice, at `v2026.9.14` and
+   * again by v0.23 (see above) — and the failure it produces is silent: `manifest.units` would
    * name a unit systemd has never heard of, the enable would fail or the
    * restart would restart nothing, and the box would still reach `ready` with
    * no gateway running on it. `ready` would be a lie, which is the one thing
@@ -412,8 +435,9 @@ export async function ensureGatewayUnit(host: Host, dry: boolean): Promise<boole
     throw new AgentdError(
       "GATEWAY_UNIT_MISSING",
       `hermes gateway install wrote no unit at ${path}. Upstream derives the name from ` +
-        `HERMES_HOME (${HERMES_HOME}) against the invoking process's own HOME ` +
-        `(${HERMES_ACCOUNT_HOME}); check what it actually wrote with ` +
+        `HERMES_HOME (${HERMES_HOME}) against the invoking account's native home ` +
+        `(${HERMES_ACCOUNT_HOME}: HOME on v0.21, the passwd entry or SUDO_USER from v0.23); ` +
+        `check what it actually wrote with ` +
         `\`ls ${UNIT_DIR}/${GATEWAY_UNIT_GLOB}\``,
       { path, hermes_home: HERMES_HOME, home: HERMES_ACCOUNT_HOME },
     );

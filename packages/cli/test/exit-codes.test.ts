@@ -33,6 +33,11 @@ describe("exit codes", () => {
     // other 9s.
     expect(exitCodeFor("FLEET_REQUIRED")).toBe(2);
     expect(exitCodeFor("DIRECTORY_UNAVAILABLE")).toBe(9);
+    // §6.5: a rolled-back `upgrade --now` is a failed run, like Hermes left down.
+    expect(exitCodeFor("HERMES_UPGRADE_ROLLED_BACK")).toBe(1);
+    expect(exitCodeFor("HERMES_UPGRADE_FAILED")).toBe(1);
+    // §6.5: a row held on another Hermes is a conflict with its state; nothing ran.
+    expect(exitCodeFor("HERMES_UPGRADE_REQUIRED")).toBe(7);
     // Ctrl-C: the shell convention for "killed by SIGINT".
     expect(exitCodeFor("ABORTED")).toBe(EXIT_ABORTED);
     expect(EXIT_ABORTED).toBe(130);

@@ -42,6 +42,7 @@ const ARTIFACTS_FINGERPRINT: Record<number, string> = {
   13: "649516b90a603a1904df8a3f55eba433d607ec93a31f38cfe7796839d062a1d7",
   14: "8a2eec717d1da3e93d38d34c5ba395d6a221b74153419ae764f6d829d7da70f4",
   15: "e844ecc72e0a75de74311d828eb7075e73bfaaf55479bb78944ab34551be4e55",
+  16: "ad55e11ee9bfbc715457c35e5d13eff61546f001414be6f1c67ee1e9db2c64fe",
 };
 
 function gitVisibleFingerprint(root: string): string {

@@ -51,7 +51,15 @@ export interface PlanDeps {
 }
 
 export function createPlans(deps: PlanDeps) {
-  const { agentPrefix, backend, configPrefix, getAgent, guardAccount, requireConfig } = deps.ctx;
+  const {
+    agentPrefix,
+    assertOnBuildHermes,
+    backend,
+    configPrefix,
+    getAgent,
+    guardAccount,
+    requireConfig,
+  } = deps.ctx;
 
   /**
    * §4.8: which fleet a plan is about. Every plan carries it, including the two
@@ -196,6 +204,8 @@ export function createPlans(deps: PlanDeps) {
     validateName(input.name);
     await guardAccount();
     const agent = await getAgent(input.name);
+    // Refused at the plan, not halfway through the apply (`recreate` asks again).
+    assertOnBuildHermes(agent);
     const volumeId = agent.resources.volume_id ?? agent.volume_id;
     return {
       kind: "recreate",

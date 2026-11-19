@@ -23,7 +23,7 @@ import { evt } from "../events.ts";
 import { describePending, pendingApplied } from "../profiles/profile-binding.ts";
 import { readFleetManifest } from "../release/artifacts-manifest.ts";
 import { diffAppliedConfig } from "../agents/config-diff.ts";
-import { convergeDeferral } from "../agents/converge.ts";
+import { convergeDeferral, hermesHeldDeferral, rolledBackFrom } from "../agents/converge.ts";
 import { createRollout, type RolloutDeps } from "../agents/rollout.ts";
 import type {
   Agent,
@@ -55,14 +55,9 @@ export function updateDeferral(
   if (down !== null) return down;
   if (agent.lock && Date.parse(agent.lock.expires) > opts.nowMs) return "locked by another operator";
   if (!agent.applied_config_hash) return "no applied config reported";
-  /**
-   * Every render pins this build's Hermes ref (`renderFor`), so converging a
-   * row held on another version would install a Hermes nobody asked for — or
-   * fail the box's version cross-check. Moving the pin is its own command.
-   */
-  if (agent.hermes_version !== opts.hermesVersion) {
-    return `held on Hermes ${agent.hermes_version}, and this build renders ${opts.hermesVersion}; \`hermetic upgrade --hermes ${opts.hermesVersion} ${agent.name}\` moves it`;
-  }
+  // A row awaiting a rollback's reconcile is not held: the rollout puts its pin back and renders nothing.
+  const held = rolledBackFrom(agent) === null ? hermesHeldDeferral(agent, opts.hermesVersion) : null;
+  if (held !== null) return held;
   if (needs.length === 0) return null;
   const has = release?.capabilities;
   // A plan made before the update's own push is about the release that push

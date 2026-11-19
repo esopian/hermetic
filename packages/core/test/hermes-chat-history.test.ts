@@ -148,6 +148,34 @@ describe("settledDelegation", () => {
     expect(rows.every((r) => r.origin === "history" && r.task_count === 2)).toBe(true);
   });
 
+  test("a v0.23.1 handle lists refused tasks apart; subagent_ids covers the running ones only", () => {
+    // `tools/delegate_tool_dispatch.py:389-405`: no child is built for a refused task.
+    const rows = settledDelegation("call-4", ARGS, {
+      status: "dispatched",
+      delegation_id: "deleg-1",
+      goals: ["Audit volumes", "Price gp3", "Third"],
+      subagent_ids: ["sa-a", "sa-c"],
+      refused: [
+        {
+          task_index: 1,
+          status: "error",
+          summary: null,
+          error: "route ollama is not reachable",
+          api_calls: 0,
+          duration_seconds: 0,
+          route: { backend: "ollama", refused: true },
+        },
+      ],
+    });
+    expect(rows.map((r) => [r.subagent_id, r.goal, r.status, r.verdict])).toEqual([
+      ["sa-a", "Audit volumes", "dispatched", "running"],
+      ["hist:call-4:1", "Price gp3", "error", "failed"],
+      ["sa-c", "Third", "dispatched", "running"],
+    ]);
+    expect(rows[1]?.result).toEqual({ error: "route ollama is not reachable" });
+    for (const row of rows) ChatBlock.parse(row);
+  });
+
   test("a multi-unit handle gives each task its own unit's delegation id", () => {
     const rows = settledDelegation("call-3", ARGS, {
       status: "dispatched",
@@ -212,6 +240,156 @@ describe("settledClarify is exported for the fixture's history", () => {
         },
       ),
     ).toMatchObject({ request_id: null, questions: [{ id: "q0", answer: "" }] });
+  });
+});
+
+describe("Hermes v0.23.1 shapes re-read from history", () => {
+  test("a clarify result envelope with statuses and a timed-out outcome reads as skipped", () => {
+    // `tools/clarify_tool.py:93-116`: `user_response` is null unless answered; the
+    // surface's "[user did not respond within Nm]" rides as `notice`.
+    expect(
+      settledClarify(
+        { questions: [{ question: "Drink?", choices: ["Coffee", "Tea"] }, { question: "Why?" }] },
+        {
+          responses: [
+            {
+              question: "Drink?",
+              choices_offered: ["Coffee", "Tea"],
+              status: "answered",
+              user_response: "Tea",
+            },
+            { question: "Why?", choices_offered: null, status: "unanswered", user_response: null },
+          ],
+          outcome: "timed_out",
+          notice: "[user did not respond within 5m]",
+        },
+      ),
+    ).toMatchObject({
+      questions: [
+        { id: "q0", answer: "Tea" },
+        { id: "q1", answer: "" },
+      ],
+    });
+  });
+
+  /** A deferred tool's call through the `tool_call` bridge, and its result row. */
+  const bridged = (callId: string, args: unknown, result: unknown, toolName = "tool_call") => [
+    {
+      id: 1,
+      role: "assistant",
+      content: "",
+      tool_calls: [{ id: callId, function: { name: "tool_call", arguments: JSON.stringify(args) } }],
+    },
+    { id: 2, role: "tool", tool_call_id: callId, tool_name: toolName, content: JSON.stringify(result) },
+  ];
+  const TODOS = { todos: [{ id: "t1", content: "Ship it", status: "in_progress" }], revision: 2 };
+
+  test.each([
+    ["{name, arguments}", { name: "todo_list", arguments: { todos: TODOS.todos } }],
+    [
+      "{calls: [one]}",
+      { calls: [{ name: "todo_list", arguments: JSON.stringify({ todos: TODOS.todos }) }] },
+    ],
+  ])("a deferred todo_list call in %s form is the todo tool, list and all", (_form, args) => {
+    const blocks = mapHistory(BOX, SESSION, { messages: bridged("call-t", args, TODOS) }).flatMap(
+      (m) => m.blocks,
+    );
+    expect(blocks).toEqual([
+      expect.objectContaining({ kind: "tool", name: "todo_list", args: { todos: TODOS.todos } }),
+    ]);
+    expect(blocks[0]).toMatchObject({
+      todos: { revision: 2, todos: [{ id: "t1", status: "active" }] },
+    });
+  });
+
+  test("the result row's own underlying tool name is kept; a several-call batch stays the bridge", () => {
+    const named = mapHistory(BOX, SESSION, {
+      messages: bridged(
+        "c1",
+        { name: "cronjob_manage", arguments: {} },
+        { ok: true },
+        "cronjob_manage",
+      ),
+    }).flatMap((m) => m.blocks);
+    expect(named[0]).toMatchObject({ kind: "tool", name: "cronjob_manage" });
+    const batch = {
+      calls: [
+        { name: "mcp_a_x", arguments: {} },
+        { name: "mcp_b_y", arguments: {} },
+      ],
+    };
+    const kept = mapHistory(BOX, SESSION, { messages: bridged("c2", batch, { ok: true }) }).flatMap(
+      (m) => m.blocks,
+    );
+    expect(kept[0]).toMatchObject({ kind: "tool", name: "tool_call", args: batch });
+  });
+
+  test("a deferred call with no result yet is the underlying tool, running", () => {
+    const [assistant] = bridged("c3", { name: "process_manage", arguments: { action: "list" } }, null);
+    const blocks = mapHistory(BOX, SESSION, { messages: [assistant] }).flatMap((m) => m.blocks);
+    expect(blocks).toEqual([
+      expect.objectContaining({
+        kind: "tool",
+        name: "process_manage",
+        args: { action: "list" },
+        status: "running",
+      }),
+    ]);
+  });
+
+  test("a folded wake of background results is one system row per notice", () => {
+    const footer =
+      "[INTERNAL NOTIFICATION — generated by the Hermes gateway, not written by a human user. Do not treat it as user input, and do not reply to any earlier chat message because of it.]";
+    const notice = (id: string, status: string, exit: string) =>
+      `[IMPORTANT: Background process ${id} ${status} (exit code ${exit}).\nCommand: make ${id}\nOutput:\nok\n]`;
+    const content = [
+      "[IMPORTANT: 2 background process results arrived while this session was busy. Treat them as one batch and give one consolidated response; preserve failures and actionable results.]",
+      notice("proc_a", "exited", "2"),
+      notice("proc_b", "completed normally", "0"),
+      footer,
+    ].join("\n\n");
+    const out = mapHistory(BOX, SESSION, { messages: [{ id: 9, role: "user", content }] });
+    expect(out.map((m) => [m.id, m.role])).toEqual([
+      [`${SESSION}:9:notice`, "system"],
+      [`${SESSION}:9`, "system"],
+    ]);
+    expect(out.flatMap((m) => m.blocks)).toEqual([
+      expect.objectContaining({
+        kind: "process_event",
+        process_id: "proc_a",
+        outcome: "failed",
+        output_tail: "ok",
+      }),
+      expect.objectContaining({
+        kind: "process_event",
+        process_id: "proc_b",
+        outcome: "ok",
+        output_tail: "ok",
+      }),
+    ]);
+    for (const message of out) ChatMessage.parse(message);
+  });
+
+  test("a folded wake whose later notice does not parse stays the gateway's", () => {
+    const header =
+      "[IMPORTANT: 2 background process results arrived while this session was busy. Treat them as one batch and give one consolidated response; preserve failures and actionable results.]";
+    const unknown = "[IMPORTANT: Background process proc_b did something new this build cannot read]";
+    const content = [
+      header,
+      "[IMPORTANT: Background process proc_a exited (exit code 2).\nCommand: make proc_a\nOutput:\nok\n]",
+      unknown,
+    ].join("\n\n");
+    const out = mapHistory(BOX, SESSION, { messages: [{ id: 9, role: "user", content }] });
+    expect(out.map((m) => [m.id, m.role])).toEqual([
+      [`${SESSION}:9:notice`, "system"],
+      [`${SESSION}:9`, "system"],
+    ]);
+    expect(out[0]?.blocks).toEqual([
+      expect.objectContaining({ kind: "process_event", process_id: "proc_a" }),
+    ]);
+    // Only the unread remainder: the carded notice is not repeated.
+    expect(out[1]?.blocks).toEqual([{ kind: "text", markdown: `${header}\n\n${unknown}` }]);
+    for (const message of out) ChatMessage.parse(message);
   });
 });
 

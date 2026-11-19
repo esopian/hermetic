@@ -21,7 +21,7 @@ import {
 } from "./hermes-chat-types.ts";
 import type { ChatConnection } from "./hermes-chat-connect.ts";
 import type { RequestPool } from "./hermes-chat-pool.ts";
-import { describe, discardBody, record, stripToken } from "./hermes-chat-wire.ts";
+import { describe, discardBody, record, stripToken, timedRead } from "./hermes-chat-wire.ts";
 
 /** What `createChatPeer` needs, and nothing more. */
 export interface ChatPeerDeps {
@@ -47,6 +47,19 @@ export function createChatPeer(deps: ChatPeerDeps) {
   ): Promise<unknown> {
     if (!path.startsWith("/api/") || path.startsWith("//"))
       throw new HermeticError("VALIDATION", "Invalid dashboard path");
+    // Only a read is cut off: a write that timed out may still have landed.
+    if (method !== "GET") return exchange(box, method, path, body, opts);
+    return timedRead(box.instance, opts.signal, (signal) =>
+      exchange(box, method, path, body, { ...opts, signal }),
+    );
+  }
+  async function exchange(
+    box: BoxAddress,
+    method: string,
+    path: string,
+    body: unknown,
+    opts: HermesChatOptions & { detail?: boolean },
+  ): Promise<unknown> {
     const cached = conn.cached(box);
     let tok = await conn.token(box, opts.signal);
     for (let attempt = 0; ; attempt++) {

@@ -122,7 +122,10 @@ export const SEEDS: readonly SeedSpec[] = [
     status: "ready",
     size: "medium",
     ip: "100.64.12.4",
-    hermes: "0.21.0",
+    // On this build's pin: `agent set` and `recreate` refuse a row held on
+    // another Hermes (`assertOnBuildHermes`), and atlas is the agent every
+    // demo and head test edits.
+    hermes: BUILD_VERSIONS.hermes,
     hermeticd: "0.8.3",
     cpu: 34,
     mem: 61,

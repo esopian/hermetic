@@ -209,6 +209,11 @@ export function browserManagedConfigLines(identities: readonly BrowserIdentity[]
  * any config by every reader, and upstream loads `$HERMES_HOME/.env` into
  * `os.environ`, so that is where the endpoint has to be.
  *
+ * That is 0.21. From 0.22 `browser_exec` is upstream's only browser tool and
+ * reads the managed overlay (`tools/browser_session_cloud.py:35-40`), so the
+ * seed only matters on an older pin; it stays because it is harmless on a new
+ * one and the render does not know which pin a seeded `.env` will outlive.
+ *
  * Seeded, never overwritten, for the reason the seed config is: after first
  * boot the `.env` is the agent's own (§6.4), and upstream's `/browser connect`
  * writes this same line to hand the agent a browser somewhere else. Any

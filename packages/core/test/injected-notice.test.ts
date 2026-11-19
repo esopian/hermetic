@@ -146,6 +146,13 @@ const RAWS = {
         "[System: Your previous message ended the turn with a fragment that is not a usable answer. If the task is unfinished, continue it and then give the complete answer. If that fragment WAS your complete answer, send it again exactly as before.]",
       display_kind: null,
     },
+    {
+      // Hermes v0.23.1's network-cut wording (`agent/conversation_loop.py:989-994`).
+      role: "user",
+      content:
+        "[System: The previous response was cut off by a network error mid-stream — a transport interruption, NOT a change in your capabilities. Your tools are still fully available; call them as normal and ignore any earlier claim that you lack tool access. Continue the task from where you left off. Do not restart or repeat prior text.]",
+      display_kind: null,
+    },
   ],
   iter: [
     {
@@ -220,6 +227,13 @@ const RAWS = {
       content:
         "This turn did not complete. Some actions may already have run; verify their effects before resending.",
       display_kind: "failed_turn",
+    },
+    {
+      // Hermes v0.23.1's automation copy (`agent/turn_failure_copy.py:68-71`), read untyped.
+      role: "assistant",
+      content:
+        "An automated delivery was interrupted and was not run again. Some actions may already have run; verify their effects.",
+      display_kind: null,
     },
   ],
   mirror: [{ role: "assistant", content: "Deploy finished, all green.", display_kind: null }],
@@ -355,6 +369,11 @@ describe("parseProcessNotice — injected rows", () => {
       { event: "nudge", outcome: "info", notice: { variant: "output_limit" } },
     ],
     ["nudge: network cut", parse("nudges", 1), { event: "nudge", notice: { variant: "network_cut" } }],
+    [
+      "nudge: network cut, v0.23.1 wording",
+      parse("nudges", 6),
+      { event: "nudge", outcome: "info", notice: { variant: "network_cut" } },
+    ],
     [
       "nudge: tool call too large",
       parse("nudges", 2),
@@ -579,6 +598,7 @@ describe("processNoticePreview — injected rows", () => {
     ["gw-resume", 0, "turn resumed"],
     ["nudges", 0, "nudge: output limit"],
     ["nudges", 1, "nudge: network cut"],
+    ["nudges", 6, "nudge: network cut"],
     ["nudges", 2, "nudge: tool call too large"],
     ["nudges", 3, "nudge: reasoning only"],
     ["nudges", 4, "nudge: continue now"],
@@ -662,6 +682,8 @@ describe("operator rows", () => {
     expect(isFailedTurn("failed_turn", raw("failed"))).toBe(true);
     expect(isFailedTurn(null, raw("failed"))).toBe(true);
     expect(isFailedTurn(null, `${raw("failed")} Sorry.`)).toBe(false);
+    expect(isFailedTurn(null, raw("failed", 1))).toBe(true);
+    expect(isFailedTurn(null, `${raw("failed", 1)} Sorry.`)).toBe(false);
     expect(isCompactionContinueMarker(raw("compact", 1))).toBe(true);
     expect(isCompactionContinueMarker(`${raw("compact", 1)} ok`)).toBe(false);
   });

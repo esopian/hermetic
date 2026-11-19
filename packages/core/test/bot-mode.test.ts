@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openHermetic } from "../src/open.ts";
 import { createCanonicalSessions } from "../src/render/hermes-canonical.ts";
+import { createMovedBotChats } from "../src/chat/hermes/hermes-chat-moved.ts";
 import { createBotMode } from "../src/chat/bot-mode.ts";
 import { fixtureHermesChat } from "../src/chat/chat.ts";
 import type { HermesChatClient } from "../src/chat/hermes/hermes-chat.ts";
@@ -37,15 +38,36 @@ function canonicalHarness(
   read: (session: string, bot: string) => Promise<unknown> = async () => {
     throw new HermeticError("NOT_FOUND", "the double holds no session rows");
   },
+  /** The dashboard's REST writes; by default a v0.21.5 box (no snapshot route, any PATCH answered). */
+  rest: {
+    snapshot?: (session: string, bot: string) => Promise<unknown>;
+    patch?: (body: Record<string, unknown>) => Promise<unknown>;
+    /** `GET /api/sessions` (the dashboard's paged session list); by default an empty one. */
+    list?: (query: URLSearchParams) => unknown;
+  } = {},
 ) {
   const calls: { method: string; params: Record<string, unknown> }[] = [];
   const patches: { session: string; body: Record<string, unknown> }[] = [];
   const reads: { session: string; bot: string }[] = [];
+  const snapshots: { session: string; bot: string }[] = [];
+  const lists: URLSearchParams[] = [];
   const service = createCanonicalSessions({
+    moved: createMovedBotChats({
+      get: async (_box, path) => {
+        const query = new URL(path, "https://fixture.invalid").searchParams;
+        lists.push(query);
+        return rest.list ? rest.list(query) : { sessions: [] };
+      },
+    }),
     now: () => "2026-09-18T00:00:00Z",
     patch: async (_box, session, body) => {
       patches.push({ session, body });
-      return { ok: true, archived: true };
+      return rest.patch ? rest.patch(body) : { ok: true, archived: true };
+    },
+    snapshot: async (_box, session, bot) => {
+      snapshots.push({ session, bot });
+      if (rest.snapshot) return rest.snapshot(session, bot);
+      throw new HermeticError("NOT_FOUND", "atlas: dashboard GET failed (HTTP 404)");
     },
     read: async (_box, session, bot) => {
       reads.push({ session, bot });
@@ -59,7 +81,7 @@ function canonicalHarness(
       close() {},
     }),
   });
-  return { service, calls, patches, reads };
+  return { service, calls, patches, reads, snapshots, lists };
 }
 describe("canonical identity", () => {
   test("reads exact title and follows compression without warming or creating", async () => {
@@ -87,7 +109,9 @@ describe("canonical identity", () => {
   test("empty passive read never creates a conversation", async () => {
     const h = canonicalHarness(async () => ({ sessions: [] }));
     expect(await h.service.conversation(box, "default")).toBeNull();
+    // The title lookup, then the dashboard's list for a moved-aside Bot Chat: both reads.
     expect(h.calls.map((c) => c.method)).toEqual(["session.list"]);
+    expect(h.lists).toHaveLength(1);
   });
   test("scope failure never retries without the profile", async () => {
     const h = canonicalHarness(async () => {
@@ -177,6 +201,111 @@ describe("canonical identity", () => {
     expect(h.patches).toEqual([
       { session: "root", body: { profile: "default", archived: true, hidden: true } },
     ]);
+  });
+  describe("archive mutation identity (Hermes v0.22.3+)", () => {
+    const listed = async (method: string) => {
+      if (method === "session.list")
+        return { sessions: [{ id: "root", resolved_id: "tip", title: "Bot Chat" }] };
+      throw new Error(method);
+    };
+    const conflict = (detail: string) =>
+      new HermeticError("CONFLICT", `atlas: dashboard PATCH failed (HTTP 409): ${detail}`);
+    /** v0.23.1's `_mutate_session_request`: no identity is refused, a stale revision conflicts. */
+    const fencedPatch = (revision: () => number) => async (body: Record<string, unknown>) => {
+      if (body.request_id === undefined && body.expected_revision === undefined)
+        throw conflict("client_upgrade_required: this app is out of sync");
+      if (body.expected_revision !== revision()) throw conflict("revision_conflict");
+      return { ok: true, session_id: "root", revision: revision() + 1, archived: true, hidden: true };
+    };
+
+    test("a new box gets the snapshot's revision and a request id, and confirms", async () => {
+      const h = canonicalHarness(listed, undefined, {
+        snapshot: async (session) => ({ session_id: session, exists: true, runtime_revision: 7 }),
+        patch: fencedPatch(() => 7),
+      });
+      expect((await h.service.archive(box, "default", "tip")).archived).toBe(true);
+      expect(h.snapshots).toEqual([{ session: "root", bot: "default" }]);
+      expect(h.patches).toHaveLength(1);
+      const body = h.patches[0]?.body ?? {};
+      expect(body).toMatchObject({
+        profile: "default",
+        archived: true,
+        hidden: true,
+        expected_revision: 7,
+      });
+      expect(typeof body.request_id).toBe("string");
+      expect(String(body.request_id)).not.toBe("");
+    });
+
+    test("the fenced box refuses the plain body, so the identity is what makes it pass", async () => {
+      const h = canonicalHarness(listed, undefined, { patch: fencedPatch(() => 7) });
+      await expect(h.service.archive(box, "default", "tip")).rejects.toThrow("client_upgrade_required");
+    });
+
+    test("an old box without the snapshot route gets today's body", async () => {
+      const refusals = [
+        new HermeticError("NOT_FOUND", "atlas: dashboard GET failed (HTTP 404)"),
+        new HermeticError("CHAT_PROTOCOL", "atlas: dashboard GET failed (HTTP 405)"),
+        // An SPA catch-all answering the unknown path with its HTML page.
+        new SyntaxError("Failed to parse JSON"),
+      ];
+      for (const missing of refusals) {
+        const h = canonicalHarness(listed, undefined, {
+          snapshot: async () => {
+            throw missing;
+          },
+          patch: async () => ({ ok: true, archived: true, hidden: true }),
+        });
+        expect((await h.service.archive(box, "default", "tip")).archived).toBe(true);
+        expect(h.patches).toEqual([
+          { session: "root", body: { profile: "default", archived: true, hidden: true } },
+        ]);
+      }
+    });
+
+    test("a revision conflict reads the snapshot again and retries once", async () => {
+      let revision = 3;
+      const h = canonicalHarness(listed, undefined, {
+        snapshot: async () => {
+          const seen = revision;
+          revision = 4; // a write lands between the first snapshot and its PATCH
+          return { runtime_revision: seen };
+        },
+        patch: fencedPatch(() => revision),
+      });
+      expect((await h.service.archive(box, "default", "tip")).archived).toBe(true);
+      expect(h.patches.map((p) => p.body.expected_revision)).toEqual([3, 4]);
+      expect(h.patches[0]?.body.request_id).not.toBe(h.patches[1]?.body.request_id);
+    });
+
+    test("a second conflict is not retried again, and other refusals are not retried", async () => {
+      const always = canonicalHarness(listed, undefined, {
+        snapshot: async () => ({ runtime_revision: 1 }),
+        patch: async () => {
+          throw conflict("revision_conflict");
+        },
+      });
+      await expect(always.service.archive(box, "default", "tip")).rejects.toThrow("revision_conflict");
+      expect(always.patches).toHaveLength(2);
+      const busy = canonicalHarness(listed, undefined, {
+        snapshot: async () => ({ runtime_revision: 1 }),
+        patch: async () => {
+          throw conflict("session_busy");
+        },
+      });
+      await expect(busy.service.archive(box, "default", "tip")).rejects.toThrow("session_busy");
+      expect(busy.patches).toHaveLength(1);
+    });
+
+    test("a snapshot refused for any other reason fails the archive without a PATCH", async () => {
+      const h = canonicalHarness(listed, undefined, {
+        snapshot: async () => {
+          throw new HermeticError("FORBIDDEN", "atlas: dashboard GET failed (HTTP 403)");
+        },
+      });
+      await expect(h.service.archive(box, "default", "tip")).rejects.toThrow("HTTP 403");
+      expect(h.patches).toHaveLength(0);
+    });
   });
   /** A gateway whose title lookup lists no Bot Chat and whose title write is refused with `refusal`. */
   const heldTitle = (refusal: string, read?: (session: string) => Promise<unknown>) =>
@@ -1794,5 +1923,183 @@ describe("room approvals", () => {
       answer("room approval is no longer pending").rooms.respond({ ...RESPOND, choice: "once" }),
     );
     expect(other.code).toBe("CHAT_PROTOCOL");
+  });
+});
+
+/**
+ * Hermes v0.23.1 moves a Bot Chat it cannot own aside as `Bot Chat (<source>
+ * <id>)` and mints its own (`gateway/session_bot.py:215-245,327-380`).
+ */
+describe("a Bot Chat the gateway moved aside", () => {
+  const MINTED = { id: "local-x", title: "Bot Chat", source: "local" };
+  /**
+   * `title`: what the "Bot Chat" lookup answers. `all`: the dashboard's paged
+   * session list, which an exact-title lookup also reads, as upstream's does
+   * (no window). A windowed `session.list` is never asked.
+   */
+  const lists = (
+    title: unknown[],
+    all: Record<string, unknown>[],
+    list = (query: URLSearchParams): unknown => {
+      const offset = Number(query.get("offset"));
+      return { sessions: all.slice(offset, offset + Number(query.get("limit"))) };
+    },
+  ) =>
+    canonicalHarness(
+      async (method, params) => {
+        if (method === "profiles.list")
+          return {
+            bot_mode_protocol: true,
+            profiles: [{ name: "default", ui_meta: { "hermes-bots": { version: 1 } } }],
+          };
+        if (method !== "session.list") return {};
+        if (params.title === "Bot Chat") return { sessions: title };
+        if (typeof params.title === "string")
+          return { sessions: all.filter((r) => r.title === params.title) };
+        throw new Error("a windowed session.list");
+      },
+      undefined,
+      { list },
+    );
+
+  test("is the previous root of the gateway's Bot Chat, and naming it resolves the canonical", async () => {
+    const h = lists(
+      [MINTED],
+      [
+        { ...MINTED, started_at: 9 },
+        { id: "old1", title: "Bot Chat (hermetic old1)", source: "hermetic", started_at: 1 },
+        { id: "t1", title: "Bot Chat (hermetic old1)", source: "hermetic", started_at: 2 },
+        { id: "t2", title: "Bot Chat (notes)", source: "hermetic", started_at: 3 },
+      ],
+    );
+    const found = await h.service.conversation(box, "default");
+    expect(found).toMatchObject({ root_session: "local-x", session: "local-x", kind: "canonical" });
+    expect(h.service.previousRoots(box, "default", "local-x")).toEqual(["old1"]);
+    // Another tip (a compaction since) is not this lookup's answer.
+    expect(h.service.previousRoots(box, "default", "other")).toEqual([]);
+    expect(await h.service.conversation(box, "default", { session: "old1" })).toMatchObject({
+      root_session: "local-x",
+      kind: "canonical",
+    });
+    expect(await h.service.conversation(box, "default", { session: "t1" })).toMatchObject({
+      root_session: "t1",
+      kind: "thread",
+    });
+  });
+
+  test("is found however many newer sessions push it out of session.list's window", async () => {
+    // Hourly routines leave the moved-aside row past upstream's 200 most recently active rows.
+    const newer = Array.from({ length: 450 }, (_, i) => ({
+      id: `chat${i}`,
+      title: `Chat ${i}`,
+      started_at: 1000 - i,
+    }));
+    const h = lists(
+      [MINTED],
+      [...newer, { id: "old1", title: "Bot Chat (hermetic old1)", started_at: 1 }],
+    );
+    expect(await h.service.conversation(box, "default")).toMatchObject({ root_session: "local-x" });
+    expect(h.service.previousRoots(box, "default", "local-x")).toEqual(["old1"]);
+    // Every page, to the end; never a routine run.
+    expect(h.lists.map((q) => q.get("offset"))).toEqual(["0", "100", "200", "300", "400"]);
+    expect(h.lists.every((q) => q.get("exclude_sources")?.split(",").includes("cron"))).toBe(true);
+    expect(await h.service.conversation(box, "default", { session: "old1" })).toMatchObject({
+      root_session: "local-x",
+      kind: "canonical",
+    });
+    await h.service.archive(box, "default", "local-x");
+    expect(h.patches.map((p) => p.session)).toEqual(["old1", "local-x"]);
+  });
+
+  test("a gateway-minted Bot Chat nothing was moved aside for walks the list once", async () => {
+    const h = lists([MINTED], [{ ...MINTED, started_at: 9 }]);
+    for (let i = 0; i < 3; i += 1) await h.service.conversation(box, "default");
+    expect(h.lists).toHaveLength(1);
+    // Each lookup after the first is the title lookup alone.
+    expect(h.calls.map((c) => c.params.title)).toEqual(["Bot Chat", "Bot Chat", "Bot Chat"]);
+  });
+
+  test("a moved-aside row is read again by its exact title on every lookup", async () => {
+    const all: Record<string, unknown>[] = [
+      { id: "old1", title: "Bot Chat (hermetic old1)", started_at: 1 },
+    ];
+    const h = lists([MINTED], all);
+    await h.service.conversation(box, "default");
+    // Archived (or deleted) in Hermes since: its exact title no longer answers.
+    all.length = 0;
+    await h.service.conversation(box, "default");
+    expect(h.service.previousRoots(box, "default", "local-x")).toEqual([]);
+    expect(h.lists).toHaveLength(1);
+  });
+
+  test("an adopted or hermetic-held Bot Chat costs no registry read", async () => {
+    const h = lists([{ id: "20261116_203648_88e43a", title: "Bot Chat", source: "desktop" }], []);
+    expect(await h.service.conversation(box, "default")).toMatchObject({
+      root_session: "20261116_203648_88e43a",
+      kind: "canonical",
+    });
+    expect(h.calls).toHaveLength(1);
+    expect(h.lists).toHaveLength(0);
+  });
+
+  test("with no current Bot Chat, the newest moved-aside one is still the conversation, never recreated", async () => {
+    const h = lists(
+      [],
+      [
+        { id: "old2", resolved_id: "old2-tip", title: "Bot Chat (hermetic old2)", started_at: 5 },
+        { id: "old1", title: "Bot Chat (API old1)", started_at: 1 },
+      ],
+    );
+    expect(await h.service.conversation(box, "default", { create: true })).toMatchObject({
+      root_session: "old2",
+      session: "old2-tip",
+      kind: "canonical",
+      created: false,
+    });
+    expect(h.service.previousRoots(box, "default", "old2-tip")).toEqual(["old1"]);
+    expect(h.calls.map((c) => c.params.title ?? null)).toContain("Bot Chat (hermetic old2)");
+    expect(h.calls.map((c) => c.method)).not.toContain("session.create");
+  });
+
+  test("a session list the dashboard cannot answer still resolves the current Bot Chat to send into", async () => {
+    const h = lists([MINTED], [], () => {
+      throw new HermeticError("CHAT_UNREACHABLE", "atlas: dashboard read timed out after 15 s");
+    });
+    expect(await h.service.conversation(box, "default", { create: true })).toMatchObject({
+      root_session: "local-x",
+      kind: "canonical",
+      created: false,
+    });
+    expect(h.service.previousRoots(box, "default", "local-x")).toEqual([]);
+  });
+
+  test("more than one moved-aside root reads oldest first", async () => {
+    const h = lists(
+      [MINTED],
+      [
+        { id: "old2", title: "Bot Chat (hermetic old2)", started_at: 5 },
+        { id: "old1", title: "Bot Chat (hermetic old1)", started_at: 1 },
+      ],
+    );
+    await h.service.conversation(box, "default");
+    expect(h.service.previousRoots(box, "default", "local-x")).toEqual(["old1", "old2"]);
+  });
+
+  test("a compaction of the current Bot Chat keeps its earlier roots under the new tip", async () => {
+    const h = lists(
+      [{ ...MINTED, resolved_id: "local-x-tip" }],
+      [{ id: "old1", title: "Bot Chat (hermetic old1)", started_at: 1 }],
+    );
+    expect(await h.service.conversation(box, "default")).toMatchObject({
+      root_session: "local-x",
+      session: "local-x-tip",
+    });
+    expect(h.service.previousRoots(box, "default", "local-x-tip")).toEqual(["old1"]);
+  });
+
+  test("archiving the canonical conversation retires its moved-aside roots first", async () => {
+    const h = lists([MINTED], [{ id: "old1", title: "Bot Chat (hermetic old1)", started_at: 1 }]);
+    await h.service.archive(box, "default", "local-x");
+    expect(h.patches.map((p) => p.session)).toEqual(["old1", "local-x"]);
   });
 });

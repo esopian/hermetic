@@ -16,6 +16,7 @@ import {
   HERMES_HOME,
   HERMES_USER_ENV,
   MEMORY_LLM_ENV_PATH,
+  MEMORY_PROVIDERS,
   MEMORY_SERVICES,
   MEMORY_SERVICE_ROOT,
   MEMORY_SERVICE_UNIT,
@@ -35,6 +36,7 @@ import {
   apply,
   importNameOf,
 } from "../src/apply/index.ts";
+import { asHermes } from "../src/account-dirs.ts";
 import { HERMES_VENV_DIR } from "../src/apply/hermes.ts";
 import { PRISM_CACHE_MARKER } from "../src/apply/memory-service.ts";
 import { NET_ATTEMPTS } from "../src/apply/memory-shared.ts";
@@ -49,7 +51,7 @@ import { HERMETICD_CAPABILITIES, MANIFEST_PATH } from "../src/manifest.ts";
 import { run } from "../src/main.ts";
 import { USER_DATA_JSON_PATH } from "../src/userdata.ts";
 import { BoxHost, fakeConfigBundle } from "./fake-box.ts";
-import { expectNotRan, expectRan, ran } from "./fake-host.ts";
+import { expectNotRan, expectRan, ran, ranInOrder } from "./fake-host.ts";
 import { MemoryBox, blob, parseBlob } from "./memory-box.ts";
 import {
   RecordingSink,
@@ -72,7 +74,7 @@ const out = captureOutput();
 const PROVIDER_KEY = "FIXTURE anthropic #key";
 const HINDSIGHT = MEMORY_SERVICES.hindsight;
 const OPENVIKING = MEMORY_SERVICES.openviking;
-const PLUGIN = HINDSIGHT.plugin!;
+const PLUGIN = MEMORY_PROVIDERS.hindsight.plugin!;
 const MODEL = OPENVIKING.model!;
 const HERMES_PYTHON = `${HERMES_VENV_DIR}/bin/python`;
 const HINDSIGHT_DIR = memoryServiceDir("hindsight");
@@ -101,10 +103,13 @@ function serviceManifest(
     vendor?: "anthropic" | "bedrock";
     pin?: string;
     key_env?: NonNullable<NonNullable<AgentConfig["memory"]>["llm"]>["key_env"];
+    /** `MemoryBox.hermes`: the Hermes the manifest pins, when not the fixture's. */
+    hermes?: { hermes_version: string; hermes_ref: string };
   } = {},
 ): AgentConfig {
   const vendor = options.vendor ?? "anthropic";
   const base = makeManifest({
+    ...options.hermes,
     provider: vendor,
     memory: {
       provider,
@@ -339,7 +344,7 @@ describe("openviking", () => {
 
     expectRan(
       host,
-      `^runuser -u hermes -- curl -fsSL --retry 3 -o \\S+ ${MODEL.url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+      `^runuser -u hermes -- curl -fsSL --connect-timeout 10 --max-time 300 --retry 3 -o \\S+ ${MODEL.url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
       1,
     );
     expect(parseBlob(host.files.get(MODEL_PATH)?.content)).toEqual({
@@ -354,7 +359,7 @@ describe("openviking", () => {
 
     // Bedrock: no key, and still the file the unit's `EnvironmentFile=` names.
     expect(host.files.get(MEMORY_LLM_ENV_PATH)).toEqual({ content: "\n", mode: "0600" });
-    // No plugin to check out, no client to install: both are upstream's.
+    // Hermes 0.21 bundles the plugin, and the client is Hermes's own.
     expectNotRan(host, /git clone --filter/);
     expectNotRan(host, ` -c import `);
   });
@@ -631,6 +636,62 @@ describe("the pin", () => {
   });
 });
 
+/**
+ * The server's venv is built by the account, which cannot write the root-owned
+ * `UV_PYTHON_INSTALL_DIR`. From v0.23 Hermes's own interpreter is 3.14, so the
+ * 3.11 the 0.21 recipe left there for free is not on the box (the live failure:
+ * `Permission denied (os error 13) at /usr/local/share/uv/python/.temp/…`).
+ */
+describe("the server's managed Python", () => {
+  /** A box whose Hermes is the v0.23 layout: built on 3.14, nothing else managed. */
+  function hermes023(host: MemoryBox): { hermes_version: string; hermes_ref: string } {
+    const hermes = host.hermes("0.23.1");
+    host.hermesStampRefs.add(hermes.hermes_ref);
+    return hermes;
+  }
+
+  test("the account alone cannot get a 3.11 on a 0.23 box", async () => {
+    const host = new MemoryBox();
+    host.managedPythons.add("3.14");
+    const venv = await host.exec(asHermes(["uv", "venv", "--no-config", "--python", "3.11", "/x"]));
+    expect(venv.code).not.toBe(0);
+    expect(venv.stderr).toContain("Permission denied (os error 13) at /usr/local/share/uv/python/");
+  });
+
+  for (const provider of ["openviking", "prism"] as const) {
+    test(`${provider} on Hermes 0.23: root installs the spec's Python before the account's venv`, async () => {
+      const host = openvikingBox();
+      const hermes = hermes023(host);
+      await apply(serviceManifest(provider, { vendor: "bedrock", hermes }), { host });
+
+      const dir = memoryServiceDir(provider);
+      expect([...host.managedPythons].sort()).toEqual(["3.11", "3.14"]);
+      expect(
+        ranInOrder(host, [
+          "^uv python find --managed-python 3\\.11$",
+          "^uv python install 3\\.11$",
+          `^runuser -u hermes -- uv venv --no-config --python 3\\.11 ${dir}/venv$`,
+        ]),
+      ).toBe(true);
+      expect(host.files.get(`${dir}/${MEMORY_PIN_MARKER}`)?.content).toBe(
+        `${MEMORY_SERVICES[provider].pin}\n`,
+      );
+    });
+  }
+
+  test("on Hermes 0.21 the 3.11 Hermes runs on is found, and nothing is installed", async () => {
+    const host = openvikingBox();
+    await apply(serviceManifest("openviking", { vendor: "bedrock" }), { host });
+    expectRan(host, "^uv python find --managed-python 3\\.11$", 1);
+    expectNotRan(host, /uv python install/);
+    expectRan(
+      host,
+      `^runuser -u hermes -- uv venv --no-config --python 3\\.11 ${OPENVIKING_DIR}/venv$`,
+      1,
+    );
+  });
+});
+
 describe("removal", () => {
   /** A box that ran hindsight, now given a manifest with `memory`. */
   function formerHindsightBox(): MemoryBox {
@@ -683,6 +744,123 @@ describe("holographic", () => {
     expectRan(host, `^${HERMES_PYTHON} -c import numpy$`, 1);
     expectNotRan(host, /uv pip install/);
     expect(second.restarted).toEqual([]);
+  });
+});
+
+describe("catalog plugin checkouts", () => {
+  const HOLOGRAPHIC = MEMORY_PROVIDERS.holographic.plugin!;
+  const VIKING = MEMORY_PROVIDERS.openviking.plugin!;
+
+  test("Hermes 0.23 gets holographic's plugin as a whole-repo checkout at the catalog pin", async () => {
+    const host = new MemoryBox();
+    const manifest = makeManifest({ ...host.hermes("0.23.1"), memory: { provider: "holographic" } });
+    const first = await apply(manifest, { host });
+
+    const dir = hermesPluginDir("holographic");
+    expectRan(
+      host,
+      `^runuser -u hermes -- git clone --filter=blob:none --no-checkout --quiet ${HOLOGRAPHIC.repo} `,
+      1,
+    );
+    expectNotRan(host, /sparse-checkout/);
+    expectRan(host, `^runuser -u hermes -- git -C \\S+ checkout --quiet ${HOLOGRAPHIC.sha}$`, 1);
+    expect(host.files.has(`${dir}/__init__.py`)).toBe(true);
+    expect(host.files.get(`${dir}/${PLUGIN_REF_MARKER}`)?.content).toBe(`${HOLOGRAPHIC.sha}\n`);
+    expect(first.installed).toContain(`plugin:holographic@${HOLOGRAPHIC.sha}`);
+    expect(first.restarted).toContain("hermes-gateway.service");
+    // Still no server.
+    expectNotRan(host, MEMORY_SERVICE_ROOT);
+
+    host.commands.length = 0;
+    const second = await apply(manifest, { host });
+    expectNotRan(host, /git clone/);
+    expect(second.restarted).toEqual([]);
+  });
+
+  test("Hermes 0.23 gets openviking's plugin directory at the catalog pin", async () => {
+    const host = openvikingBox();
+    const hermes = host.hermes("0.23.1");
+    const result = await apply(serviceManifest("openviking", { vendor: "bedrock", hermes }), { host });
+
+    const dir = hermesPluginDir("openviking");
+    expectRan(host, `^runuser -u hermes -- git clone .* ${VIKING.repo} `, 1);
+    expectRan(
+      host,
+      `^runuser -u hermes -- git -C \\S+ sparse-checkout set --no-cone ${VIKING.subdir}$`,
+      1,
+    );
+    expect(host.files.has(`${dir}/__init__.py`)).toBe(true);
+    expect(host.files.get(`${dir}/${PLUGIN_REF_MARKER}`)?.content).toBe(`${VIKING.sha}\n`);
+    expect(result.installed).toContain(`plugin:openviking@${VIKING.sha}`);
+  });
+
+  test("hindsight's plugin is checked out on 0.23 as on 0.21", async () => {
+    const host = new MemoryBox();
+    const hermes = host.hermes("0.23.1");
+    const result = await apply(serviceManifest("hindsight", { hermes }), {
+      host,
+      providerKey: PROVIDER_KEY,
+    });
+    expect(host.files.get(`${PLUGIN_DIR}/${PLUGIN_REF_MARKER}`)?.content).toBe(`${PLUGIN.sha}\n`);
+    expect(result.installed).toContain(`plugin:hindsight@${PLUGIN.sha}`);
+  });
+
+  for (const provider of ["holographic", "openviking"] as const) {
+    test(`Hermes 0.21.5 bundles ${provider}: no checkout`, async () => {
+      const host = openvikingBox();
+      const hermes = host.hermes("0.21.5");
+      const manifest =
+        provider === "openviking"
+          ? serviceManifest("openviking", { vendor: "bedrock", hermes })
+          : makeManifest({ ...hermes, memory: { provider } });
+      await apply(manifest, { host });
+      expectNotRan(host, /git clone --filter/);
+      expect(host.files.has(`${hermesPluginDir(provider)}/${PLUGIN_REF_MARKER}`)).toBe(false);
+    });
+  }
+
+  /** A box that ran Hermes 0.23 with hermetic's checkouts, and an operator's own honcho plugin. */
+  function rolledBackBox(): MemoryBox {
+    const host = new MemoryBox();
+    for (const name of ["holographic", "openviking", "hindsight"]) {
+      host.seed(`${hermesPluginDir(name)}/__init__.py`, "\n");
+      host.seed(`${hermesPluginDir(name)}/${PLUGIN_REF_MARKER}`, "f".repeat(40) + "\n");
+    }
+    host.seed(`${hermesPluginDir("honcho")}/__init__.py`, "# the operator's\n");
+    return host;
+  }
+
+  test("a rollback to 0.21.5 removes the checkouts hermetic made for 0.23, and only those", async () => {
+    const host = rolledBackBox();
+    const result = await apply(makeManifest({ ...host.hermes("0.21.5") }), { host });
+
+    for (const name of ["holographic", "openviking"]) {
+      expectRan(host, `^runuser -u hermes -- rm -rf ${hermesPluginDir(name)}$`, 1);
+      expect(host.files.has(`${hermesPluginDir(name)}/__init__.py`)).toBe(false);
+      expect(result.changed).toContain(hermesPluginDir(name));
+    }
+    // Never bundled: hindsight's checkout is the one Hermes loads.
+    expect(host.files.has(`${hermesPluginDir("hindsight")}/__init__.py`)).toBe(true);
+    // No marker: the operator's.
+    expect(host.files.get(`${hermesPluginDir("honcho")}/__init__.py`)?.content).toBe(
+      "# the operator's\n",
+    );
+    expect(result.restarted).toContain("hermes-gateway.service");
+
+    host.commands.length = 0;
+    const second = await apply(makeManifest({ ...host.hermes("0.21.5") }), { host });
+    expectNotRan(host, / rm -rf /);
+    expect(second.restarted).toEqual([]);
+  });
+
+  test("a dry run of the rollback reports the removals and removes nothing", async () => {
+    const host = rolledBackBox();
+    const plan = await apply(makeManifest({ ...host.hermes("0.21.5") }), { host, dryRun: true });
+    expect(plan.changed).toEqual(
+      expect.arrayContaining([hermesPluginDir("holographic"), hermesPluginDir("openviking")]),
+    );
+    expectNotRan(host, / rm -rf /);
+    expect(host.files.has(`${hermesPluginDir("holographic")}/__init__.py`)).toBe(true);
   });
 });
 

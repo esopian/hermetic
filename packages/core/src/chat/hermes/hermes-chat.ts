@@ -84,6 +84,7 @@ import { createChatHistory } from "./hermes-chat-history.ts";
 import { createBusyProbe } from "./hermes-chat-busy.ts";
 import { createLiveUsage } from "./hermes-chat-live-usage.ts";
 import { createChatCommands } from "./hermes-chat-commands.ts";
+import { createMovedBotChats } from "./hermes-chat-moved.ts";
 import { createChatPeer } from "./hermes-chat-peer.ts";
 import { createRequestPool } from "./hermes-chat-pool.ts";
 import { createChatRoster } from "./hermes-chat-roster.ts";
@@ -168,7 +169,11 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
           ...(deps.poolIdleMs !== undefined ? { idleMs: deps.poolIdleMs } : {}),
         });
   const peer = createChatPeer({ connection, ...(pool !== undefined ? { pool } : {}) });
+  const moved = createMovedBotChats({
+    get: (box, path, opts) => peer.botModeRest(box, "GET", path, undefined, opts),
+  });
   const canonical = createCanonicalSessions({
+    moved,
     connect: connection.connect,
     // The read-only lookups share Bot Mode's pooled socket (one per box), so
     // reads closer together than its idle timeout — an observation on its short
@@ -177,6 +182,14 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
     now: deps.now,
     patch: (box, session, body, opts) =>
       peer.botModeRest(box, "PATCH", `/api/sessions/${encodeURIComponent(session)}`, body, opts),
+    snapshot: (box, session, bot, opts) =>
+      peer.botModeRest(
+        box,
+        "GET",
+        `/api/sessions/${encodeURIComponent(session)}/mutation-snapshot?profile=${encodeURIComponent(bot)}`,
+        undefined,
+        opts,
+      ),
     read: (box, session, bot, opts) =>
       peer.botModeRest(
         box,
@@ -187,10 +200,11 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
       ),
   });
   const roster = createChatRoster({ connect: connection.connect });
-  const sessions = createChatSessions({ connect: connection.connect });
+  const sessions = createChatSessions({ connect: connection.connect, moved });
   const history = createChatHistory({
     connection,
     conversation: canonical.conversation,
+    previousRoots: canonical.previousRoots,
     ...(deps.listOutbox !== undefined ? { listOutbox: deps.listOutbox } : {}),
   });
   const subagents = createSubagentLedgers({ now: deps.now });
@@ -240,6 +254,7 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
     history: history.history,
     liveUsage: live.liveUsage,
     busy: probe.busy,
+    boxBusy: probe.boxBusy,
     commands: catalog.commands,
     send: turn.send,
     abort: turn.abort,

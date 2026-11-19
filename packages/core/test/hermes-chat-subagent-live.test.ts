@@ -101,9 +101,12 @@ function queue<T>() {
 
 function harness(dials: Dial[]): { client: HermesChatClient; sockets: FakeSocket[] } {
   const sockets: FakeSocket[] = [];
-  const fetchImpl: ChatFetch = () =>
+  // The dashboard's page, or its session list (no Bot Chat was ever moved aside here).
+  const fetchImpl: ChatFetch = (input) =>
     Promise.resolve(
-      new Response(DASHBOARD_HTML, { status: 200, headers: { "content-type": "text/html" } }),
+      new URL(String(input)).pathname === "/api/sessions"
+        ? Response.json({ sessions: [] })
+        : new Response(DASHBOARD_HTML, { status: 200, headers: { "content-type": "text/html" } }),
     );
   const openSocket = (): ChatSocket => {
     const script = dials[sockets.length] ?? {};
@@ -472,7 +475,8 @@ describe("child control over a resumed socket (D25)", () => {
   test("with no session named, the bot's Bot Chat is the one resumed; none at all is rejected unasked", async () => {
     const { client, sockets } = harness([{ results: { "session.list": { sessions: [] } } }]);
     expect(await client.subagentSteer?.(BOX, BOT, "sa-9", "focus")).toBe("rejected");
-    // One socket, for the lookup; no resume, no control RPC.
+    // The lookup alone (the title, a pooled read, then the dashboard's list for
+    // a moved-aside Bot Chat); no resume, no control RPC.
     expect(sockets.map((socket) => socket.methods())).toEqual([["session.list"]]);
   });
 

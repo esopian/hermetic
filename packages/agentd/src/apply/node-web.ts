@@ -5,11 +5,13 @@
  */
 import type { AgentConfig } from "@hermetic/core/schema";
 import { HERMES_INSTALL_DIR, HERMES_TUI_DIR, HERMES_WEB_DIST_DIR } from "@hermetic/core/shared";
-import type { ExecOptions } from "../host.ts";
+import type { ExecOptions, Host } from "../host.ts";
 import { must } from "../host.ts";
 import { AgentdError } from "../errors.ts";
 import type { Emit } from "../events.ts";
 import { opEvent } from "../events.ts";
+import { DATA_MOUNT } from "../disk.ts";
+import { STATE_DIR } from "../fleet.ts";
 import type { ApplyOptions, ApplyResult } from "./shared.ts";
 import { retry } from "./shared.ts";
 
@@ -26,7 +28,8 @@ import { retry } from "./shared.ts";
 export const HERMES_WEB_DIR = `${HERMES_INSTALL_DIR}/web`;
 /**
  * What the last successful build was of. Content is `<hermes_ref> node-v<x>`,
- * so a new Hermes ref *or* a new Node re-runs the build, and nothing else does.
+ * plus ` pnpm-<y>` on a pnpm checkout, so a new Hermes ref, Node or pnpm re-runs
+ * the build, and nothing else does.
  */
 const HERMES_WEB_MARKER = `${HERMES_WEB_DIR}/.hermetic-built`;
 /**
@@ -58,14 +61,76 @@ const HERMES_TUI_ENTRY = `${HERMES_TUI_DIR}/dist/entry.js`;
  */
 const HERMES_ROOT_LOCKFILE = `${HERMES_INSTALL_DIR}/package-lock.json`;
 /**
- * The Node that builds it. Ubuntu's `nodejs` is 18 and its `npm` is not even
- * installed, while `web/package.json` pins vite 8, whose `engines` demands
- * `^22.22.0 || ^24.11.0 || >=26.0.0` — so apt cannot supply this at any
- * version, and the official tarball is the only source that can. 24 is the
- * current LTS line; upstream's own Dockerfile is on 26, which we do not follow
- * because a fleet is not the place to run a Node that is still Current.
+ * The pnpm workspace layout upstream moved to in v0.23 (no root
+ * `package-lock.json`). Its presence is what picks the pnpm recipe, so one
+ * hermeticd builds an old checkout with npm and a new one with pnpm.
+ */
+const HERMES_PNPM_LOCKFILE = `${HERMES_INSTALL_DIR}/pnpm-lock.yaml`;
+/**
+ * The Node that builds an npm checkout (v0.21). Ubuntu's `nodejs` is 18 and its
+ * `npm` is not even installed, while `web/package.json` pins vite 8, whose
+ * `engines` demands `^22.22.0 || ^24.11.0 || >=26.0.0` — so apt cannot supply
+ * this at any version, and the official tarball is the only source that can.
+ * 24 is the LTS line those boxes were built with, and a new hermeticd reaches
+ * them before their Hermes moves, so it stays exactly what it was.
  */
 export const NODE_VERSION = "24.20.0";
+/**
+ * The Node that builds a pnpm checkout (v0.23): upstream's own pin
+ * (`pm/lock.json`), and its `package.json` demands `node >=26`.
+ */
+export const PNPM_NODE_VERSION = "26.12.1";
+/**
+ * The V8 heap ceiling for a pnpm checkout's web build. Upstream's
+ * `scripts/build/web.mjs` typechecks and bundles in one process and, with no
+ * cgroup memory limit to size from (a systemd unit has none), caps that heap
+ * at 4096 MB, so V8 never collects on a 2 GB box and the kernel OOM-kills the
+ * build. An explicit `--max-old-space-size` wins over its default; 1024 is
+ * the floor upstream itself goes down to (`HERMES_WEB_BUILD_LIGHT`).
+ */
+export const WEB_BUILD_NODE_OPTIONS = "--max-old-space-size=1024";
+/**
+ * The swapfile a pnpm web build runs beside on a small box with no swap of its
+ * own. Under the cap the build's peak is still the heap plus young generation
+ * plus Rolldown's native memory, which on a t4g.small varied run to run from
+ * ~0.95 GB to past the ~1.35 GB one process can get, so the kernel OOM-killed
+ * it with Hermes and the browser stopped (qa23-a, 2026-11-17). On the data
+ * volume, which is encrypted while the root disk is not: the kernel swaps out
+ * tmpfs pages too, secrets included. Never in `/etc/fstab`: it lives for one
+ * build. Its directory is root's, 0700, beside the agent's home, never in it.
+ */
+export const BUILD_SWAP_DIR = `${DATA_MOUNT}/hermetic-swap`;
+export const BUILD_SWAP = `${BUILD_SWAP_DIR}/build.swap`;
+const GIB = 1024 ** 3;
+/** 2 GiB-class boxes and smaller; a t4g.medium and up builds as before. */
+const BUILD_SWAP_BELOW_BYTES = 3 * GIB;
+/** The swapfile, plus a GiB left over for the build's own output. */
+const BUILD_SWAP_MIN_FREE_BYTES = 2 * GIB;
+const SWAPOFF_TIMEOUT_S = "300";
+
+/** Whether the checkout on the box is the pnpm layout, which decides Node, pnpm and the build. */
+async function pnpmCheckout(host: Host): Promise<boolean> {
+  return (await host.stat(HERMES_PNPM_LOCKFILE)) !== null;
+}
+/**
+ * pnpm as upstream pins it (`pm/lock.json` at v0.23.1): `scripts/build/node-deps.mjs`
+ * refuses any other version. The `@pnpm/exe` build is a single native
+ * executable, so it needs no Node of its own to start.
+ */
+export const PNPM_VERSION = "12.15.0";
+const PNPM_SHA256: Readonly<Record<"arm64" | "x64", string>> = {
+  arm64: "8117d65f28e627e949d5fc65d63342266326826a56fa374317bf13fe1166a50e",
+  x64: "402f7045b1e0587acb1542f18d38afbccb6babf3c7451394e6fb3d9f0160c6ca",
+};
+const PNPM_INSTALL_ROOT = "/usr/local/lib/pnpm";
+
+/** The `@pnpm/exe` release file for one arch, and the digest upstream pinned for it. */
+export function pnpmRelease(arch: "arm64" | "x64"): { url: string; sha256: string } {
+  return {
+    url: `https://registry.npmjs.org/@pnpm/exe.linux-${arch}/-/exe.linux-${arch}-${PNPM_VERSION}.tgz`,
+    sha256: PNPM_SHA256[arch],
+  };
+}
 export const NODE_INSTALL_ROOT = "/usr/local/lib/nodejs";
 /**
  * `/usr/local/bin` precedes `/usr/bin` on the default PATH, so these symlinks
@@ -81,15 +146,15 @@ const NODE_TOOLS = ["node", "npm", "npx"] as const;
  * bounded here: curl by its own flags, everything else by `timeout(1)`.
  */
 const NODE_UNPACK_TIMEOUT_S = "300";
-const NPM_TIMEOUT_S = "900";
+export const NPM_TIMEOUT_S = "900";
 /**
  * How many times the dependency install is attempted, and how long it waits in
  * between. Short: npm has already spent its own `fetch-retries` inside each
  * attempt, so what this covers is the coarser failure — a NAT gateway that went
  * away for a few seconds, or a registry that 503'd the whole request.
  */
-const NPM_INSTALL_ATTEMPTS = 3;
-const NPM_RETRY_MS = 5_000;
+export const NPM_INSTALL_ATTEMPTS = 3;
+export const NPM_RETRY_MS = 5_000;
 /** curl's own bound, and enough retries to survive one bad mirror. */
 const NODE_CURL_FLAGS = [
   "-fsSL",
@@ -116,6 +181,52 @@ export function nodeArch(arch: string = process.arch): "arm64" | "x64" {
   );
 }
 
+/**
+ * Release files a Hermes version change downloaded and verified before it held
+ * the units (`hermes-prefetch.ts`), so the held part of the swap installs them
+ * without the network. On the root volume beside the install roots, so a take
+ * is a rename. Every install still verifies what it takes.
+ */
+export const PREFETCH_DIR = `${STATE_DIR}/hermes-prefetch`;
+export const prefetched = (name: string): string => `${PREFETCH_DIR}/${name}`;
+
+/** Move the pre-fetched `name` to `path`; `false` when there is none. */
+async function takePrefetched(host: Host, name: string, path: string): Promise<boolean> {
+  const from = prefetched(name);
+  if (from === path || (await host.stat(from)) === null) return false;
+  await host.rename(from, path);
+  return true;
+}
+
+/**
+ * `curl -o` one release file and refuse it unless its digest is the one pinned
+ * in source. Unlike Node's `SHASUMS256.txt`, the expected digest here did not
+ * come from the same host as the bytes, so this one is a supply-chain check.
+ */
+export async function fetchPinned(
+  host: Host,
+  url: string,
+  path: string,
+  sha256: string,
+): Promise<void> {
+  // Keyed by digest: a pinned file's name does not always carry its version (uv's does not).
+  if (!(await takePrefetched(host, sha256, path))) {
+    await must(host, ["curl", ...NODE_CURL_FLAGS, "-o", path, url]);
+  }
+  const actual = await host.sha256File(path);
+  if (actual !== sha256) {
+    throw new AgentdError(
+      "CHECKSUM_MISMATCH",
+      `${url} does not match the digest hermetic pins for it`,
+      {
+        url,
+        expected: sha256,
+        actual,
+      },
+    );
+  }
+}
+
 /** `/usr/local/lib/nodejs/node-v24.20.0-linux-arm64`. */
 export function nodeDir(arch: "arm64" | "x64", version: string = NODE_VERSION): string {
   return `${NODE_INSTALL_ROOT}/node-v${version}-linux-${arch}`;
@@ -133,6 +244,48 @@ export function shasumFor(shasums: string, file: string): string | null {
     if (digest && rest.join(" ") === file) return digest;
   }
   return null;
+}
+
+const nodeFile = (version: string, arch: "arm64" | "x64"): string =>
+  `node-v${version}-linux-${arch}.tar.xz`;
+const nodeSumsName = (file: string): string => `${file}.SHASUMS256.txt`;
+
+/**
+ * Stat before exec: the real host's `exec` spawns the argv as given, and a path
+ * that does not exist yet is a `posix_spawn` ENOENT thrown at us, not a non-zero
+ * exit — which is exactly the state every first boot starts in.
+ */
+async function nodeInstalled(host: Host, nodeBin: string, version: string): Promise<boolean> {
+  if ((await host.stat(nodeBin)) === null) return false;
+  const reported = await host.exec([nodeBin, "--version"]);
+  return reported.code === 0 && reported.stdout.trim() === `v${version}`;
+}
+
+/** The release tarball and its `SHASUMS256.txt`, at `tarball` and `sums`, verified. */
+async function fetchNode(
+  host: Host,
+  version: string,
+  file: string,
+  tarball: string,
+  sums: string,
+): Promise<void> {
+  const base = `https://nodejs.org/dist/v${version}`;
+  const cached =
+    (await takePrefetched(host, file, tarball)) &&
+    (await takePrefetched(host, nodeSumsName(file), sums));
+  if (!cached) {
+    await must(host, ["curl", ...NODE_CURL_FLAGS, "-o", tarball, `${base}/${file}`]);
+    await must(host, ["curl", ...NODE_CURL_FLAGS, "-o", sums, `${base}/SHASUMS256.txt`]);
+  }
+  const published = shasumFor((await host.readFile(sums)) ?? "", file);
+  const actual = await host.sha256File(tarball);
+  if (published === null || actual === null || published !== actual) {
+    throw new AgentdError(
+      "CHECKSUM_MISMATCH",
+      `${base}/${file} does not match the digest nodejs.org published for it`,
+      { file, expected: published, actual },
+    );
+  }
 }
 
 /**
@@ -156,45 +309,31 @@ export async function ensureNode(
 ): Promise<boolean> {
   const { host } = opts;
   const arch = nodeArch();
-  const dir = nodeDir(arch);
+  // From the checkout `ensureHermes` left, so an npm checkout keeps its Node.
+  const version = (await pnpmCheckout(host)) ? PNPM_NODE_VERSION : NODE_VERSION;
+  const dir = nodeDir(arch, version);
   const nodeBin = `${dir}/bin/node`;
 
-  // Stat before exec: the real host's `exec` spawns the argv as given, and a
-  // path that does not exist yet is a `posix_spawn` ENOENT thrown at us, not a
-  // non-zero exit — which is exactly the state every first boot starts in.
-  const present = (await host.stat(nodeBin)) !== null;
-  const reported = present ? await host.exec([nodeBin, "--version"]) : null;
-  if (reported !== null && reported.code === 0 && reported.stdout.trim() === `v${NODE_VERSION}`) {
-    emit(opEvent("packages", 0.35, `node ${NODE_VERSION} already installed`, host.now()));
+  if (await nodeInstalled(host, nodeBin, version)) {
+    emit(opEvent("packages", 0.35, `node ${version} already installed`, host.now()));
+    if (!dry) await relinkNode(host, arch, version);
     return false;
   }
 
-  emit(opEvent("packages", 0.35, `installing node ${NODE_VERSION} (${arch})`, host.now()));
+  emit(opEvent("packages", 0.35, `installing node ${version} (${arch})`, host.now()));
   // Recorded before the work, so a plan and the run it predicts name the same
   // paths — a dry run that reported fewer would be a plan nobody could check.
-  result.installed.push(`node@${NODE_VERSION}`);
+  result.installed.push(`node@${version}`);
   for (const tool of NODE_TOOLS) result.changed.push(`${NODE_LINK_DIR}/${tool}`);
   if (dry) return true;
 
-  const file = `node-v${NODE_VERSION}-linux-${arch}.tar.xz`;
-  const base = `https://nodejs.org/dist/v${NODE_VERSION}`;
+  const file = nodeFile(version, arch);
   const tarball = `${NODE_INSTALL_ROOT}/${file}`;
   const sums = `${NODE_INSTALL_ROOT}/SHASUMS256.txt`;
 
   await host.mkdir(NODE_INSTALL_ROOT, "0755");
   try {
-    await must(host, ["curl", ...NODE_CURL_FLAGS, "-o", tarball, `${base}/${file}`]);
-    await must(host, ["curl", ...NODE_CURL_FLAGS, "-o", sums, `${base}/SHASUMS256.txt`]);
-
-    const published = shasumFor((await host.readFile(sums)) ?? "", file);
-    const actual = await host.sha256File(tarball);
-    if (published === null || actual === null || published !== actual) {
-      throw new AgentdError(
-        "CHECKSUM_MISMATCH",
-        `${base}/${file} does not match the digest nodejs.org published for it`,
-        { file, expected: published, actual },
-      );
-    }
+    await fetchNode(host, version, file, tarball, sums);
 
     // `--no-same-owner` because nodejs.org's tarball records its builder's
     // uid/gid (1001), and root's `tar` restores archived owners by default — so
@@ -217,13 +356,37 @@ export async function ensureNode(
     await host.remove(sums);
   }
 
-  // `-n` so re-linking never nests a symlink inside the previous one's target,
-  // the same reason `ensureHermes` uses it for `hermes`.
+  await linkNode(host, dir);
+  return true;
+}
+
+// `-n` so re-linking never nests a symlink inside the previous one's target,
+// the same reason `ensureHermes` uses it for `hermes`.
+async function linkNode(host: Host, dir: string): Promise<void> {
   for (const tool of NODE_TOOLS) {
     await must(host, ["ln", "-sfn", `${dir}/bin/${tool}`, `${NODE_LINK_DIR}/${tool}`]);
   }
+}
 
-  return true;
+/**
+ * With both Nodes on the box, a swap between checkout layouts (or its
+ * rollback) can leave the links on the other one: check them, relink when
+ * wrong. A box with one Node runs no command here.
+ */
+async function relinkNode(host: Host, arch: "arm64" | "x64", version: string): Promise<void> {
+  const other = version === NODE_VERSION ? PNPM_NODE_VERSION : NODE_VERSION;
+  if ((await host.stat(`${nodeDir(arch, other)}/bin/node`)) === null) return;
+  if (await nodeInstalled(host, `${NODE_LINK_DIR}/node`, version)) return;
+  await linkNode(host, nodeDir(arch, version));
+}
+
+/** A rollback's relink, with no download: the Node the restored checkout's layout uses, when installed. */
+export async function relinkNodeForCheckout(host: Host): Promise<void> {
+  const arch = nodeArch();
+  const version = (await pnpmCheckout(host)) ? PNPM_NODE_VERSION : NODE_VERSION;
+  if (await nodeInstalled(host, `${nodeDir(arch, version)}/bin/node`, version)) {
+    await relinkNode(host, arch, version);
+  }
 }
 
 /**
@@ -255,7 +418,14 @@ export async function ensureWebUi(
   dry: boolean,
 ): Promise<boolean> {
   const { host } = opts;
-  const want = `${manifest.hermes_ref} node-v${NODE_VERSION}`;
+  // A swapfile a killed hermeticd left behind goes on the next apply, whether
+  // or not that apply builds anything (a rollback restores a built checkout).
+  if (!dry) await removeBuildSwap(host, emit);
+  // Only a real run can look: a dry run's plan predates the checkout.
+  const pnpm = !dry && (await pnpmCheckout(host));
+  const want = pnpm
+    ? `${manifest.hermes_ref} node-v${PNPM_NODE_VERSION} pnpm-${PNPM_VERSION}`
+    : `${manifest.hermes_ref} node-v${NODE_VERSION}`;
 
   // A ref whose checkout has no `web/` at all — an older Hermes, or a fork that
   // never carried the Vite app. There is nothing here to build, and pretending
@@ -288,7 +458,14 @@ export async function ensureWebUi(
     return false;
   }
 
-  emit(opEvent("packages", 0.4, "installing the hermes node workspaces (npm ci)", host.now()));
+  emit(
+    opEvent(
+      "packages",
+      0.4,
+      `installing the hermes node workspaces (${pnpm ? "pnpm" : "npm ci"})`,
+      host.now(),
+    ),
+  );
   if (dry) {
     result.changed.push(HERMES_WEB_MARKER);
     return true;
@@ -317,6 +494,55 @@ export async function ensureWebUi(
     },
   };
 
+  // npm's flat `node_modules` is not a tree pnpm will adopt (it asks before
+  // removing one, and a box has no one to answer), and the reverse leaves pnpm's
+  // symlinked store under npm. The marker says which manager built last.
+  if (built !== null && built.includes(" pnpm-") !== pnpm) {
+    for (const dir of [HERMES_INSTALL_DIR, HERMES_WEB_DIR, HERMES_TUI_DIR]) {
+      await must(host, ["rm", "-rf", "--", `${dir}/node_modules`]);
+    }
+  }
+
+  const workspaces = ["--workspace", "web", ...(haveTui ? ["--workspace", "ui-tui"] : [])];
+  if (pnpm) {
+    await ensurePnpm(host, result, emit);
+    // Upstream's own dependency step (`Dockerfile:330`): it checks the pnpm
+    // pin against the checkout's `pm/lock.json` and installs the lockfile frozen.
+    await retry(host, NPM_INSTALL_ATTEMPTS, NPM_RETRY_MS, () =>
+      must(
+        host,
+        [
+          "timeout",
+          NPM_TIMEOUT_S,
+          "node",
+          "scripts/build/node-deps.mjs",
+          "--source",
+          HERMES_INSTALL_DIR,
+          ...workspaces,
+        ],
+        npm,
+      ),
+    );
+    emit(opEvent("packages", 0.45, "building the hermes web ui (pnpm)", host.now()));
+    await withBuildSwap(host, emit, () =>
+      must(host, ["timeout", NPM_TIMEOUT_S, "pnpm", "--filter", "web", "run", "build"], {
+        ...npm,
+        env: { ...npm.env, NODE_OPTIONS: WEB_BUILD_NODE_OPTIONS },
+      }),
+    );
+    if (haveTui) {
+      emit(opEvent("packages", 0.48, "building the hermes tui (pnpm)", host.now()));
+      await must(
+        host,
+        ["timeout", NPM_TIMEOUT_S, "pnpm", "--filter", "hermes-tui", "run", "build"],
+        npm,
+      );
+    }
+    await host.writeFile(HERMES_WEB_MARKER, want + "\n", "0644");
+    result.changed.push(HERMES_WEB_MARKER);
+    return true;
+  }
+
   if ((await host.stat(HERMES_ROOT_LOCKFILE)) === null) {
     throw new AgentdError(
       "UNSUPPORTED",
@@ -332,7 +558,6 @@ export async function ensureWebUi(
   // `npm ci` wipes `node_modules` before reifying the tree it was asked for, so
   // a second, narrower install would prune what the first one just put there
   // (`hermes_cli/main_web_build.py:447-455`).
-  const workspaces = ["--workspace", "web", ...(haveTui ? ["--workspace", "ui-tui"] : [])];
   /**
    * One install argv, built twice: once for `ci` and once for the fallback.
    *
@@ -407,4 +632,155 @@ export async function ensureWebUi(
   await host.writeFile(HERMES_WEB_MARKER, want + "\n", "0644");
   result.changed.push(HERMES_WEB_MARKER);
   return true;
+}
+
+/** The swap areas `/proc/swaps` lists: the first field of each line after the header. */
+async function activeSwaps(host: Host): Promise<string[]> {
+  const lines = ((await host.readFile("/proc/swaps")) ?? "").split("\n").slice(1);
+  return lines.map((l) => l.trim().split(/\s+/)[0] ?? "").filter((name) => name !== "");
+}
+
+/**
+ * Run `build` with `BUILD_SWAP` enabled when the box is small and has no swap,
+ * and remove it after, whatever the build did, so a rollback starts without
+ * it. Best effort both ways: a swap that cannot be added or removed is a
+ * warning, never the apply's failure.
+ */
+async function withBuildSwap<T>(host: Host, emit: Emit, build: () => Promise<T>): Promise<T> {
+  const mem = await host.memory();
+  if (mem === null || mem.total >= BUILD_SWAP_BELOW_BYTES || (await activeSwaps(host)).length > 0) {
+    return build();
+  }
+  const warn = (message: string): void => emit(opEvent("packages", 0.45, message, host.now(), "warn"));
+  const fs = await host.filesystem(DATA_MOUNT);
+  if (fs === null) {
+    warn("could not measure free space on the data volume for temporary swap; building without it");
+    return build();
+  }
+  if (fs.mount !== DATA_MOUNT) {
+    warn(
+      `${DATA_MOUNT} is not mounted, and temporary swap would land on the unencrypted root disk; building without it`,
+    );
+    return build();
+  }
+  if (fs.available < BUILD_SWAP_MIN_FREE_BYTES) {
+    warn("too little free space on the data volume for temporary swap; building without it");
+    return build();
+  }
+  emit(
+    opEvent("packages", 0.45, "adding 1 GiB of temporary swap for the hermes web build", host.now()),
+  );
+  try {
+    const found = await host.lstat(BUILD_SWAP_DIR);
+    if (found !== null && (found.isSymlink || !found.isDirectory)) {
+      throw new Error(`${BUILD_SWAP_DIR} is not a directory`);
+    }
+    await host.mkdir(BUILD_SWAP_DIR, "0700");
+    await host.chown(BUILD_SWAP_DIR, 0, 0);
+    await host.chmod(BUILD_SWAP_DIR, "0700");
+    await must(host, ["fallocate", "-l", "1G", BUILD_SWAP]);
+    await must(host, ["chmod", "600", BUILD_SWAP]);
+    await must(host, ["mkswap", BUILD_SWAP]);
+    await must(host, ["swapon", BUILD_SWAP]);
+  } catch (e) {
+    warn(`could not add temporary swap (${errorMessage(e)}); building without it`);
+  }
+  try {
+    return await build();
+  } finally {
+    await removeBuildSwap(host, emit);
+  }
+}
+
+/**
+ * Disable and delete `BUILD_SWAP` if it is there. The file is deleted only
+ * once `swapoff` succeeded: an active swapfile unlinked stays in use under a
+ * name `/proc/swaps` no longer matches, and would never be cleaned up. A
+ * `swapoff` that fails (its pages cannot all come back) leaves both for the
+ * next apply; nothing re-enables the file at boot.
+ */
+export async function removeBuildSwap(host: Host, emit: Emit): Promise<void> {
+  const active = (await activeSwaps(host)).includes(BUILD_SWAP);
+  if (!active && (await host.stat(BUILD_SWAP)) === null) return;
+  try {
+    if (active) await must(host, ["timeout", SWAPOFF_TIMEOUT_S, "swapoff", BUILD_SWAP]);
+    await host.remove(BUILD_SWAP);
+    emit(opEvent("packages", 0.45, "removed the temporary swap", host.now()));
+  } catch (e) {
+    emit(
+      opEvent(
+        "packages",
+        0.45,
+        `could not remove the temporary swap at ${BUILD_SWAP} (${errorMessage(e)}); the next apply retries`,
+        host.now(),
+        "warn",
+      ),
+    );
+  }
+}
+
+const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/**
+ * Install the pinned pnpm and link it onto PATH. Idempotent on the version the
+ * installed executable reports, as `ensureNode` is. The `@pnpm/exe` tarball
+ * holds `package/pnpm` beside its `package.json`, which is where `node-deps.mjs`
+ * reads the version from (through the symlink), so both are kept together.
+ */
+async function ensurePnpm(host: Host, result: ApplyResult, emit: Emit): Promise<void> {
+  const arch = nodeArch();
+  const dir = pnpmDir(arch);
+  const bin = `${dir}/pnpm`;
+  if (await pnpmInstalled(host, bin)) return;
+
+  emit(opEvent("packages", 0.4, `installing pnpm ${PNPM_VERSION} (${arch})`, host.now()));
+  const { url, sha256 } = pnpmRelease(arch);
+  const tarball = `${PNPM_INSTALL_ROOT}/pnpm-${PNPM_VERSION}-linux-${arch}.tgz`;
+  await host.mkdir(PNPM_INSTALL_ROOT, "0755");
+  await host.mkdir(dir, "0755");
+  try {
+    await fetchPinned(host, url, tarball, sha256);
+    await must(host, [
+      "timeout",
+      NODE_UNPACK_TIMEOUT_S,
+      "tar",
+      "--no-same-owner",
+      "-xzf",
+      tarball,
+      "-C",
+      dir,
+      "--strip-components=1",
+    ]);
+  } finally {
+    await host.remove(tarball);
+  }
+  await must(host, ["ln", "-sfn", bin, `${NODE_LINK_DIR}/pnpm`]);
+  result.installed.push(`pnpm@${PNPM_VERSION}`);
+  result.changed.push(`${NODE_LINK_DIR}/pnpm`);
+}
+
+async function pnpmInstalled(host: Host, bin: string): Promise<boolean> {
+  const reported = (await host.stat(bin)) !== null ? await host.exec([bin, "--version"]) : null;
+  return reported?.code === 0 && reported.stdout.trim() === PNPM_VERSION;
+}
+
+const pnpmDir = (arch: "arm64" | "x64"): string =>
+  `${PNPM_INSTALL_ROOT}/pnpm-${PNPM_VERSION}-linux-${arch}`;
+
+/**
+ * Download and verify, into `PREFETCH_DIR`, the Node and pnpm a checkout of
+ * this layout will install, skipping what is already installed. Installs and
+ * relinks nothing: the running Hermes and an old-pin reapply keep their tools.
+ */
+export async function prefetchNodeTools(host: Host, pnpm: boolean): Promise<void> {
+  const arch = nodeArch();
+  const version = pnpm ? PNPM_NODE_VERSION : NODE_VERSION;
+  if (!(await nodeInstalled(host, `${nodeDir(arch, version)}/bin/node`, version))) {
+    const file = nodeFile(version, arch);
+    await fetchNode(host, version, file, prefetched(file), prefetched(nodeSumsName(file)));
+  }
+  if (pnpm && !(await pnpmInstalled(host, `${pnpmDir(arch)}/pnpm`))) {
+    const { url, sha256 } = pnpmRelease(arch);
+    await fetchPinned(host, url, prefetched(sha256), sha256);
+  }
 }

@@ -22,7 +22,7 @@ function listing(rows: unknown) {
       return Promise.resolve(rows);
     },
   });
-  return { calls, busy: probe.busy };
+  return { calls, busy: probe.busy, boxBusy: probe.boxBusy };
 }
 
 const row = (session_key: string, status: string) => ({ id: `rt-${session_key}`, session_key, status });
@@ -53,6 +53,16 @@ describe("hermes-chat · busy", () => {
     // A busy row among them still decides it.
     const both = listing({ sessions: [row("durable-1", "starting"), row("tip", "working")] });
     expect(await both.busy(BOX, "default", ["durable-1", "tip"])).toBe(true);
+  });
+
+  test("the whole box: any live session decides it, whoever started it", async () => {
+    expect(await listing({ sessions: [row("a", "idle"), row("b", "working")] }).boxBusy(BOX)).toBe(
+      true,
+    );
+    expect(await listing({ sessions: [row("a", "idle")] }).boxBusy(BOX)).toBe(false);
+    expect(await listing({ sessions: [] }).boxBusy(BOX)).toBe(false);
+    expect(await listing({ sessions: [row("a", "starting")] }).boxBusy(BOX)).toBeNull();
+    expect(await listing({ status: "ok" }).boxBusy(BOX)).toBeNull();
   });
 
   test("a session not live on the gateway is not busy there", async () => {

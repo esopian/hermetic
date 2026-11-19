@@ -104,6 +104,8 @@ function startGateway(): Gateway {
           pagination: { returned: 0, limit: Number(url.searchParams.get("limit")), offset: 0 },
         });
       }
+      // The dashboard's session list: no Bot Chat was ever moved aside here.
+      if (url.pathname === "/api/sessions") return Response.json({ sessions: [] });
       if (url.pathname === "/")
         return new Response(DASHBOARD_HTML, { headers: { "content-type": "text/html" } });
       return new Response("not found", { status: 404 });

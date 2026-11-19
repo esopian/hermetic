@@ -18,13 +18,15 @@ import {
   HERMES_CONVERGE_TIMEOUT_MS,
   rolloutConvergeTimeoutMs,
 } from "../src/agents/converge.ts";
-import { drain, testHermetic } from "./helpers.ts";
+import { drain, onBuildHermes, testHermetic } from "./helpers.ts";
+import { BUILD_VERSIONS } from "../src/build-versions.ts";
 import type { Agent, OpEvent } from "../src/schema/index.ts";
 
 // The fixture directory is process-global; each file says which account it is in.
 /** A fixture fleet whose boxes all report the config the row names — nothing to do. */
 function fleet(options: { convergeTimeoutMs?: number } = {}) {
   const backend = seedFixtureFleet(new MemoryBackend({ directory: "seeded" }));
+  onBuildHermes(backend);
   const hermetic = testHermetic({
     backend,
     config: FIXTURE_CONFIG,
@@ -44,6 +46,37 @@ function behind(backend: MemoryBackend, name: string): Agent {
 const messages = (events: OpEvent[]): string => events.map((e) => e.message).join("\n");
 
 describe("plan.rollout", () => {
+  /**
+   * Rows carry no `hermes_ref`, so this build renders a row held on another
+   * Hermes with its own ref and the old version: a swap nobody asked for,
+   * which hermeticd refuses, leaving the row on a config the box never ran.
+   * Moving the pin is `upgrade`'s job; a rollout leaves such a row alone.
+   */
+  test("a row held on another Hermes is deferred, never rendered", async () => {
+    const backend = seedFixtureFleet(new MemoryBackend({ directory: "seeded" }));
+    const hermetic = testHermetic({
+      backend,
+      config: FIXTURE_CONFIG,
+      rollout: { convergeTimeoutMs: 5, convergePollMs: 1 },
+    });
+    const held = [...backend.agents.values()].find(
+      (a) => a.status === "ready" && a.hermes_version !== BUILD_VERSIONS.hermes && !a.pending,
+    )!;
+    const before = behind(backend, held.name);
+    const objects = [...backend.objects.keys()];
+
+    const plan = await hermetic.plan.rollout({ agents: [held.name] });
+    expect(plan.steps[0]!.description).toContain(`held on Hermes ${held.hermes_version}`);
+    expect(plan.steps[0]!.description).toContain(`hermetic upgrade --hermes ${BUILD_VERSIONS.hermes}`);
+    await drain(hermetic.apply({ plan, yes: true }));
+
+    const after = backend.agents.get(held.name)!;
+    expect(after.config_hash).toBe(before.config_hash);
+    expect(after.resources.config_key).toBe(before.resources.config_key);
+    expect(after.apply_request ?? null).toBeNull();
+    expect([...backend.objects.keys()]).toEqual(objects);
+  });
+
   test("it writes nothing: no row moves, no object is uploaded", async () => {
     const { backend, hermetic } = fleet();
     behind(backend, "atlas");
@@ -355,6 +388,7 @@ describe("a staged provider change, and the applies that cannot finish it", () =
 describe("a config the fleet's published release could not apply", () => {
   async function publish(capabilities: string[] | undefined) {
     const backend = seedFixtureFleet(new MemoryBackend({ directory: "seeded" }));
+    onBuildHermes(backend);
     const hermetic = testHermetic({
       backend,
       config: FIXTURE_CONFIG,
@@ -380,16 +414,17 @@ describe("a config the fleet's published release could not apply", () => {
   });
 
   test("a release that implements everything is not refused", async () => {
-    // `atlas` is a browser agent in the fixture with a memory provider, so the
-    // document it renders also asks for the browser stack and the memory
-    // provider — "everything" is every capability this agent's configuration
-    // names, not a fixed pair.
+    // `atlas` is a browser agent in the fixture with a memory provider, on
+    // this build's Hermes, so the document it renders also asks for the
+    // browser stack, the memory provider and the 0.22+ install — "everything"
+    // is every capability this agent's configuration names, not a fixed pair.
     const { hermetic } = await publish([
       "gateway-unit",
       "restart-units",
       "managed-env",
       "browser-stack",
       "memory-provider",
+      "hermes-0.22-install",
     ]);
     await expect(hermetic.agents.set({ name: "atlas", size: "large" })).resolves.toBeTruthy();
   });
@@ -434,6 +469,7 @@ describe("a config the fleet's published release could not apply", () => {
    */
   test("an apply onto a slot the published release cannot read leaves the row untouched", async () => {
     const { backend, hermetic } = await publish(["gateway-unit", "restart-units", "managed-env"]);
+    onBuildHermes(backend);
     const before = backend.agents.get("corvid")!;
     expect(before.pending).toBeTruthy();
     // The plan is computed against the fleet as it was published; the refusal
@@ -512,6 +548,7 @@ describe("the converge budget for an agent with a memory server", () => {
 
   test("the plan names both budgets", async () => {
     const backend = seedFixtureFleet(new MemoryBackend({ directory: "seeded" }));
+    onBuildHermes(backend);
     const hermetic = testHermetic({ backend, config: FIXTURE_CONFIG });
     behind(backend, "atlas");
     const plan = await hermetic.plan.rollout({ agents: ["atlas"] });

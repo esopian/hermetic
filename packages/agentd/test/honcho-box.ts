@@ -14,13 +14,12 @@ const VENV = `${DIR}/venv`;
 const CLONE = `${DIR}/.src.clone`;
 
 /**
- * `MemoryBox` plus what honcho's steps read back: uv-managed Pythons, the
- * source checkout, `uv sync` building the venv, tiktoken filling its cache,
- * `initdb` leaving a cluster, and symlinks `readlink` can answer for.
+ * `MemoryBox` plus what honcho's steps read back: the source checkout, `uv
+ * sync` building the venv (on a managed Python, `BoxHost.managedPythons`),
+ * tiktoken filling its cache, `initdb` leaving a cluster, and symlinks
+ * `readlink` can answer for.
  */
 export class HonchoBox extends MemoryBox {
-  /** Minor versions `uv python find --managed-python` finds. */
-  readonly managedPythons = new Set<string>();
   /** Every exec with the options it was given, for env/cwd/stdin assertions. */
   readonly execs: Array<{ command: string; opts: ExecOptions | undefined }> = [];
   /** Whether the createcluster drop-in was on disk when Postgres was installed. */
@@ -59,13 +58,6 @@ export class HonchoBox extends MemoryBox {
     const [bin = "", ...args] = argv;
     if (bin === "apt-get" && args.includes("install") && args.includes("postgresql-16")) {
       this.confAtAptInstall = this.files.has(HONCHO_CREATECLUSTER_CONF);
-    }
-    if (bin === "uv" && args[0] === "python") {
-      const version = args.at(-1) ?? "";
-      if (args[1] === "find")
-        return this.managedPythons.has(version) ? ok(`/x/python${version}\n`) : fail(2);
-      if (args[1] === "install") this.managedPythons.add(version);
-      return ok();
     }
     if (bin === "uv" && args[0] === "sync") {
       const venv = opts?.env?.UV_PROJECT_ENVIRONMENT ?? "";

@@ -620,7 +620,19 @@ async function messageFrom(argument: string | undefined): Promise<string> {
       "pass a message argument or pipe one on stdin; the interactive session is not built yet",
     );
   }
+  // An open pipe nobody writes to looks like a hang otherwise (a message
+  // swallowed as an option's value, say). stderr, so `--json` stdout stays clean.
+  await err("reading the message from stdin…\n");
   return (await Bun.stdin.text()).trim();
+}
+
+/**
+ * A `chat` subcommand's `--session`. `chat` declares the same flag, and Commander
+ * gives it to the parent even when written after the subcommand's name, so it is
+ * read with the parent's: the subcommand alone would see none and use Bot Chat.
+ */
+function subSession(cmd: Command): unknown {
+  return cmd.optsWithGlobals()["session"];
 }
 
 export function register(program: Command): void {
@@ -710,13 +722,7 @@ export function register(program: Command): void {
           );
         }
         const ref = parseBotRef(target);
-        // With files attached the message may be empty, so a terminal with no
-        // argument sends the files alone rather than waiting on stdin.
-        const text =
-          paths.length > 0 && message === undefined && process.stdin.isTTY === true
-            ? ""
-            : await messageFrom(message);
-        const inputWith = (ids: readonly string[]) =>
+        const inputWith = (text: string, ids: readonly string[]) =>
           validate(
             sendSchema,
             defined({
@@ -727,10 +733,20 @@ export function register(program: Command): void {
               attachments: ids.length > 0 ? ids.map((file_id) => ({ file_id })) : undefined,
             }),
           );
+        // Stand-in ids, distinct and well-formed, hold the attachments' places.
+        const standIns = paths.map((_, i) => `f_${String(i).padStart(12, "0")}`);
+        // The options checked before stdin is read, with a stand-in message: a
+        // bad `--session` must not wait on a pipe that never closes.
+        inputWith(message ?? ".", standIns);
+        // With files attached the message may be empty, so a terminal with no
+        // argument sends the files alone rather than waiting on stdin.
+        const text =
+          paths.length > 0 && message === undefined && process.stdin.isTTY === true
+            ? ""
+            : await messageFrom(message);
         // Everything but the ids checked before a byte is uploaded: a turn the
-        // schema refuses must not leave files staged on the box. Stand-in ids,
-        // distinct and well-formed, hold the attachments' places.
-        inputWith(paths.map((_, i) => `f_${String(i).padStart(12, "0")}`));
+        // schema refuses must not leave files staged on the box.
+        inputWith(text, standIns);
         // Staged before the turn's input is built: the ids are what it carries.
         const ids: string[] = [];
         for (const path of paths) {
@@ -743,7 +759,7 @@ export function register(program: Command): void {
             }),
           );
         }
-        const input = inputWith(ids);
+        const input = inputWith(text, ids);
         let failure: HermeticError | null = null;
         // Whether the reply has left the cursor mid-sentence; see `frameText`.
         let midLine = false;
@@ -812,7 +828,7 @@ export function register(program: Command): void {
           historySchema,
           defined({
             ...parseBotRef(target),
-            session: opts["session"],
+            session: subSession(cmd),
             limit: toInt(opts["limit"] as string | undefined),
           }),
         );
@@ -844,11 +860,11 @@ export function register(program: Command): void {
         "\nDESKTOP is upstream's desktop disposition: `-` when a desktop composer offers\n" +
           "the command, otherwise why it does not (`terminal`, `hidden`, …).\n",
       )
-      .action(async (target: string, opts: Record<string, unknown>, cmd: Command) => {
+      .action(async (target: string, _opts: Record<string, unknown>, cmd: Command) => {
         const ctx = await openCtx(cmd);
         const input = validate(
           commandsSchema,
-          defined({ ...parseBotRef(target), session: opts["session"] }),
+          defined({ ...parseBotRef(target), session: subSession(cmd) }),
         );
         const result = await ctx.hermetic.chat.commands(input, { signal: ctx.signal });
         if (ctx.flags.json) {
@@ -886,11 +902,11 @@ export function register(program: Command): void {
           "starts a turn, and Ctrl-C stops watching here and changes nothing on the box.\n" +
           "\nIt does not end on its own: a conversation is never over.\n",
       )
-      .action(async (target: string, opts: Record<string, unknown>, cmd: Command) => {
+      .action(async (target: string, _opts: Record<string, unknown>, cmd: Command) => {
         const ctx = await openCtx(cmd);
         const input = validate(
           observeSchema,
-          defined({ ...parseBotRef(target), session: opts["session"] }),
+          defined({ ...parseBotRef(target), session: subSession(cmd) }),
         );
         // Tells `observeText` the watch's own opening `snapshot` apart from a
         // later one core sends on a session rollover — the two render
@@ -924,7 +940,7 @@ export function register(program: Command): void {
         const ctx = await openCtx(cmd);
         const input = validate(
           abortSchema,
-          defined({ ...parseBotRef(target), session: opts["session"], subagent_id: opts["subagent"] }),
+          defined({ ...parseBotRef(target), session: subSession(cmd), subagent_id: opts["subagent"] }),
         );
         const result = await ctx.hermetic.chat.abort(input, { signal: ctx.signal });
         if (ctx.flags.json) await outJson(result);
@@ -971,7 +987,7 @@ export function register(program: Command): void {
           steerSchema,
           defined({
             ...parseBotRef(target),
-            session: opts["session"],
+            session: subSession(cmd),
             text: text.join(" "),
             subagent_id: opts["subagent"],
           }),
@@ -997,11 +1013,11 @@ export function register(program: Command): void {
       .argument("<question...>", "the question")
       .option("--session <id>", "the session whose conversation to ask about")
       .action(
-        async (target: string, question: string[], opts: Record<string, unknown>, cmd: Command) => {
+        async (target: string, question: string[], _opts: Record<string, unknown>, cmd: Command) => {
           const ctx = await openCtx(cmd);
           const input = validate(
             btwSchema,
-            defined({ ...parseBotRef(target), session: opts["session"], text: question.join(" ") }),
+            defined({ ...parseBotRef(target), session: subSession(cmd), text: question.join(" ") }),
           );
           const result = await ctx.hermetic.chat.btw(input, { signal: ctx.signal });
           if (ctx.flags.json) await outJson(result);
@@ -1030,7 +1046,7 @@ export function register(program: Command): void {
           branchSchema,
           defined({
             ...parseBotRef(target),
-            session: opts["session"],
+            session: subSession(cmd),
             until: opts["until"],
             until_message: opts["untilMessage"],
             question: opts["question"],

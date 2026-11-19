@@ -26,6 +26,7 @@ export function createRecreateOp(deps: LifecycleDeps, shared: { release: Release
     acquireLock,
     actor,
     assertCanApply,
+    assertOnBuildHermes,
     assertSealed,
     attachDeps,
     backend,
@@ -101,6 +102,8 @@ export function createRecreateOp(deps: LifecycleDeps, shared: { release: Release
         { name: agent.name, status: agent.status },
       );
     }
+    // Before the old instance is terminated: the replacement boots on a fresh render.
+    assertOnBuildHermes(agent);
 
     const owner = `${await actor()}#${randomUUID()}`;
     agent = await acquireLock(agent, owner);

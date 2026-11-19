@@ -216,7 +216,7 @@ describe("verify-hermes", () => {
     await wellConfigured(host);
     const checks = await checkHermes(host, makeManifest({ provider: "nous" }));
     expect(host.commands).toContain(
-      `timeout ${HERMES_PROBE_TIMEOUT_S} runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes ` +
+      `timeout ${HERMES_PROBE_TIMEOUT_S} runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes HERMES_DISABLE_LAZY_INSTALLS=1 ` +
         "/usr/local/bin/hermes config get model.default --json",
     );
     expect(checks.find((c) => c.name === "resolved_model")!.detail).toContain(
@@ -336,7 +336,7 @@ describe("verify-hermes", () => {
         "Hermes resolves approvals.mode to off",
       );
       expect(host.commands).toContain(
-        `timeout ${HERMES_PROBE_TIMEOUT_S} runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes ` +
+        `timeout ${HERMES_PROBE_TIMEOUT_S} runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes HERMES_DISABLE_LAZY_INSTALLS=1 ` +
           "/usr/local/bin/hermes config get approvals.mode --json",
       );
     });
@@ -423,7 +423,7 @@ describe("verify-hermes", () => {
         `Hermes resolves browser.cdp_url to ${CDP_URL}`,
       );
       expect(host.commands).toContain(
-        `timeout ${HERMES_PROBE_TIMEOUT_S} runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes ` +
+        `timeout ${HERMES_PROBE_TIMEOUT_S} runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes HERMES_DISABLE_LAZY_INSTALLS=1 ` +
           "/usr/local/bin/hermes config get browser.cdp_url --json",
       );
     });

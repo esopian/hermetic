@@ -442,14 +442,17 @@ function client(
   opts: { sessionTuning?: SessionSocketTuning; archiveOk?: boolean } = {},
 ): HermesChatClient {
   const archived = opts.archiveOk ?? true;
-  const fetchImpl: ChatFetch = (_input, init) =>
+  const fetchImpl: ChatFetch = (input, init) =>
     Promise.resolve(
       init?.method === "PATCH"
         ? new Response(JSON.stringify({ ok: archived, archived }), {
             status: 200,
             headers: { "content-type": "application/json" },
           })
-        : new Response(TOKEN_PAGE, { status: 200, headers: { "content-type": "text/html" } }),
+        : // The dashboard's session list: no Bot Chat was ever moved aside here.
+          new URL(String(input)).pathname === "/api/sessions"
+          ? Response.json({ sessions: [] })
+          : new Response(TOKEN_PAGE, { status: 200, headers: { "content-type": "text/html" } }),
     );
   return createHermesChat({
     fetch: fetchImpl,
