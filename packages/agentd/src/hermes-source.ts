@@ -23,6 +23,7 @@
  */
 import { createHash } from "node:crypto";
 import type { FleetManifest, HermesBundleEntry } from "@hermetic/core/schema";
+import { HERMES_INSTALL_DIR } from "@hermetic/core/shared";
 import { getObjectStream, realAws, realS3 } from "./aws.ts";
 import { AgentdError } from "./errors.ts";
 import { readUsableFleetManifest, STATE_DIR } from "./fleet.ts";
@@ -59,6 +60,16 @@ export interface HermesBundle {
   /** The upstream commit the mirrored tree was taken from. */
   readonly upstreamSha: string;
 }
+
+/**
+ * The ref this box last installed, recorded by hermeticd rather than read back
+ * out of git. A marker beats `git rev-parse HEAD` against `<ref>^{commit}`
+ * because the checkout is shallow and detached: the tag object is usually not
+ * even in the clone, so the comparison that would prove the box is on the right
+ * ref is the one git cannot answer offline. One file read settles it instead.
+ * On the root volume, beside the checkout: a recreate starts without one.
+ */
+export const HERMES_REF_MARKER = `${HERMES_INSTALL_DIR}/.hermetic-ref`;
 
 /** `HERMES_REF_MARKER`, parsed. */
 export interface HermesRefMarker {

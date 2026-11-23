@@ -372,6 +372,26 @@ export async function restoredBefore(
 }
 
 /**
+ * The version the newest restore completed at or after `since` put back, not
+ * one a later restore superseded; `null` when none did.
+ */
+export async function lastRestoreSince(host: Host, since: string): Promise<string | null> {
+  if ((await host.lstat(HERMES_BACKUP_ROOT)) === null) return null;
+  let newest: { at: string; toVersion: string } | null = null;
+  for (const name of await host.readdir(HERMES_BACKUP_ROOT)) {
+    if (!name.startsWith("post-")) continue;
+    const raw = await host.readFile(`${HERMES_BACKUP_ROOT}/${name}/${RESTORED}`);
+    const done = parseRecord(raw);
+    if (done === null) continue;
+    const rec = JSON.parse(raw as string) as { completed_at?: unknown; superseded_by?: unknown };
+    const at = rec.completed_at;
+    if (rec.superseded_by !== undefined || typeof at !== "string" || at < since) continue;
+    if (newest === null || at > newest.at) newest = { at, toVersion: done.toVersion };
+  }
+  return newest?.toVersion ?? null;
+}
+
+/**
  * The `post-…` directory of a restore of `backup`, from `leftVersion` back to
  * `toVersion`, that completed at or after `since` itself (not one it superseded).
  */
@@ -557,7 +577,7 @@ async function verify(host: Host, path: string, entry: FileEntry): Promise<void>
 
 // --- the backup tree -------------------------------------------------------
 
-async function ensureBackupRoot(host: Host): Promise<void> {
+export async function ensureBackupRoot(host: Host): Promise<void> {
   const found = await host.lstat(HERMES_BACKUP_ROOT);
   if (found !== null && (found.isSymlink || !found.isDirectory)) {
     throw backupFailed("unsafe-path", `${HERMES_BACKUP_ROOT} is not a directory`, {

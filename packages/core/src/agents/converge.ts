@@ -38,6 +38,7 @@
  * pins — exactly the limit `recreate` has, and for the same reason. When the
  * row gains a ref of its own, both inherit the fix through the render.
  */
+import { randomUUID } from "node:crypto";
 import { abortableSleep } from "../abort.ts";
 import type { CoreContext } from "../context.ts";
 import {
@@ -46,6 +47,7 @@ import {
   HERMES_ROLLBACK_FAILED,
 } from "../schema/index.ts";
 import type { Agent, AgentStatus, ApplyRequest } from "../schema/index.ts";
+import { hermesRefFor } from "../shared/hermes.ts";
 import { memoryProviderIsService } from "../shared/memory-providers.ts";
 
 /** How long one box gets to pick up a configuration-only request and report the new hash. */
@@ -136,7 +138,9 @@ export function rolledBackFrom(agent: Agent): NonNullable<ApplyRequest["upgrade_
     code === undefined ||
     agent.apply_failure?.request_id !== req.id ||
     !HERMES_OLD_VERSION_RUNNING.includes(code) ||
-    agent.config_hash !== req.config_hash
+    agent.config_hash !== req.config_hash ||
+    // The box took that config since (a recreate renders the same hash), so nothing is rolled back.
+    agent.applied_config_hash === req.config_hash
   ) {
     return null;
   }
@@ -144,18 +148,48 @@ export function rolledBackFrom(agent: Agent): NonNullable<ApplyRequest["upgrade_
 }
 
 /**
- * Why a row held on another Hermes than this build's is not converged, or
- * `null`. Every render pins this build's `hermes_ref` (`renderAgentRow`), so
- * converging it would install a Hermes nobody asked for, labelled as the old
- * one; moving the pin is `upgrade`'s job. Shared by `plan rollout` and the
- * config phase of a push, so the two never disagree about a held row.
+ * Why converging this row could move its Hermes, or `null` (§6.5). Only an
+ * explicit `upgrade --hermes V --now` changes the Hermes a box runs: it waits
+ * for an idle box and names the pin to put back. Shared by `plan rollout` and
+ * the config phase of a push, so the two never disagree about a row.
+ *
+ * - A version with no known ref (`hermesRefFor`) is held: its render would
+ *   carry this build's ref, a Hermes nobody asked for.
+ * - `automatic` (a push's or `foundation update`'s config phase) converges
+ *   only rows on this build's Hermes, so publishing a release never touches an
+ *   agent kept on an older one.
+ * - A pin the box does not report running is a swap waiting to happen, and a
+ *   box that has not reported is treated the same way: fail closed. Callers
+ *   that can read the bucket first fill an unreported version from the applied
+ *   bundle (`withAppliedHermes`).
  */
-export function hermesHeldDeferral(
-  agent: Pick<Agent, "name" | "hermes_version">,
+export function hermesDeferral(
+  agent: Pick<Agent, "name" | "hermes_version" | "running_hermes_version" | "applied_config_hash">,
   hermesVersion: string,
+  automatic: boolean,
 ): string | null {
-  if (agent.hermes_version === hermesVersion) return null;
-  return `held on Hermes ${agent.hermes_version}, and this build renders ${hermesVersion}; \`hermetic upgrade --hermes ${hermesVersion} ${agent.name}\` moves it`;
+  const pin = agent.hermes_version;
+  if (hermesRefFor(pin) === null || (automatic && pin !== hermesVersion)) {
+    return `held on Hermes ${pin}, and this build renders ${hermesVersion}; \`hermetic upgrade --hermes ${hermesVersion} ${agent.name} --now\` moves it`;
+  }
+  const running = agent.running_hermes_version ?? null;
+  if (running === pin) return null;
+  const now = `\`hermetic upgrade --hermes ${pin} ${agent.name} --now\` installs it`;
+  // `--now` refuses a box that never applied a config, so it is not the exit here.
+  if (running === null && (agent.applied_config_hash ?? null) === null) {
+    return `pinned to Hermes ${pin}, and its box has never applied a config or reported which Hermes it runs; ${neverApplied(agent.name)}`;
+  }
+  return running === null
+    ? `pinned to Hermes ${pin}, and its box has not reported which Hermes it runs yet; ${now}`
+    : `pinned to Hermes ${pin}, and its box runs ${running}; ${now}`;
+}
+
+/**
+ * The exits for a box that never applied a config (a boot that failed before
+ * its first apply): `plan rollout` and `upgrade --now` each defer it to the other.
+ */
+export function neverApplied(name: string): string {
+  return `\`hermetic agent rerun ${name}\` retries its boot (an agent in error), or \`hermetic plan recreate ${name}\` replaces its box`;
 }
 
 /**
@@ -197,7 +231,9 @@ export function createConverge(deps: ConvergeDeps) {
   ): Promise<Agent> {
     const next = await agents.update(agent.name, agent.version, {
       apply_request: {
-        id: `${hash}-${ctx.backend.clock.now().getTime().toString(36)}`,
+        // Unique even on a frozen clock: a request for a hash asked before must
+        // not carry that request's id, or the box's answer to it reads as this one's.
+        id: `${hash}-${ctx.backend.clock.now().getTime().toString(36)}-${randomUUID().slice(0, 8)}`,
         config_hash: hash,
         issued_at: ctx.nowIso(),
         issued_by: issuedBy,

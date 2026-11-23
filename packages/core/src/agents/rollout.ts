@@ -62,7 +62,7 @@ import type {
   Plan,
   PlanRolloutInput,
 } from "../schema/index.ts";
-import { diffAppliedConfig } from "./config-diff.ts";
+import { diffAppliedConfig, withAppliedHermes } from "./config-diff.ts";
 import { configVerdict } from "../fleet/skew.ts";
 import {
   CONVERGE_POLL_MS,
@@ -70,7 +70,7 @@ import {
   HERMES_CONVERGE_TIMEOUT_MS,
   convergeDeferral,
   createConverge,
-  hermesHeldDeferral,
+  hermesDeferral,
   hermesHeldDown,
   rolledBackFrom,
   rolloutConvergeTimeoutMs,
@@ -162,26 +162,28 @@ export function createRollout(deps: RolloutDeps) {
     }
     const chosen = all.filter((a) => (wanted ? wanted.has(a.name) : true));
 
-    return chosen.map((agent) => {
-      /**
-       * §8.3: the hash a *staged* row converges to is the one its pending
-       * binding renders, not the one its current binding does — `apply`
-       * rewrites the binding first and renders afterwards. A plan that named
-       * today's hash would promise one thing and the apply would record
-       * another, which is the plan being wrong about the only number it exists
-       * to state.
-       */
-      const { config_hash: to, manifest } = renderOf(pendingApplied(agent), fleet);
-      const from = agent.applied_config_hash ?? null;
-      return {
-        name: agent.name,
-        from,
-        to,
-        deferred: deferralFor(agent, to),
-        pending: describePending(agent),
-        manifest,
-      };
-    });
+    return Promise.all(
+      chosen.map(async (agent) => {
+        /**
+         * §8.3: the hash a *staged* row converges to is the one its pending
+         * binding renders, not the one its current binding does — `apply`
+         * rewrites the binding first and renders afterwards. A plan that named
+         * today's hash would promise one thing and the apply would record
+         * another, which is the plan being wrong about the only number it exists
+         * to state.
+         */
+        const { config_hash: to, manifest } = renderOf(pendingApplied(agent), fleet);
+        const from = agent.applied_config_hash ?? null;
+        return {
+          name: agent.name,
+          from,
+          to,
+          deferred: deferralFor(await withAppliedHermes(ctx.backend.artifacts, agent), to),
+          pending: describePending(agent),
+          manifest,
+        };
+      }),
+    );
   }
 
   /**
@@ -198,7 +200,8 @@ export function createRollout(deps: RolloutDeps) {
     }
     // Before a staged change: applying one re-renders, and a held row must not be.
     // A row awaiting a rollback's reconcile is not held: `run` puts its pin back and renders nothing.
-    const held = rolledBackFrom(agent) === null ? hermesHeldDeferral(agent, ctx.hermesVersion) : null;
+    const held =
+      rolledBackFrom(agent) === null ? hermesDeferral(agent, ctx.hermesVersion, false) : null;
     if (held !== null) return held;
     /**
      * A staged provider change is work even when the hashes already agree: the
@@ -338,7 +341,10 @@ export function createRollout(deps: RolloutDeps) {
       // Re-derived here rather than trusted from the plan: a row can move
       // between reading a plan and applying it, and a converge onto a stale
       // decision is exactly what the re-read prevents.
-      const early = deferralFor(fresh, fresh.config_hash ?? "");
+      const early = deferralFor(
+        await withAppliedHermes(ctx.backend.artifacts, fresh),
+        fresh.config_hash ?? "",
+      );
       if (early !== null && early !== "already current") {
         yield evt(`${fresh.name}:skipped`, progress, `${fresh.name} skipped — ${early}`, at(), "warn");
         deferred += 1;
@@ -371,12 +377,10 @@ export function createRollout(deps: RolloutDeps) {
          * `upgrade --now` stopped waiting gets its old pin back, so this does
          * not ask the box for the version it just refused.
          *
-         * A row put back is not re-rendered. The row has no `hermes_ref`, and
-         * every render pins this build's (`renderAgentRow`), so re-rendering an
-         * older pin names the new ref with the old version: a Hermes swap
-         * nobody asked for, labelled as the version it left. The converge is
-         * the config the box ran before the upgrade, which the row names again
+         * A row put back is not re-rendered: the converge is exactly the
+         * config the box ran before the upgrade, which the row names again
          * (and `reconcileRolledBack` has already asked for after a rollback).
+         * A later rollout re-renders it on its own Hermes ref.
          */
         const reconciled = await convergeOf(agent).reconcileRolledBack(agent, owner);
         agent = reconciled.agent;
@@ -392,7 +396,7 @@ export function createRollout(deps: RolloutDeps) {
             "warn",
           );
           if (restored === null) {
-            // Nothing to return to, and a render of the old pin would name this build's ref.
+            // Nothing to return to: this run renders nothing for a row it just put back.
             yield evt(
               `${agent.name}:skipped`,
               progress,

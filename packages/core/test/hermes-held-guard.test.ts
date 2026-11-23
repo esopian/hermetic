@@ -1,9 +1,9 @@
 /**
- * §6.5: an operation that would render a new config for a row held on another
- * Hermes than this build's pin is refused before it writes anything. Every
- * render pins this build's `hermes_ref`, so the result would name the held
- * version with another version's ref, and the box refuses it — after a
- * recreate had already replaced the instance.
+ * §6.5: an operation that would render a new config for a row pinned to a
+ * Hermes with no known upstream ref (`hermesRefFor`) is refused before it
+ * writes anything. The render would name that version with this build's ref,
+ * and the box refuses it — after a recreate had already replaced the instance.
+ * A row on a version with a known ref renders its own (`hermes-old-pin.test.ts`).
  *
  * "Nothing written" is the MemoryBackend's own mutation log: every row, event,
  * bucket, parameter, EC2 and tailnet write records itself there.
@@ -20,7 +20,14 @@ const HELD = "granite";
 
 function seeded() {
   const backend = seedFixtureFleet(new MemoryBackend());
-  return { backend, hermetic: testHermetic({ backend, config: FIXTURE_CONFIG }) };
+  return {
+    backend,
+    hermetic: testHermetic({
+      backend,
+      config: FIXTURE_CONFIG,
+      rollout: { convergeTimeoutMs: 2_000, convergePollMs: 1 },
+    }),
+  };
 }
 
 async function refusal(run: () => Promise<unknown>): Promise<{ code: string; message: string }> {
@@ -108,8 +115,8 @@ describe("a row held on another Hermes than this build's", () => {
     ).rejects.toThrow();
     const partial = backend.agents.get("newt")!;
     expect(partial.status).toBe("creating");
-    // What a build pinned to another Hermes claimed the name with.
-    backend.agents.set("newt", { ...partial, hermes_version: "0.21.5" });
+    // What a build pinned to a Hermes with no known ref claimed the name with.
+    backend.agents.set("newt", { ...partial, hermes_version: "0.21.0" });
 
     backend.resetMutations();
     expectUpgradeRequired(await refusal(() => drain(hermetic.agents.create({ name: "newt" }))), "newt");
@@ -122,10 +129,13 @@ describe("a row held on another Hermes than this build's", () => {
     expect(plan.steps[0]!.description).toContain("held on Hermes");
   });
 
-  test("upgrade to this build's pin moves it, and set works after", async () => {
-    const { hermetic } = seeded();
-    await drain(hermetic.upgrade({ name: HELD, hermes: PIN }));
+  test("upgrade to this build's pin with --now moves it, and set works after", async () => {
+    const { backend, hermetic } = seeded();
+    backend.simulateConverge = true;
+    backend.rerunDelayMs = 1;
+    await drain(hermetic.upgrade({ name: HELD, hermes: PIN, now: true, force: true }));
     expect((await hermetic.agents.get(HELD)).hermes_version).toBe(PIN);
+    expect(backend.agents.get(HELD)!.running_hermes_version).toBe(PIN);
     const next = await hermetic.agents.set({ name: HELD, hermes: { max_turns: 42 } });
     expect(next.hermes?.max_turns).toBe(42);
   });
@@ -139,15 +149,14 @@ describe("a row on this build's pin", () => {
     expect(next.hermes?.max_turns).toBe(42);
   });
 
-  test("set cannot move it off the pin, since the render would carry this build's ref", async () => {
+  test("set cannot move it off the pin: moving Hermes is upgrade's job", async () => {
     const { backend, hermetic } = seeded();
     backend.resetMutations();
     const got = await refusal(() => hermetic.agents.set({ name: "ibis", hermes_version: "0.21.5" }));
     expect(got.code).toBe("HERMES_UPGRADE_REQUIRED");
-    expect(got.message).toContain(`this build renders only Hermes ${PIN}`);
-    expect(got.message).toContain("ibis cannot be pinned to 0.21.5 from this build");
+    expect(got.message).toContain("`agent set` does not move Hermes");
     expect(got.message).toContain("nothing was changed");
-    expect(got.message).not.toContain("hermetic upgrade");
+    expect(got.message).toContain("`hermetic upgrade --hermes 0.21.5 ibis --now`");
     expect(backend.mutations).toEqual([]);
   });
 });

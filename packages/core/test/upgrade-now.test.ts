@@ -75,9 +75,14 @@ const pin = (row: Agent) => ({
 function boxesAnswer(backend: MemoryBackend): void {
   const original = backend.agents.set.bind(backend.agents);
   backend.agents.set = ((name: string, row: Agent) => {
+    // …and, like a real box, then reports running the Hermes its row pins.
     const applied =
       row.apply_request && row.applied_config_hash !== row.apply_request.config_hash
-        ? ({ ...row, applied_config_hash: row.apply_request.config_hash } as Agent)
+        ? ({
+            ...row,
+            applied_config_hash: row.apply_request.config_hash,
+            running_hermes_version: row.hermes_version,
+          } as Agent)
         : row;
     return original(name, applied);
   }) as typeof backend.agents.set;
@@ -159,19 +164,24 @@ describe("upgrade --hermes V --now", () => {
     expect(backend.agents.get("atlas")?.hermes_version).toBe(NEXT);
   });
 
-  test("--all skips a box that is not up, and its pin still lands", async () => {
+  test("--all records only the pin of a stopped box never asked to converge, and goes on", async () => {
     const { backend, hermetic } = fleet();
     boxesAnswer(backend);
-    expect(backend.agents.get("juniper")?.status).toBe("stopped");
+    const stopped = backend.agents.get("juniper")!;
+    expect(stopped.status).toBe("stopped");
+    expect(stopped.applied_config_hash ?? null).toBeNull();
+    expect(stopped.apply_request ?? null).toBeNull();
 
     const events = await drain(hermetic.upgrade({ all: true, hermes: NEXT, now: true }));
 
+    // With no request ever asked of it, its box holds its own config's Hermes or nothing.
     const juniper = backend.agents.get("juniper")!;
-    expect(juniper.hermes_version).toBe(NEXT);
+    expect(pin(juniper)).toEqual({ ...pin(stopped), hermes_version: NEXT });
     expect(juniper.apply_request ?? null).toBeNull();
     const skipped = events.find((e) => e.phase === "juniper:skipped");
     expect(skipped?.level).toBe("warn");
-    expect(skipped?.message).toContain("juniper not converged — stopped");
+    expect(skipped?.message).toContain("juniper is not up (stopped), so nothing was applied");
+    expect(skipped?.message).toContain("`hermetic plan recreate juniper`");
     // …and the agents after it were still asked.
     expect(backend.agents.get("lumen")?.apply_request).toBeTruthy();
 
@@ -179,16 +189,82 @@ describe("upgrade --hermes V --now", () => {
     // as it was rather than stopped blind (D4).
     expect(backend.agents.get("heron")?.hermes_version).not.toBe(NEXT);
     expect(events.find((e) => e.phase === "heron:refused")?.level).toBe("warn");
+    // kestrel's box reports another Hermes than its applied config pins, so
+    // there is no honest pin to put back: refused before the wait (C4).
+    expect(events.find((e) => e.phase === "kestrel:refused")?.message).toContain(
+      "its box runs Hermes 0.20.0, but the config it last applied pins 0.21.0",
+    );
 
     const live = [...backend.agents.values()].filter((a) => a.name !== "_fleet");
     const down = live.filter((a) => !["ready", "degraded", "error"].includes(a.status));
     expect(down.length).toBeGreaterThan(0);
+    // Every fixture row that is not up was stopped or paused and never asked to converge: pin only.
+    const converged = live.length - down.length - 2;
     expect(events.at(-1)?.message).toBe(
-      `pinned ${String(live.length - 1)} agent(s) to hermes ${NEXT}: ` +
-        `${String(live.length - down.length - 1)} converged, ${String(down.length)} skipped, 0 unconverged; ` +
-        "1 refused and left as they were",
+      `pinned ${String(converged + down.length)} agent(s) to hermes ${NEXT}: ` +
+        `${String(converged)} converged, ${String(down.length)} skipped, 0 unconverged; ` +
+        "2 refused and left as they were",
     );
     expect(events.at(-1)?.level).toBe("warn");
+  });
+
+  test("--all waits for idle on a box that came up after the run started", async () => {
+    const probed: string[] = [];
+    const { backend, hermetic } = fleet({
+      boxBusy: async (agent) => {
+        probed.push(agent.name);
+        // While atlas is waited on, juniper comes back up and reports its box.
+        const juniper = backend.agents.get("juniper")!;
+        if (agent.name === "atlas" && juniper.status === "stopped") {
+          backend.agents.set("juniper", {
+            ...juniper,
+            status: "ready",
+            applied_config_hash: juniper.config_hash ?? null,
+            running_hermes_version: juniper.hermes_version,
+          } as Agent);
+        }
+        return false;
+      },
+    });
+    boxesAnswer(backend);
+
+    const events = await drain(hermetic.upgrade({ all: true, hermes: NEXT, now: true }));
+
+    expect(probed).toContain("juniper");
+    expect(events.find((e) => e.phase === "juniper:done")?.message).toContain(
+      `juniper is running hermes ${NEXT}`,
+    );
+  });
+
+  test("--all refuses an armed row on its own and pins the rest; one agent alone still fails", async () => {
+    const { backend, hermetic } = fleet();
+    // atlas armed: an `--now` its box never answered.
+    await drain(hermetic.upgrade({ name: "atlas", hermes: NEXT, now: true, force: true }));
+    const armed = backend.agents.get("atlas")!;
+    expect(armed.config_hash).not.toBe(armed.applied_config_hash ?? null);
+    const THIRD = "0.98.0";
+
+    const events = await drain(hermetic.upgrade({ all: true, hermes: THIRD }));
+
+    expect(pin(backend.agents.get("atlas")!)).toEqual(pin(armed));
+    const atlas = events.find((e) => e.phase === "atlas:refused");
+    expect(atlas?.level).toBe("warn");
+    expect(atlas?.message).toContain(
+      `finish it with \`hermetic upgrade --hermes ${NEXT} atlas --now\``,
+    );
+    // An agent after it was still pinned.
+    expect(backend.agents.get("lumen")!.hermes_version).toBe(THIRD);
+    expect(events.at(-1)?.message).toContain("refused and left as they were");
+    expect(events.at(-1)?.level).toBe("warn");
+
+    let code: string | null = null;
+    try {
+      await drain(hermetic.upgrade({ name: "atlas", hermes: THIRD }));
+    } catch (e) {
+      code = (e as { code?: string }).code ?? null;
+    }
+    expect(code).toBe("HERMES_UPGRADE_REQUIRED");
+    expect(pin(backend.agents.get("atlas")!)).toEqual(pin(armed));
   });
 
   test("beside --hermeticd it also asks every running box to take the release", async () => {
@@ -453,27 +529,66 @@ describe("upgrade --hermes V --now: the idle wait and the box's failure report",
     expect(secondRow.hermes_version).toBe(NEXT);
   });
 
-  test("a pin the box has not applied yet is refused, so a rollback cannot restore it", async () => {
+  test("--now after a pin-only upgrade names the Hermes the box runs, and a rollback restores it", async () => {
     const { backend, hermetic } = fleet({ convergeTimeoutMs: 2_000 });
+    const atlas = backend.agents.get("atlas")!;
     await drain(hermetic.upgrade({ name: "atlas", hermes: NEXT }));
     const pinned = backend.agents.get("atlas")!;
-    expect(pinned.applied_config_hash).not.toBe(pinned.config_hash);
+    expect(pinned.hermes_version).toBe(NEXT);
+    expect(pin(pinned).config_hash).toBe(pin(atlas).config_hash);
     boxesFail(backend, "HERMES_UPGRADE_ROLLED_BACK");
+    const asked: Agent["apply_request"][] = [];
+    const set = backend.agents.set.bind(backend.agents);
+    backend.agents.set = ((name: string, row: Agent) => {
+      if (row.apply_request?.upgrade_from) asked.push(row.apply_request);
+      return set(name, row);
+    }) as typeof backend.agents.set;
 
-    const events = await drain(hermetic.upgrade({ name: "atlas", hermes: "0.99.1", now: true }));
+    let thrown: unknown = null;
+    await drain(hermetic.upgrade({ name: "atlas", hermes: "0.99.1", now: true })).catch(
+      (e: unknown) => {
+        thrown = e;
+      },
+    );
+    expect((thrown as { code?: string } | null)?.code).toBe("HERMES_UPGRADE_ROLLED_BACK");
 
     const row = backend.agents.get("atlas")!;
-    expect(pin(row)).toEqual(pin(pinned));
-    expect(row.apply_request ?? null).toBeNull();
+    // `upgrade_from` is what the box runs, not the pin it never installed…
+    expect(asked[0]?.upgrade_from).toEqual({
+      hermes_version: atlas.running_hermes_version!,
+      config_hash: atlas.applied_config_hash!,
+      config_key: atlas.resources.config_key!,
+    });
+    // …so the row goes back to naming it.
+    expect(pin(row)).toEqual(pin(atlas));
     expect(row.lock ?? null).toBeNull();
+  });
+
+  test("a box reporting another Hermes than its applied config pins is refused before anything", async () => {
+    let probed = false;
+    const { backend, hermetic } = fleet({
+      boxBusy: async () => {
+        probed = true;
+        return false;
+      },
+    });
+    const atlas = backend.agents.get("atlas")!;
+    // A swap that passed its gate and failed a later step: the new Hermes runs,
+    // and the applied config still names the old one.
+    backend.agents.set("atlas", { ...atlas, running_hermes_version: "0.99.2" } as Agent);
+    const before = backend.agents.get("atlas")!;
+    backend.resetMutations();
+
+    const events = await drain(hermetic.upgrade({ name: "atlas", hermes: NEXT, now: true }));
+
     const refused = events.find((e) => e.phase === "atlas:refused");
-    expect(refused?.level).toBe("warn");
-    expect(refused?.message).toContain("has not applied its current config");
-    // Held on another Hermes now, so `plan rollout` would defer it: the path that works is pin, rollout, apply.
-    expect(refused?.message).toContain("pin without --now (`hermetic upgrade --hermes 0.99.1 atlas`)");
-    expect(refused?.message).toContain("`hermetic plan rollout --agent atlas` and `hermetic apply`");
-    expect(refused?.message).not.toContain("converge it first");
-    expect(events.at(-1)?.message).toContain("1 refused");
+    expect(refused?.message).toContain(
+      `its box runs Hermes 0.99.2, but the config it last applied pins ${atlas.hermes_version}`,
+    );
+    expect(refused?.message).toContain("`hermetic plan rollout --agent atlas`");
+    expect(probed).toBe(false);
+    expect(backend.agents.get("atlas")).toEqual(before);
+    expect(backend.mutations).toEqual([]);
   });
 
   test("a row on this build's pin with an unapplied config is told to converge it first", async () => {
@@ -700,7 +815,8 @@ describe("upgrade --hermes V without --now", () => {
     const render = events.find((e) => e.phase === "atlas:render")!;
     expect(render.message).toContain("takes effect on the next recreate");
     expect(render.message).toContain(`\`hermetic upgrade atlas --hermes ${NEXT} --now\``);
-    expect(render.message).toContain("`hermetic plan rollout --agent atlas`");
+    // A rollout defers a pin its box does not run, so it is not offered as a way to land one.
+    expect(render.message).not.toContain("plan rollout");
     expect(events.at(-1)?.message).toBe(
       `pinned 1 agent(s) to hermes ${NEXT}; each takes it on its next recreate, ` +
         `or now with \`hermetic upgrade atlas --hermes ${NEXT} --now\``,

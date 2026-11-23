@@ -22,7 +22,13 @@ import { AgentdError } from "../errors.ts";
 import type { Emit } from "../events.ts";
 import { opEvent } from "../events.ts";
 import { readApplyPending, writeApplyPending } from "../apply-pending.ts";
-import { fetchHermesBundle, formatRefMarker, parseRefMarker } from "../hermes-source.ts";
+import {
+  HERMES_REF_MARKER,
+  fetchHermesBundle,
+  formatRefMarker,
+  parseRefMarker,
+} from "../hermes-source.ts";
+import { guardFirstStart, recordHomeRef } from "./hermes-home-record.ts";
 import { HERMETIC_RENDERED_MARKER } from "./accounts.ts";
 import { unfinishedRestores } from "./hermes-backup.ts";
 import {
@@ -95,14 +101,6 @@ export const HERMES_INSTALL_STAMP = `${HERMES_INSTALL_DIR}/install-stamp.json`;
 const HERMES_STAMP_READER = `${HERMES_INSTALL_DIR}/hermes_cli/version_info.py`;
 /** The venv the editable install goes into, and the `hermes` it produces. */
 export const HERMES_VENV_DIR = `${HERMES_INSTALL_DIR}/venv`;
-/**
- * The ref this box last installed, recorded by hermeticd rather than read back
- * out of git. A marker beats `git rev-parse HEAD` against `<ref>^{commit}`
- * because the checkout is shallow and detached: the tag object is usually not
- * even in the clone, so the comparison that would prove the box is on the right
- * ref is the one git cannot answer offline. One file read settles it instead.
- */
-const HERMES_REF_MARKER = `${HERMES_INSTALL_DIR}/.hermetic-ref`;
 /**
  * The editable-install spec — extras included — that the venv was last built
  * with. The ref marker alone cannot answer "is the dependency set right": a
@@ -526,6 +524,10 @@ export async function ensureHermes(
   }
 
   if (!dry) {
+    // No installed checkout: the data volume may still hold a home another
+    // Hermes wrote (a recreate). Backed up, or restored, before anything here
+    // runs a `hermes` against it.
+    if (marker === null) await guardFirstStart(host, ref, unfinished, emit);
     // 0. Every Hermes unit runs out of the venv and the checkout this is about
     //    to rewrite. `uv pip install -e` replaces the dependency set under a
     //    live process and `git checkout` moves the source files it imports
@@ -1015,6 +1017,8 @@ async function recordInstall(
 ): Promise<void> {
   await host.writeFile(HERMES_EXTRAS_MARKER, `${installed}\n`, "0644");
   await host.writeFile(HERMES_REF_MARKER, formatRefMarker(ref, upstreamSha), "0644");
+  // On the data volume: which Hermes the home is now `ref`'s to open (`hermes-home-record.ts`).
+  await recordHomeRef(host, ref);
 }
 
 /**

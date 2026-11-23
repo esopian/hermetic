@@ -53,7 +53,7 @@ export interface PlanDeps {
 export function createPlans(deps: PlanDeps) {
   const {
     agentPrefix,
-    assertOnBuildHermes,
+    assertRenderableHermes,
     backend,
     configPrefix,
     getAgent,
@@ -205,7 +205,7 @@ export function createPlans(deps: PlanDeps) {
     await guardAccount();
     const agent = await getAgent(input.name);
     // Refused at the plan, not halfway through the apply (`recreate` asks again).
-    assertOnBuildHermes(agent);
+    assertRenderableHermes(agent);
     const volumeId = agent.resources.volume_id ?? agent.volume_id;
     return {
       kind: "recreate",

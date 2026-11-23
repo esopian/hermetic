@@ -98,6 +98,9 @@ test("saveErrorMessage keeps core's code in front of a memory refusal", () => {
   );
   expect(saveErrorMessage(new ApiError("CONFLICT", "v7"))).toContain("reload before saving again");
   expect(saveErrorMessage(new ApiError("INTERNAL", "boom"))).toBe("boom");
+  expect(saveErrorMessage(new ApiError("HERMES_UPGRADE_REQUIRED", "pin first"))).toBe(
+    "HERMES_UPGRADE_REQUIRED · pin first",
+  );
 });
 
 test("a switch applies live only where core's rollout converges: ready, degraded, error", () => {

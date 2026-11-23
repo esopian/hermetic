@@ -45,12 +45,14 @@ export const HERMES_UPGRADE_PHASE = "hermes-upgrade";
 export function withUpgradeHistory(
   emit: Emit,
   record: (action: string, detail: string) => Promise<void>,
-): Emit {
+): Emit & { readonly flush: () => Promise<void> } {
   let queue = Promise.resolve();
-  return (event) => {
+  const wrapped = (event: OpEvent): void => {
     emit(event);
     if (event.phase !== HERMES_UPGRADE_PHASE) return;
     const detail = redactValue(event.message);
     queue = queue.then(() => record("upgrade", detail)).catch(() => undefined);
   };
+  // A process about to exit (a stage's `hermeticd apply`) waits for what it queued.
+  return Object.assign(wrapped, { flush: () => queue });
 }

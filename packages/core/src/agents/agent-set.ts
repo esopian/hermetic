@@ -8,6 +8,9 @@
 import type { Agent, AgentView, HermesSettings, Provider, SetAgentInput } from "../schema/index.ts";
 import { SIZES, SetAgentInput as SetAgentInputSchema } from "../schema/index.ts";
 import { HermeticError } from "../errors.ts";
+import { randomUUID } from "node:crypto";
+import { requireConfigHermesVersion } from "./config-diff.ts";
+import { CONVERGE_POLL_MS, CONVERGE_TIMEOUT_MS, createConverge, rolledBackFrom } from "./converge.ts";
 import { validateName } from "../shared/naming.ts";
 import { settingsOf } from "../profiles/settings.ts";
 import {
@@ -104,14 +107,55 @@ export function createAgentSet(deps: SetDeps) {
     getAgent,
     nowIso,
     actor,
+    acquireLock,
+    releaseLock,
     assertCanApply,
-    assertOnBuildHermes,
+    assertRenderableHermes,
     ensureConfig,
     appendEvent,
     view,
   } = deps.ctx;
   const agents = deps.ctx.backend.store.agents;
   const { bindingPorts } = deps;
+
+  /**
+   * §6.5: a pin `upgrade` moved without `--now` names a Hermes the box has not
+   * installed, and only the row's pin says so — its config still pins what the
+   * box runs. The re-render below would upload a config naming the new pin,
+   * which the box's next boot or rerun would install with no idle wait and no
+   * pin to put back, so `set` refuses until the pin and the box agree.
+   *
+   * The box's own report decides; a box that has not reported (stopped, never
+   * up) is judged by the version its current config pins. A config that cannot
+   * be read refuses (`requireConfigHermesVersion`): one bucket hiccup must not
+   * let a config at a new pin through. A row with no config is not pending.
+   */
+  async function assertNoPendingPin(agent: Agent): Promise<void> {
+    const pin = agent.hermes_version;
+    const running = agent.running_hermes_version ?? null;
+    if (running === pin) return;
+    const named = agent.config_hash
+      ? await requireConfigHermesVersion(deps.ctx.backend.artifacts, agent.name, agent.config_hash)
+      : null;
+    const runs = running ?? named;
+    if (runs === null || runs === pin) return;
+    // The config already names the pin: an `upgrade --now` the box has not
+    // finished, which only another `--now` may finish or cancel.
+    const exits =
+      named === pin
+        ? `its config already names ${pin}, an upgrade its box has not finished: finish it with ` +
+          `\`hermetic upgrade --hermes ${pin} ${agent.name} --now\`, or cancel it with ` +
+          `\`hermetic upgrade --hermes ${runs} ${agent.name} --now\``
+        : `land the pin with \`hermetic upgrade --hermes ${pin} ${agent.name} --now\`, rebuild with ` +
+          `\`hermetic plan recreate ${agent.name}\`, or pin it back with ` +
+          `\`hermetic upgrade --hermes ${runs} ${agent.name}\``;
+    throw new HermeticError(
+      "HERMES_UPGRADE_REQUIRED",
+      `${agent.name} is pinned to Hermes ${pin} but its box runs ${runs}, and a new config ` +
+        `would install the pin without an upgrade. Nothing was changed; ${exits}`,
+      { name: agent.name, hermes_version: pin, running_hermes_version: runs },
+    );
+  }
 
   async function set(input: SetAgentInput): Promise<AgentView> {
     const parsed = SetAgentInputSchema.parse(input);
@@ -122,7 +166,7 @@ export function createAgentSet(deps: SetDeps) {
     // that a foundation update is rewriting. Before the read, so an operator is
     // told what is happening rather than which version their row is at.
     await assertFleetUnlocked(parsed.name);
-    const agent = await getAgent(parsed.name);
+    let agent = await getAgent(parsed.name);
     /**
      * §8.3's stale-form guard, the same one `settings.set` has — and asked
      * here, before any refusal that costs a read, because the answer is already
@@ -141,8 +185,32 @@ export function createAgentSet(deps: SetDeps) {
         { name: agent.name, expected: parsed.expected_version, actual: agent.version },
       );
     }
-    // Every `set` re-renders below; judged on the Hermes the row will name.
-    assertOnBuildHermes(agent, parsed.hermes_version);
+    /**
+     * An upgrade its box rolled back after the laptop stopped waiting is
+     * settled first, as rollout, upgrade and recreate do: the re-render below
+     * would otherwise give the refused pin a fresh hash, which no later
+     * reconcile recognises and the box (refusing only the rolled-back hash)
+     * would install on its next start.
+     */
+    if (rolledBackFrom(agent) !== null) {
+      const owner = `${await actor()}#${randomUUID()}`;
+      agent = await acquireLock(agent, owner);
+      try {
+        agent = (
+          await createConverge({
+            ctx: deps.ctx,
+            timeoutMs: CONVERGE_TIMEOUT_MS,
+            pollMs: CONVERGE_POLL_MS,
+          }).reconcileRolledBack(agent, await actor())
+        ).agent;
+      } finally {
+        const latest = await agents.get(agent.name);
+        if (latest?.lock?.owner === owner) agent = await releaseLock(latest);
+      }
+    }
+    // Every `set` re-renders below, on the row's own Hermes; it never moves it.
+    assertRenderableHermes(agent, parsed.hermes_version);
+    await assertNoPendingPin(agent);
 
     /**
      * §6.2: the memory provider the agent has after this call. A stated choice

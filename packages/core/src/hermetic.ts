@@ -326,7 +326,6 @@ export function createHermetic(deps: HermeticDeps) {
    */
   const { rerun, reboot, upgrade } = createUpdate({
     ctx,
-    hermesRef: BUILD_VERSIONS.hermes_ref,
     hermesMirror,
     ...(deps.rollout?.convergeTimeoutMs === undefined
       ? {}

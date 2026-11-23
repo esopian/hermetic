@@ -1958,9 +1958,9 @@ describe("agents.rerun", () => {
 describe("upgrade", () => {
   test("--hermes pins the version and re-renders, and says when it takes effect", async () => {
     const { backend, hermetic } = seeded();
-    const events = await drain(hermetic.upgrade({ name: "juniper", hermes: "0.16.0" }));
-    expect((await backend.store.agents.get("juniper"))!.hermes_version).toBe("0.16.0");
-    const actions = (await backend.store.events.query("juniper")).map((e) => e.action);
+    const events = await drain(hermetic.upgrade({ name: "fathom", hermes: "0.99.0" }));
+    expect((await backend.store.agents.get("fathom"))!.hermes_version).toBe("0.99.0");
+    const actions = (await backend.store.events.query("fathom")).map((e) => e.action);
     expect(actions).toContain("upgrade");
     expect(events.some((e) => e.message.includes("next recreate"))).toBe(true);
   });
@@ -2035,22 +2035,32 @@ describe("upgrade", () => {
       status: "destroyed",
       instance_id: null,
     });
-    const events = await drain(hermetic.upgrade({ all: true, hermes: "0.16.0" }));
+    const seededRows = structuredClone(backend.agents);
+    const events = await drain(hermetic.upgrade({ all: true, hermes: "0.99.0" }));
     const rows = (await hermetic.agents.list()).filter((r) => r.status !== "destroyed");
-    expect(rows.every((r) => r.hermes_version === "0.16.0")).toBe(true);
+    // A stopped or paused box reported nothing, but no converge was ever asked of it,
+    // so it takes the pin alone: nothing rendered, nothing asked.
+    const down = (r: { status: string }) => r.status === "stopped" || r.status === "paused";
+    expect(rows.filter(down).length).toBeGreaterThan(0);
     for (const row of rows) {
+      expect(row.hermes_version).toBe("0.99.0");
       expect(events.some((e) => e.phase === `${row.name}:done`)).toBe(true);
+      if (!down(row)) continue;
+      const was = seededRows.get(row.name)!;
+      expect(row.config_hash).toBe(was.config_hash);
+      expect(row.resources.config_key).toBe(was.resources.config_key);
+      expect(row.apply_request ?? null).toBeNull();
     }
     // The destroyed row is left exactly as it was — nothing to upgrade.
     const gone = (await backend.store.agents.get("cinder"))!;
-    expect(gone.hermes_version).not.toBe("0.16.0");
+    expect(gone.hermes_version).not.toBe("0.99.0");
     expect(events.some((e) => e.phase === `${gone.name}:done`)).toBe(false);
   });
 
   test("requires a version and a target", async () => {
     const { hermetic } = seeded();
     await expect(drain(hermetic.upgrade({ name: "atlas" }))).rejects.toThrow();
-    await expect(drain(hermetic.upgrade({ hermes: "0.16.0" }))).rejects.toThrow();
+    await expect(drain(hermetic.upgrade({ hermes: "0.99.0" }))).rejects.toThrow();
   });
 
   /**
@@ -2966,19 +2976,20 @@ describe("apply", () => {
  */
 describe("upgrade is serial", () => {
   /**
-   * The per-agent work is the render and the upload, so that is where overlap
-   * would show: `putObject` counts how many upgrades are inside it at once.
+   * Without `--now` the per-agent work is the pin write, so that is where
+   * overlap would show: the row write counts how many upgrades are inside it at once.
    */
   function watchUploads(backend: MemoryBackend): () => number {
     let inFlight = 0;
     let peak = 0;
-    const real = backend.artifacts.putObject;
-    backend.artifacts.putObject = async (key: string, body: Uint8Array) => {
+    const update = backend.store.agents.update.bind(backend.store.agents);
+    backend.store.agents.update = async (name, version, patch, ...rest) => {
+      if (patch.hermes_version === undefined) return update(name, version, patch, ...rest);
       inFlight += 1;
       peak = Math.max(peak, inFlight);
       try {
         await new Promise((r) => setTimeout(r, 1));
-        await real.call(backend.artifacts, key, body);
+        return await update(name, version, patch, ...rest);
       } finally {
         inFlight -= 1;
       }
@@ -2991,18 +3002,25 @@ describe("upgrade is serial", () => {
     const peak = watchUploads(backend);
 
     const rows = (await hermetic.agents.list()).filter((r) => r.status !== "destroyed");
-    const events = await drain(hermetic.upgrade({ all: true, hermes: "0.16.0" }));
+    const events = await drain(hermetic.upgrade({ all: true, hermes: "0.99.0" }));
 
     expect(peak()).toBe(1);
+    // Stopped and paused rows never asked to converge take the pin alone, like every other row.
+    const down = rows.filter((r) => r.status === "stopped" || r.status === "paused");
+    expect(down.length).toBeGreaterThan(0);
     for (const row of rows) {
       expect(events.some((e) => e.phase === `${row.name}:done`)).toBe(true);
     }
+    expect(events.some((e) => e.phase.endsWith(":refused"))).toBe(false);
     expect(events.at(-1)).toMatchObject({ phase: "done", progress: 1 });
-    expect(
-      (await hermetic.agents.list())
-        .filter((r) => r.status !== "destroyed")
-        .every((r) => r.hermes_version === "0.16.0"),
-    ).toBe(true);
+    const after = await hermetic.agents.list();
+    const pinned = after.filter((r) => r.hermes_version === "0.99.0");
+    expect(pinned.map((r) => r.name).sort()).toEqual(rows.map((r) => r.name).sort());
+    for (const row of down) {
+      const now = after.find((r) => r.name === row.name)!;
+      expect(now.config_hash).toBe(row.config_hash);
+      expect(now.apply_request ?? null).toBeNull();
+    }
   });
 
   test("events arrive grouped by agent, never interleaved", async () => {
@@ -3010,7 +3028,7 @@ describe("upgrade is serial", () => {
     // Under the old pool an agent's `:render` could land between another's
     // `:render` and `:done`.
     const { hermetic } = seeded();
-    const events = await drain(hermetic.upgrade({ all: true, hermes: "0.16.0" }));
+    const events = await drain(hermetic.upgrade({ all: true, hermes: "0.99.0" }));
 
     const seen = new Set<string>();
     let current: string | null = null;
@@ -3025,11 +3043,13 @@ describe("upgrade is serial", () => {
 
   test("a failure stops the run and surfaces rather than being swallowed", async () => {
     const { backend, hermetic } = seeded();
-    backend.artifacts.putObject = async () => {
-      throw new HermeticError("CONFLICT", "the bucket refused");
+    const update = backend.store.agents.update.bind(backend.store.agents);
+    backend.store.agents.update = (name, version, patch, ...rest) => {
+      if (patch.hermes_version !== undefined) throw new HermeticError("CONFLICT", "the row moved");
+      return update(name, version, patch, ...rest);
     };
 
-    await expect(drain(hermetic.upgrade({ all: true, hermes: "0.16.0" }))).rejects.toThrow(
+    await expect(drain(hermetic.upgrade({ all: true, hermes: "0.99.0" }))).rejects.toThrow(
       HermeticError,
     );
   });
@@ -3039,31 +3059,28 @@ describe("upgrade is serial", () => {
     const rows = await hermetic.agents.list();
     expect(rows.length).toBeGreaterThan(2);
 
-    // Fail on the third agent's upload, whichever that turns out to be.
-    let uploads = 0;
-    const real = backend.artifacts.putObject;
-    backend.artifacts.putObject = async (key: string, body: Uint8Array) => {
-      uploads += 1;
-      if (uploads === 3) throw new HermeticError("CONFLICT", "the bucket refused");
-      await real.call(backend.artifacts, key, body);
+    // Fail on the third agent's pin event, after its pin write, whichever agent that is.
+    let pins = 0;
+    const append = backend.store.events.append.bind(backend.store.events);
+    backend.store.events.append = (event, ...rest) => {
+      if (event.action === "upgrade" && ++pins === 3)
+        throw new HermeticError("CONFLICT", "the log refused");
+      return append(event, ...rest);
     };
 
-    await expect(drain(hermetic.upgrade({ all: true, hermes: "0.16.0" }))).rejects.toThrow(
+    await expect(drain(hermetic.upgrade({ all: true, hermes: "0.99.0" }))).rejects.toThrow(
       HermeticError,
     );
 
     /**
      * Serial means the damage is a *prefix*: the agents before the failure took
      * the new pin, every agent after it is untouched, and nothing is left
-     * locked. Three rows carry the pin rather than two because `upgradeOne`
-     * writes it before it uploads — so the agent the upload failed on is pinned
-     * to a version whose config never reached the bucket. Re-running the same
-     * upgrade re-renders and re-uploads it, which is the point of leaving the
-     * row honest about what it is pinned to.
+     * locked. The agent the run failed on had its pin written first, and gets
+     * it back: a failure before the box is asked undoes what the run wrote (I5).
      */
     const after = await hermetic.agents.list();
-    const pinned = after.filter((r) => r.hermes_version === "0.16.0");
-    expect(pinned.length).toBe(3);
+    const pinned = after.filter((r) => r.hermes_version === "0.99.0");
+    expect(pinned.length).toBe(2);
     expect(after.length).toBeGreaterThan(pinned.length);
     for (const row of after) {
       expect((await backend.store.agents.get(row.name))!.lock).toBeNull();

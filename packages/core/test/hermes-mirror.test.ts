@@ -33,7 +33,7 @@ import {
   MemoryBackend,
   seedFixtureFleet,
 } from "../src/backend/memory.ts";
-import { testHermetic, settle } from "./helpers.ts";
+import { drain, testHermetic, settle } from "./helpers.ts";
 
 const REF = "v2026.8.31";
 /** A second tag, on the commit after `REF`, so "another ref" is another tag. */
@@ -615,7 +615,7 @@ describe("the mirror block in the fleet manifest", () => {
     );
 
     const events: string[] = [];
-    for await (const e of hermetic.upgrade({ name: "atlas", hermes: "0.16.0" })) {
+    for await (const e of hermetic.upgrade({ name: "fathom", hermes: BUILD_VERSIONS.hermes })) {
       events.push(e.message);
     }
     expect(mirror.refs).toContain(BUILD_VERSIONS.hermes_ref);
@@ -637,10 +637,29 @@ describe("the mirror block in the fleet manifest", () => {
     expect((await readFleetManifest(backend.artifacts))!.hermes).toBeUndefined();
 
     const events: OpEvent[] = [];
-    for await (const e of hermetic.upgrade({ name: "atlas", hermes: "0.16.0" })) events.push(e);
+    for await (const e of hermetic.upgrade({ name: "fathom", hermes: BUILD_VERSIONS.hermes })) {
+      events.push(e);
+    }
     expect(events.some((e) => e.level === "warn" && e.message.includes("hung up"))).toBe(true);
-    // And the upgrade itself still happened: the mirror is not a gate.
-    expect((await backend.store.agents.get("atlas"))!.hermes_version).toBe("0.16.0");
+    // And the upgrade itself still happened: for this build's own ref the mirror is not a gate.
+    expect((await backend.store.agents.get("fathom"))!.hermes_version).toBe(BUILD_VERSIONS.hermes);
+  });
+
+  test("a ref other than this build's that cannot be mirrored is refused, and nothing is written", async () => {
+    const failing: HermesMirrorFn = async ({ existing }) => ({
+      block: existing,
+      status: "skipped",
+      warning: "could not mirror Hermes: the remote end hung up",
+    });
+    const { backend, hermetic } = seeded(failing);
+    const before = backend.agents.get("atlas")!;
+    backend.resetMutations();
+
+    await expect(drain(hermetic.upgrade({ name: "atlas", hermes: "0.99.0" }))).rejects.toThrow(
+      "not pinned on an unverified ref",
+    );
+    expect(backend.agents.get("atlas")).toEqual(before);
+    expect(backend.mutations).toEqual([]);
   });
 });
 

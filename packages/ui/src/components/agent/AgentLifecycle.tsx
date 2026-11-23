@@ -170,14 +170,16 @@ export function AgentLifecycle({
         {/*
           Two ways to take the new version, because they cost different things.
           "Upgrade now" pins it and then asks the running box to converge onto
-          it in place (`upgrade --hermes V --now`, §6.5): hermeticd reinstalls
-          Hermes and restarts its units, so the disks and tailnet address stay
-          but a turn in flight is cut off — said beside the button rather than
-          left for the operator to find out. "Pin for next recreate" is the old
-          pin-only `upgrade`: it records the version and changes nothing on the
-          box until a rebuild (or a later rollout) applies it. Its rail's last
-          line says exactly that, so a press that restarts nothing does not
-          read as one that failed.
+          it in place (`upgrade --hermes V --now`, §6.5): core first waits up
+          to ten minutes for the box to show no running turn, and changes
+          nothing if it stays busy; then hermeticd backs up, reinstalls Hermes
+          and restarts its units, so the disks and tailnet address stay — said
+          beside the button rather than left for the operator to find out.
+          "Pin for next recreate" is the pin-only `upgrade`: it records the
+          version on the row and nothing else, so the box keeps its Hermes
+          until a recreate or a later Upgrade now. Its rail's last line says
+          exactly that, so a press that restarts nothing does not read as one
+          that failed.
 
           Upgrade now needs a box that can answer the converge
           (`DrawerActions.upgradeNow`); on any other status it stays on the
@@ -193,7 +195,7 @@ export function AgentLifecycle({
               : `On ${agent.hermes_version}, the newest release this fleet knows.`
           }
           keeps="the instance, its disks, config and tailnet address"
-          loses="in-flight turns, when upgraded now"
+          loses="nothing — upgrading now waits for the box to go idle"
           down="Hermes only, while it reinstalls · none if pinned"
           unavailable={
             behind && latest
@@ -212,7 +214,7 @@ export function AgentLifecycle({
             >
               <span className="hint" style={{ margin: 0 }}>
                 {actions.upgradeNow
-                  ? "Upgrade now restarts Hermes on the box: a turn in flight is interrupted."
+                  ? "Upgrade now waits until no turn is running (up to 10 minutes), then restarts Hermes on the box; if it stays busy, nothing changes."
                   : `Upgrade now needs a running box; this one is ${status}. Pin it to install on the next rebuild.`}
               </span>
               <button
@@ -221,7 +223,7 @@ export function AgentLifecycle({
                 disabled={busy || !actions.upgradeNow}
                 title={
                   actions.upgradeNow
-                    ? `Pin ${latest} and reinstall Hermes on the running box now; Hermes restarts and a turn in flight is interrupted`
+                    ? `Pin ${latest} and reinstall Hermes on the running box once it is idle; Hermes restarts, and a box that stays busy is left as it was`
                     : `Upgrade now needs a running box; this one is ${status}`
                 }
                 onClick={() =>
@@ -234,7 +236,7 @@ export function AgentLifecycle({
                 type="button"
                 className="btn btn-sm btn-secondary"
                 disabled={busy}
-                title={`Record ${latest} on this agent without touching the box; it installs on the next recreate, or later with Upgrade now`}
+                title={`Record ${latest} on this agent and nothing else; the box keeps its Hermes until the next recreate, or later Upgrade now`}
                 onClick={() =>
                   void onRun(`upgrade → ${latest}`, () => upgradeAgent(name, latest, false))
                 }

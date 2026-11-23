@@ -40,6 +40,7 @@ import { renderAgentConfig } from "../render/render.ts";
 import type { Backend, StackInfo } from "../backend/types.ts";
 import { agentParamPrefix } from "../backend/constants.ts";
 import { BUILD_VERSIONS } from "../build-versions.ts";
+import { hermesRefFor } from "../shared/hermes.ts";
 
 /**
  * What a run *built* — the half of a transition's patch that is written even
@@ -91,16 +92,12 @@ export function renderAgentRow(agent: Agent, region: string, tailnet: string) {
     provider: agent.provider,
     secrets_mode: agent.secrets_mode,
     hermes_version: agent.hermes_version,
-    // The row pins a version, not a ref: there is no `hermes_ref` column, so
-    // this build's ref is the only one available. It is the right answer for
-    // an agent on the current pin and the wrong one for a row deliberately
-    // held back — the apply's version cross-check is what catches that rather
-    // than letting the box install a version nobody asked for.
-    //
-    // It is also why `upgrade --hermes` mirrors this ref and never has an
-    // unknown one to refuse (§3.6): there is one ref in the whole render.
-    // TODO(evan): give the agent row a `hermes_ref` so an older pin renders.
-    hermes_ref: BUILD_VERSIONS.hermes_ref,
+    // The row pins a version, and the ref is derived from it, so an agent on
+    // an older Hermes renders its own ref and stays on it (§6.5). A version
+    // with no known ref falls back to this build's; every writer refuses such
+    // a row (`assertRenderableHermes`) and every converge defers it
+    // (`hermesDeferral`), so that render only ever feeds a plan or a status.
+    hermes_ref: hermesRefFor(agent.hermes_version) ?? BUILD_VERSIONS.hermes_ref,
     // Same story for the browser build: one pin per checkout (§7.3).
     chrome_ref: BUILD_VERSIONS.chrome_ref,
     hermes: agent.hermes,
@@ -601,25 +598,26 @@ export function createAgentRuntime(deps: AgentRuntimeDeps) {
 
   /**
    * Refuse, before anything is written, an operation that would render a new
-   * config for a row naming another Hermes than this build's (§6.5). Every
-   * render pins this build's `hermes_ref` (`renderAgentRow`), so the result
-   * pairs the row's version with a ref that installs another one, and the box
-   * refuses it (`MANIFEST_REFUSED`) — after a recreate has already replaced the
-   * instance. `plan rollout` and a push's config phase defer such a row instead
-   * (`hermesHeldDeferral`, the same comparison); `upgrade` is what moves it.
+   * config this build cannot render honestly (§6.5). Every render pins the
+   * row's own `hermes_ref` (`renderAgentRow`), so a row on an older Hermes is
+   * managed on that Hermes. Two things are refused:
+   *
+   * - a row whose version has no known ref (`hermesRefFor`): its render would
+   *   name this build's ref beside the old version, which the box refuses
+   *   (`MANIFEST_REFUSED`), after a recreate had already replaced the instance;
+   * - a `set` that names another Hermes: moving the pin is `upgrade`'s job,
+   *   which checks the release, waits for an idle box and can roll back.
    */
-  function assertOnBuildHermes(
+  function assertRenderableHermes(
     agent: Pick<Agent, "name" | "hermes_version">,
     /** The version a `set` would pin; the row's is what it renders when absent. */
     requested?: string,
   ): void {
-    if ((requested ?? agent.hermes_version) === buildHermes) return;
-    if (agent.hermes_version === buildHermes) {
-      // The row is fine; the target is not, and `upgrade` would not help.
+    if (requested !== undefined && requested !== agent.hermes_version) {
       throw new HermeticError(
         "HERMES_UPGRADE_REQUIRED",
-        `this build renders only Hermes ${buildHermes}, so ${agent.name} cannot be pinned to ${requested} from this build; ` +
-          `nothing was changed`,
+        `${agent.name} is on Hermes ${agent.hermes_version}, and \`agent set\` does not move Hermes; ` +
+          `nothing was changed. Run \`hermetic upgrade --hermes ${requested} ${agent.name} --now\` instead`,
         {
           name: agent.name,
           hermes_version: agent.hermes_version,
@@ -628,9 +626,10 @@ export function createAgentRuntime(deps: AgentRuntimeDeps) {
         },
       );
     }
+    if (hermesRefFor(agent.hermes_version) !== null) return;
     throw new HermeticError(
       "HERMES_UPGRADE_REQUIRED",
-      `${agent.name} is on Hermes ${agent.hermes_version}, and this build renders only ${buildHermes}: ` +
+      `${agent.name} is on Hermes ${agent.hermes_version}, which has no upstream ref this build knows: ` +
         `a new config would name ${agent.hermes_version} with this build's Hermes ref, which the box refuses. ` +
         `Nothing was changed; run \`hermetic upgrade --hermes ${buildHermes} ${agent.name} --now\` first`,
       { name: agent.name, hermes_version: agent.hermes_version, build_hermes: buildHermes },
@@ -753,7 +752,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps) {
     configPrefix,
     isHandedOff,
     renderFor,
-    assertOnBuildHermes,
+    assertRenderableHermes,
     assertReleaseCanApply,
     assertCanApply,
     ensureConfig,

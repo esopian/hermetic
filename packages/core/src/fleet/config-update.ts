@@ -22,8 +22,8 @@ import { HermeticError } from "../errors.ts";
 import { evt } from "../events.ts";
 import { describePending, pendingApplied } from "../profiles/profile-binding.ts";
 import { readFleetManifest } from "../release/artifacts-manifest.ts";
-import { diffAppliedConfig } from "../agents/config-diff.ts";
-import { convergeDeferral, hermesHeldDeferral, rolledBackFrom } from "../agents/converge.ts";
+import { diffAppliedConfig, withAppliedHermes } from "../agents/config-diff.ts";
+import { convergeDeferral, hermesDeferral, rolledBackFrom } from "../agents/converge.ts";
 import { createRollout, type RolloutDeps } from "../agents/rollout.ts";
 import type {
   Agent,
@@ -56,7 +56,7 @@ export function updateDeferral(
   if (agent.lock && Date.parse(agent.lock.expires) > opts.nowMs) return "locked by another operator";
   if (!agent.applied_config_hash) return "no applied config reported";
   // A row awaiting a rollback's reconcile is not held: the rollout puts its pin back and renders nothing.
-  const held = rolledBackFrom(agent) === null ? hermesHeldDeferral(agent, opts.hermesVersion) : null;
+  const held = rolledBackFrom(agent) === null ? hermesDeferral(agent, opts.hermesVersion, true) : null;
   if (held !== null) return held;
   if (needs.length === 0) return null;
   const has = release?.capabilities;
@@ -99,11 +99,17 @@ export async function configChanges(
         name: agent.name,
         from,
         to: next.config_hash,
-        deferred: updateDeferral(agent, next.manifest.requires ?? [], diff.appliedRequires, release, {
-          hermesVersion: ctx.hermesVersion,
-          nowMs,
-          pushing: opts.pushing === true,
-        }),
+        deferred: updateDeferral(
+          await withAppliedHermes(ctx.backend.artifacts, agent),
+          next.manifest.requires ?? [],
+          diff.appliedRequires,
+          release,
+          {
+            hermesVersion: ctx.hermesVersion,
+            nowMs,
+            pushing: opts.pushing === true,
+          },
+        ),
         pending,
         files: diff.files,
         manifest: diff.manifest,

@@ -314,7 +314,11 @@ describe("foundation.status", () => {
 
   test("a new renderer is an update, not drift, when the stored hashes agree", async () => {
     const backend = seedFixtureFoundation(new MemoryBackend());
-    const seeded = { ...(await seedOne(backend, "old-render")), hermes_version: BUILD_VERSIONS.hermes };
+    const seeded = {
+      ...(await seedOne(backend, "old-render")),
+      hermes_version: BUILD_VERSIONS.hermes,
+      running_hermes_version: BUILD_VERSIONS.hermes,
+    };
     backend.agents.set(seeded.name, {
       ...seeded,
       config_hash: "old",
@@ -370,6 +374,7 @@ describe("foundation.status", () => {
     backend.agents.set(seeded.name, {
       ...seeded,
       hermes_version: BUILD_VERSIONS.hermes,
+      running_hermes_version: BUILD_VERSIONS.hermes,
       config_hash: "old",
       applied_config_hash: "old",
     });

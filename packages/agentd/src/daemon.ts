@@ -43,6 +43,7 @@ import { AgentdError } from "./errors.ts";
 import { HERMETICD_VERSION } from "./version.ts";
 import { bootContext, log, stderrEmit, type Context, type RunDeps } from "./context.ts";
 import { withUpgradeHistory } from "./events.ts";
+import { backfillHomeRecord } from "./apply/hermes-home-record.ts";
 
 /**
  * The systemd service (§6.4): heartbeat every 30 s, self-update at start-up and
@@ -140,6 +141,16 @@ export async function serve(host: Host, deps: RunDeps = {}): Promise<void> {
       log(
         `could not give the hermes account its login shell: ${e instanceof Error ? e.message : String(e)}`,
       );
+    },
+  );
+  // Which Hermes the home on `/data` belongs to, for a box an older hermeticd
+  // installed: a later same-version recreate then takes no backup.
+  await backfillHomeRecord(host).then(
+    (wrote) => {
+      if (wrote) log("recorded the installed hermes ref for the data volume");
+    },
+    (e: unknown) => {
+      log(`could not record the installed hermes ref: ${e instanceof Error ? e.message : String(e)}`);
     },
   );
   // The one thing the two loops share: the heartbeat sees a rollout request on

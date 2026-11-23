@@ -59,9 +59,9 @@ export function register(program: Command): void {
           "box for it to report the new config. Before it pins a running box it waits up\n" +
           "to ten minutes for no session to be running there, and leaves the agent as it\n" +
           "was if none clears; --force skips that wait. A box that is not up (stopped, still\n" +
-          "booting) is skipped and keeps the pin for its next boot; one that does not\n" +
-          "report in time is a warning, not a failure. The box installs this build's\n" +
-          "Hermes ref, exactly as a recreate from this checkout would.\n" +
+          "booting) only gets the pin, as without --now: start it and run --now again.\n" +
+          "A box that does not report in time is a warning, not a failure. The box\n" +
+          "installs this build's Hermes ref, exactly as a recreate from this checkout would.\n" +
           "\nWith --hermeticd, a fleet that auto-updates hermeticd (the default; see\n" +
           "`hermetic settings set --no-auto-update-hermeticd`) asks every running box to\n" +
           "take a changed release at once and watches it land; --no-rollout skips that\n" +

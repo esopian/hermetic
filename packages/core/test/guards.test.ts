@@ -612,16 +612,18 @@ describe("LOCKED by a foundation update", () => {
 describe("locking", () => {
   test("upgrade takes and releases the per-agent lock", async () => {
     const { backend, hermetic } = seeded();
-    // The per-agent work is the render and the upload; the lock has to be held
-    // across it and released after (§4.4).
+    // The per-agent work is the pin write; the lock has to be held across it
+    // and released after (§4.4).
     let lockedDuringUpload: string | null = null;
-    const real = backend.artifacts.putObject;
-    backend.artifacts.putObject = async (key: string, body: Uint8Array) => {
-      lockedDuringUpload ??= (await backend.store.agents.get("atlas"))!.lock?.owner ?? null;
-      await real.call(backend.artifacts, key, body);
+    const update = backend.store.agents.update.bind(backend.store.agents);
+    backend.store.agents.update = async (name, version, patch, ...rest) => {
+      if (patch.hermes_version !== undefined) {
+        lockedDuringUpload ??= (await backend.store.agents.get(name))!.lock?.owner ?? null;
+      }
+      return update(name, version, patch, ...rest);
     };
 
-    await drain(hermetic.upgrade({ name: "atlas", hermes: "0.16.0" }));
+    await drain(hermetic.upgrade({ name: "atlas", hermes: "0.99.0" }));
     expect(lockedDuringUpload).toBeString();
     expect((await backend.store.agents.get("atlas"))!.lock).toBeNull();
   });
@@ -636,12 +638,12 @@ describe("locking", () => {
       },
     });
 
-    const events = await drain(hermetic.upgrade({ all: true, hermes: "0.16.0" }));
+    const events = await drain(hermetic.upgrade({ all: true, hermes: "0.99.0" }));
     expect(events.some((e) => e.phase === "corvid:skipped")).toBe(true);
     expect(events.at(-1)!.message).toContain("skipped 1");
     // Everything else still moved.
-    expect((await backend.store.agents.get("atlas"))!.hermes_version).toBe("0.16.0");
-    expect((await backend.store.agents.get("corvid"))!.hermes_version).not.toBe("0.16.0");
+    expect((await backend.store.agents.get("atlas"))!.hermes_version).toBe("0.99.0");
+    expect((await backend.store.agents.get("corvid"))!.hermes_version).not.toBe("0.99.0");
   });
 
   test("upgrading a single locked agent is a hard LOCKED, not a skip", async () => {
@@ -653,7 +655,7 @@ describe("locking", () => {
         expires: new Date(backend.now().getTime() + 600_000).toISOString(),
       },
     });
-    expect(await codeOf(() => drain(hermetic.upgrade({ name: "corvid", hermes: "0.16.0" })))).toBe(
+    expect(await codeOf(() => drain(hermetic.upgrade({ name: "corvid", hermes: "0.99.0" })))).toBe(
       "LOCKED",
     );
   });

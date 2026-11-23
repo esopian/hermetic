@@ -265,14 +265,20 @@ export function createStatus(ctx: FoundationCtx) {
           });
     /**
      * The same pure prospective render as plan.rollout, including staged
-     * bindings. Not for an agent held on another Hermes pin: every render pins
-     * this build's ref, so its hash never matches, and the update defers it
-     * (`updateDeferral`) — an `update` nothing would ever clear. It is judged
-     * on its stored hashes alone.
+     * bindings. Not for an agent on another Hermes than this build's, nor one
+     * whose box reports running another Hermes than its pin (a pin moved
+     * without `--now`), nor one whose box has not reported yet: the update
+     * defers all three (`hermesDeferral`), so an `update` would be one nothing
+     * clears, and the app's automatic update would start a push for it at
+     * every launch. Those are judged on their stored hashes alone.
      */
     const renderedHashes = new Map(
       agents
-        .filter((agent) => agent.hermes_version === core.hermesVersion)
+        .filter(
+          (agent) =>
+            agent.hermes_version === core.hermesVersion &&
+            agent.running_hermes_version === agent.hermes_version,
+        )
         .map((agent) => [
           agent.name,
           core.renderFor(pendingApplied(agent), fleet.region, fleet.tailnet).config_hash,

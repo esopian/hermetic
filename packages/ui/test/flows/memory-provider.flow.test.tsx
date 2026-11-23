@@ -566,9 +566,11 @@ test("agent detail: switching memory saves, rolls out, and the row names the new
   mountPortal();
   const user = userEvent.setup();
 
-  // `fathom` is seeded on an older Hermes, and a memory switch re-renders, which
-  // a row held on another Hermes than this build's refuses (§6.5): pin it first.
-  for await (const _ of h.ctx.hermetic().upgrade({ name: "fathom", hermes: BUILD_VERSIONS.hermes })) {
+  // `fathom` is seeded on a Hermes with no known ref, and a memory switch
+  // re-renders, which such a row refuses (§6.5): upgrade it in place first.
+  for await (const _ of h.ctx
+    .hermetic()
+    .upgrade({ name: "fathom", hermes: BUILD_VERSIONS.hermes, now: true, force: true })) {
     // Drained for its side effects.
   }
   await h.poll();

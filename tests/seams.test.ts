@@ -120,6 +120,8 @@ import {
   HERMES_USER_ENV,
 } from "../packages/core/src/schema/hermes.ts";
 import { renderAgentConfig } from "../packages/core/src/render/render.ts";
+import { renderAgentRow } from "../packages/core/src/agents/agent-runtime.ts";
+import { hermesTagVersion } from "../packages/core/src/shared/hermes.ts";
 import type { RenderInput } from "../packages/core/src/render/render.ts";
 import {
   NOVNC_WEB_ROOT,
@@ -642,6 +644,47 @@ describe("seam: the agent config core renders is the one hermeticd applies", () 
       expect(parseManifest(overTheWire(next.manifest)).requires).toContain("hermes-0.22-install");
     }
     expect(HERMETICD_CAPABILITIES.has("hermes-0.22-install")).toBe(true);
+  });
+
+  /**
+   * I7, the laptop half: a row still on 0.21.5, rendered by this build, names
+   * 0.21.5's own date tag rather than this build's ref, asks nothing of the
+   * 0.22 install path, and crosses the wire to a box that reads it as such —
+   * the tag names no SemVer version, so the box's ref/version cross-check has
+   * nothing to refuse. Its units are byte for byte what a direct render of the
+   * same pin and ref produces.
+   */
+  test("a 0.21.5 row renders its own ref, and the box reads it as 0.21.5", () => {
+    const row = {
+      name: "atlas",
+      status: "ready",
+      size: "small",
+      provider: "anthropic",
+      secrets_mode: "none",
+      hermes_version: "0.21.5",
+      hermes: { model: "claude-sonnet-5" },
+      resources: { ssm_paths: [] },
+    } as unknown as Agent;
+    const old = renderAgentRow(row, "us-east-1", "tail0.ts.net");
+    expect([old.manifest.hermes_version, old.manifest.hermes_ref]).toEqual(["0.21.5", "v2026.9.24"]);
+    expect(old.manifest.requires ?? []).not.toContain("hermes-0.22-install");
+    const parsed = parseManifest(overTheWire(old.manifest));
+    expect([parsed.hermes_version, parsed.hermes_ref]).toEqual(["0.21.5", "v2026.9.24"]);
+    expect(hermesTagVersion(parsed.hermes_ref)).toBeNull();
+    const direct = renderAgentConfig({
+      name: "atlas",
+      size: "small",
+      provider: "anthropic",
+      secrets_mode: "none",
+      hermes_version: "0.21.5",
+      hermes_ref: "v2026.9.24",
+      chrome_ref: CHROME_REF,
+      region: "us-east-1",
+      tailnet: "tail0.ts.net",
+      hermes: { model: "claude-sonnet-5" },
+    } as unknown as RenderInput);
+    const units = (m: typeof old.manifest) => m.files.filter((f) => f.path.startsWith("/etc/systemd/"));
+    expect(units(old.manifest)).toEqual(units(direct.manifest));
   });
 
   /**

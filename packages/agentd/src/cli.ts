@@ -40,6 +40,7 @@ import { bootContext, context, log, stderrEmit, type Context, type RunDeps } fro
 import { serve } from "./daemon.ts";
 import { recordRolledBack, refuseRecorded } from "./converge.ts";
 import { APPLY_LOCK_PATH, waitForInstallLock } from "./install-lock.ts";
+import { withUpgradeHistory } from "./events.ts";
 
 /** The SSM slots an agent has. A stage may ask for these and nothing else. */
 export const SECRET_SLOTS = ["ts-key", "bws-token", "provider-key"] as const;
@@ -305,11 +306,26 @@ export async function run(
       // rule, keyed on the row's request. Outside the `catch`, which would
       // rewrite the record with this refusal.
       let result: Awaited<ReturnType<typeof apply>>;
+      // The swap's milestones (a first start's backup included) reach `agent
+      // history` from a stage as they do from a converge (`withUpgradeHistory`).
+      const events = dryRun ? null : ctx;
+      const history =
+        events !== null
+          ? withUpgradeHistory(stderrEmit, async (action, detail) => {
+              await events.aws.appendEvent({
+                name: events.userData.name,
+                action,
+                from_status: null,
+                to_status: null,
+                detail,
+              });
+            })
+          : null;
       try {
         if (!dryRun) await refuseRecorded(host, manifest.config_hash, rowRequest);
         result = await apply(manifest, {
           host,
-          emit: stderrEmit,
+          emit: history ?? stderrEmit,
           ...(dryRun ? { dryRun: true } : {}),
           ...(bwsToken ? { bwsToken } : {}),
           ...(providerKey ? { providerKey } : {}),
@@ -325,6 +341,7 @@ export async function run(
         });
       } finally {
         await lock?.release();
+        await history?.flush();
       }
       process.stdout.write(JSON.stringify(result, null, 2) + "\n");
       return EXIT_OK;

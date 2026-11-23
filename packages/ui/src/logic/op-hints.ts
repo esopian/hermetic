@@ -44,7 +44,7 @@ export function opNextActions(events: readonly OpEvent[], finished: boolean): st
  * The message that matters most about a pin-only `upgrade` — "it takes effect
  * on the next recreate, or now with `--now`" — is an ordinary *info* line,
  * because nothing went wrong: pinning a version is all that `upgrade` does, and
- * the box takes it on its next boot. It is still the whole answer to "did pressing Upgrade change anything
+ * the box takes it on its next recreate. It is still the whole answer to "did pressing Upgrade change anything
  * yet", and the drawer's old stripped rail showed a phase name and a percentage
  * and dropped it. Surfaced beside the callout rather than buried in a log pane
  * the operator has to scroll.
@@ -184,6 +184,22 @@ export function failureHints(
     case "ABORTED":
       hints.push("the op was cancelled, not refused — re-run it when you are ready");
       break;
+    case "HERMES_UPGRADE_REQUIRED":
+      hints.push(
+        `${agent}'s Hermes pin needs an upgrade first — \`hermetic upgrade ${agent} --hermes <version> --now\``,
+      );
+      break;
+    case "HERMES_UPGRADE_ROLLED_BACK":
+      hints.push(
+        `the box rolled back and still runs its previous Hermes; nothing was lost — \`hermetic agent history ${agent}\` has its timeline and backup`,
+      );
+      break;
+    case "HERMES_UPGRADE_FAILED":
+      // Hermes is down and held on the box: retrying before reading what it said is the wrong next step.
+      return [
+        `Hermes is down on the box and nothing was deleted — read \`hermetic agent history ${agent}\` (it names the backup) before retrying`,
+        "`hermetic doctor` checks the foundation this op was standing on",
+      ];
     default:
       break;
   }

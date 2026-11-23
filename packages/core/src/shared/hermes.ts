@@ -211,6 +211,23 @@ export const HERMES_CLI_ENV = { HERMES_DISABLE_LAZY_INSTALLS: "1" } as const;
 export function hermesTagVersion(ref: string): string | null {
   return /^v((?:0|[1-9]\d{0,2})\.\d+\.\d+)$/.exec(ref)?.[1] ?? null;
 }
+
+/**
+ * The upstream git ref a Hermes version is checked out from, or `null` when
+ * hermetic does not know one. The inverse of `hermesTagVersion` for SemVer tags
+ * (`0.23.1` is `v0.23.1`, every release from 0.21.6), plus the one date tag a
+ * fleet still runs: `v2026.9.24`, which is 0.21.5. Earlier date-tagged
+ * versions have no ref here, so a row pinned to one cannot be rendered.
+ *
+ * This is what lets an agent row, which stores only `hermes_version`, render
+ * its own ref instead of the build's (`renderAgentRow`).
+ */
+export function hermesRefFor(version: string): string | null {
+  if (version === "0.21.5") return "v2026.9.24";
+  if (hermesTagVersion(`v${version}`) !== version) return null;
+  const [major = 0, minor = 0, patch = 0] = version.split(".").map(Number);
+  return major > 0 || minor > 21 || (minor === 21 && patch >= 6) ? `v${version}` : null;
+}
 /**
  * Where Vite actually writes the dashboard SPA.
  *

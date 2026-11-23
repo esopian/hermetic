@@ -69,7 +69,7 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
     agentPrefix,
     appendEvent,
     assertFleetUnlocked,
-    assertOnBuildHermes,
+    assertRenderableHermes,
     assertReleaseCanApply,
     assertSealed,
     attachDeps,
@@ -629,7 +629,7 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
       }
     } else {
       // A row an older build claimed may name another Hermes; its resume renders afresh.
-      assertOnBuildHermes(claim.agent);
+      assertRenderableHermes(claim.agent);
       yield say("resume", 0.05, `resuming an interrupted create of ${name}`, nowIso(), "warn");
       agent = await acquireLock(claim.agent, owner);
     }
