@@ -752,6 +752,30 @@ export function failureCopy(code: string | null | undefined, message?: string | 
           "What arrived is kept above. Hermes writes its own transcript on the box, so the " +
           "complete turn is there — reconnecting backfills it.",
       };
+    case "CHAT_SESSION_BUSY":
+      return {
+        tone: "warn",
+        head: "busy",
+        right: code,
+        title: "The bot is running a turn in this chat, so nothing was sent.",
+        detail: said || "Send it again when the current turn ends.",
+      };
+    case "SESSION_NOT_OWNED":
+      return {
+        tone: "warn",
+        head: "owned elsewhere",
+        right: code,
+        title: "Another client owns this conversation, so nothing was sent.",
+        detail: said || "Start a new session to keep going.",
+      };
+    case "CHAT_SEND_UNCERTAIN":
+      return {
+        tone: "warn",
+        head: "not confirmed",
+        right: code,
+        title: "The gateway did not confirm this message; it may already be queued.",
+        detail: "Check the conversation before sending it again, or it may run twice.",
+      };
     case "CHAT_TURN_FAILED":
       return {
         tone: "bad",

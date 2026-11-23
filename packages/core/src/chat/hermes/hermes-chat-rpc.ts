@@ -285,11 +285,14 @@ export function readRpc(
       clearTimeout(p.timer);
       const err = rec(doc.error);
       if (err) {
+        // Upstream names a refusal's kind in `data.reason` (`SESSION_OWNER_BUSY`, …);
+        // the message is display text.
+        const reason = str(rec(err.data)?.reason);
         p.reject(
           new HermeticError(
             CHAT_ERROR_CODES.PROTOCOL,
             `${instance}: ${str(err.message) ?? "the box refused the request"}`,
-            { code: num(err.code) },
+            { code: num(err.code), ...(reason ? { reason } : {}) },
           ),
         );
         return;

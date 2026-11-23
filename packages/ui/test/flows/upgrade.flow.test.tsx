@@ -82,7 +82,7 @@ test("Upgrade now pins the version and converges the running box onto it", async
   const { drawer, card } = await upgradeCard();
   const latest = offered(card);
   // The cost is said beside the button, before anything is pressed.
-  expect(card.textContent ?? "").toContain("a turn in flight is interrupted");
+  expect(card.textContent ?? "").toContain("waits until no turn is running");
   const now = within(card).getByRole("button", { name: "Upgrade now" });
   expect(now.hasAttribute("disabled")).toBe(false);
   await user.click(now);

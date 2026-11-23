@@ -24,6 +24,7 @@ import {
   drain,
   freshFleet,
   installTestStages,
+  onBuildHermes,
   testHermetic,
   settle,
 } from "./helpers.ts";
@@ -38,6 +39,16 @@ import {
 function seeded(directory: FixtureDirectoryMode = "absent") {
   const backend = seedFixtureFleet(new MemoryBackend({ directory }));
   return { backend, hermetic: testHermetic({ backend, config: FIXTURE_CONFIG }) };
+}
+
+/**
+ * `seeded()` with every live row on this build's Hermes: `set` and `recreate`
+ * refuse a row held on another (§6.5), and the fixture seeds most rows older.
+ */
+function seededOnPin() {
+  const fleet = seeded();
+  onBuildHermes(fleet.backend);
+  return fleet;
 }
 
 /**
@@ -166,7 +177,7 @@ describe("agents.history", () => {
 
 describe("agents.set", () => {
   test("records the change and says when it takes effect", async () => {
-    const { backend, hermetic } = seeded();
+    const { backend, hermetic } = seededOnPin();
     const next = await hermetic.agents.set({ name: "fathom", secrets: "bitwarden", size: "large" });
     expect(next.secrets_mode).toBe("bitwarden");
     expect(next.size).toBe("large");
@@ -184,7 +195,7 @@ describe("agents.set", () => {
    * invisible on the box.
    */
   test("re-renders the config so a rerun carries the change", async () => {
-    const { hermetic } = seeded();
+    const { hermetic } = seededOnPin();
     const before = await hermetic.agents.get("fathom");
     const next = await hermetic.agents.set({
       name: "fathom",
@@ -197,7 +208,7 @@ describe("agents.set", () => {
 
   /** `--model X` states one field; it must not clear the rest (§6.4). */
   test("merges hermes settings rather than replacing them", async () => {
-    const { hermetic } = seeded();
+    const { hermetic } = seededOnPin();
     await hermetic.agents.set({ name: "fathom", hermes: { max_turns: 40 } });
     // A granted Bedrock model: `fathom` is a bedrock row and the grant check
     // now covers this door too.
@@ -235,7 +246,7 @@ describe("agents.set", () => {
   });
 
   test("setting a value on a row from before --hold leaves it without a list", async () => {
-    const { hermetic } = seeded();
+    const { hermetic } = seededOnPin();
     expect((await hermetic.agents.get("fathom")).hermes_hold).toBeUndefined();
     const next = await hermetic.agents.set({ name: "fathom", hermes: { max_turns: 40 } });
     expect(next.hermes_hold).toBeUndefined();
@@ -249,7 +260,7 @@ describe("agents.set", () => {
    * restart — which is `apply`'s job, not `set`'s.
    */
   test("switching to a keyed provider is staged, not applied", async () => {
-    const { hermetic } = seeded();
+    const { hermetic } = seededOnPin();
     const next = await hermetic.agents.set({ name: "fathom", provider: "openrouter" });
     expect(next.provider).toBe("bedrock");
     expect(next.pending).toMatchObject({
@@ -264,7 +275,7 @@ describe("agents.set", () => {
   /** A switch resets the model: a model id from one catalog aimed at another
    * provider's endpoint is not a setting worth carrying over. */
   test("a profile switch resets the model unless one is stated in the same call", async () => {
-    const { hermetic } = seeded();
+    const { hermetic } = seededOnPin();
     // A model the fleet's role may actually invoke: `fathom` is on Bedrock, and
     // a bare `--model` on an unstaged row is checked against the grant.
     await hermetic.agents.set({ name: "fathom", model: "zai.glm-4.7-flash" });
@@ -303,7 +314,7 @@ describe("agents.set", () => {
    * agent on" has one answer wherever it is asked (§8.3).
    */
   test("--refresh-profile on a legacy row picks up the fleet's designation", async () => {
-    const { hermetic } = seeded();
+    const { hermetic } = seededOnPin();
     const next = await hermetic.agents.set({ name: "fathom", refresh_profile: true });
     expect(next.pending).toMatchObject({
       provider: "bedrock",
@@ -317,7 +328,7 @@ describe("agents.set", () => {
    * re-pins that one rather than refusing or moving it to the newcomer.
    */
   test("--refresh-profile with an ambiguous designation re-pins the profile it runs on", async () => {
-    const { hermetic } = seeded();
+    const { hermetic } = seededOnPin();
     await hermetic.providers.create({
       provider: "bedrock",
       name: "bedrock-spare",
@@ -330,7 +341,7 @@ describe("agents.set", () => {
 
   /** …and a refusal when its provider has no profile at all, rather than a silent no-op. */
   test("--refresh-profile with no profile of the row's provider is refused", async () => {
-    const { backend, hermetic } = seeded();
+    const { backend, hermetic } = seededOnPin();
     const settings = backend.fleetItem!.settings!;
     const { [FIXTURE_PROFILE_IDS.bedrock]: _bedrock, ...rest } = settings.profiles!;
     backend.fleetItem = { ...backend.fleetItem!, settings: { ...settings, profiles: rest } };
@@ -351,7 +362,7 @@ describe("agents.set", () => {
    * `AccessDeniedException`, with nothing on the laptop having said so.
    */
   test("a bare --model onto an ungranted Bedrock model is MODEL_NOT_GRANTED", async () => {
-    const { backend, hermetic } = seeded();
+    const { backend, hermetic } = seededOnPin();
     const before = (await backend.store.agents.get("fathom"))!;
     expect(before.provider).toBe("bedrock");
     expect(before.pending ?? null).toBeNull();
@@ -376,7 +387,7 @@ describe("agents.set", () => {
    * guard.
    */
   test("hermes.model onto an ungranted Bedrock model is MODEL_NOT_GRANTED too", async () => {
-    const { backend, hermetic } = seeded();
+    const { backend, hermetic } = seededOnPin();
     const before = (await backend.store.agents.get("fathom"))!;
 
     let error: HermeticError | null = null;
@@ -393,7 +404,7 @@ describe("agents.set", () => {
 
   /** A granted model on the same branch still goes through, so the guard is a guard. */
   test("a bare --model onto a granted Bedrock model is written", async () => {
-    const { hermetic } = seeded();
+    const { hermetic } = seededOnPin();
     const next = await hermetic.agents.set({ name: "fathom", model: "zai.glm-4.7-flash" });
     expect(next.hermes?.model).toBe("zai.glm-4.7-flash");
     expect(next.pending ?? null).toBeNull();
@@ -900,7 +911,7 @@ describe("agents.recreate", () => {
    * and be read as this one's (§4.2).
    */
   test("stamps the fleet's release and clears the previous boot's state", async () => {
-    const { backend, hermetic } = seeded();
+    const { backend, hermetic } = seededOnPin();
     // `heron` is the seeded failure: an older hermeticd, a failed stage, and —
     // as of the rerun below — an unacked command.
     await hermetic.agents.rerun({ name: "heron" });
@@ -984,7 +995,7 @@ describe("agents.recreate", () => {
   });
 
   test("refuses an agent that is not settled", async () => {
-    const { backend, hermetic } = seeded();
+    const { backend, hermetic } = seededOnPin();
     await backend.store.agents.update("heron", backend.agents.get("heron")!.version, {
       status: "destroying",
     });
@@ -1035,7 +1046,7 @@ describe("agents.recreate", () => {
    */
   test("clears the terminated node's tailnet identity on both paths", async () => {
     for (const name of ["atlas", "heron"] as const) {
-      const { backend, hermetic } = seeded();
+      const { backend, hermetic } = seededOnPin();
       const before = (await backend.store.agents.get(name))!;
       // `atlas` is ready and drains through `stopping`; `heron` is in `error`
       // and goes straight back to `bootstrapping` — the path that cleared
@@ -1193,7 +1204,7 @@ describe("tailnet device cleanup", () => {
    * joins with. A delete after the mint would be a race the corpse wins.
    */
   test("recreate deletes the agent's devices before it mints the new auth key", async () => {
-    const { backend, hermetic } = seeded();
+    const { backend, hermetic } = seededOnPin();
     expect(hostnames(backend)).toContain("fxtr0001-corvid.hermetic.ts.net");
     expect(hostnames(backend)).toContain("fxtr0001-corvid-2.hermetic.ts.net");
 
@@ -1678,7 +1689,7 @@ describe("tailnet device cleanup", () => {
 
   /** The fleet whose OAuth client was never re-scoped: one warning, then on. */
   test("no devices:core scope is one warning and a completed op", async () => {
-    const { backend, hermetic } = seeded();
+    const { backend, hermetic } = seededOnPin();
     backend.tailscaleDevices = null;
     const events = await drain(hermetic.agents.recreate({ name: "corvid", yes: true }));
     const tailnet = events.filter((e) => e.phase === "tailnet");
@@ -1692,7 +1703,7 @@ describe("tailnet device cleanup", () => {
 
   /** A client that can read devices but not write them: the same one warning. */
   test("a forbidden delete warns once and stops trying", async () => {
-    const { backend, hermetic } = seeded();
+    const { backend, hermetic } = seededOnPin();
     backend.tailscale.deleteDevice = async (): Promise<TailscaleDeleteOutcome> => "forbidden";
     const events = await drain(hermetic.agents.recreate({ name: "corvid", yes: true }));
     const tailnet = events.filter((e) => e.phase === "tailnet");
@@ -1704,7 +1715,7 @@ describe("tailnet device cleanup", () => {
 
   /** A device somebody deleted in the console first is the state we wanted. */
   test("a device that is already gone is not news", async () => {
-    const { backend, hermetic } = seeded();
+    const { backend, hermetic } = seededOnPin();
     backend.tailscale.deleteDevice = async (): Promise<TailscaleDeleteOutcome> => "not_found";
     const events = await drain(hermetic.agents.recreate({ name: "corvid", yes: true }));
     expect(events.filter((e) => e.phase === "tailnet")).toEqual([]);
@@ -1713,7 +1724,7 @@ describe("tailnet device cleanup", () => {
 
   /** A tailnet hiccup must never fail a recreate that already killed the box. */
   test("an API failure on the delete is a warning, not a failed op", async () => {
-    const { backend, hermetic } = seeded();
+    const { backend, hermetic } = seededOnPin();
     backend.tailscale.deleteDevice = async (): Promise<TailscaleDeleteOutcome> => {
       throw new HermeticError("TAILSCALE_UNAVAILABLE", "tailscale is down (HTTP 502)", {});
     };
@@ -1947,9 +1958,9 @@ describe("agents.rerun", () => {
 describe("upgrade", () => {
   test("--hermes pins the version and re-renders, and says when it takes effect", async () => {
     const { backend, hermetic } = seeded();
-    const events = await drain(hermetic.upgrade({ name: "juniper", hermes: "0.16.0" }));
-    expect((await backend.store.agents.get("juniper"))!.hermes_version).toBe("0.16.0");
-    const actions = (await backend.store.events.query("juniper")).map((e) => e.action);
+    const events = await drain(hermetic.upgrade({ name: "fathom", hermes: "0.99.0" }));
+    expect((await backend.store.agents.get("fathom"))!.hermes_version).toBe("0.99.0");
+    const actions = (await backend.store.events.query("fathom")).map((e) => e.action);
     expect(actions).toContain("upgrade");
     expect(events.some((e) => e.message.includes("next recreate"))).toBe(true);
   });
@@ -2024,22 +2035,32 @@ describe("upgrade", () => {
       status: "destroyed",
       instance_id: null,
     });
-    const events = await drain(hermetic.upgrade({ all: true, hermes: "0.16.0" }));
+    const seededRows = structuredClone(backend.agents);
+    const events = await drain(hermetic.upgrade({ all: true, hermes: "0.99.0" }));
     const rows = (await hermetic.agents.list()).filter((r) => r.status !== "destroyed");
-    expect(rows.every((r) => r.hermes_version === "0.16.0")).toBe(true);
+    // A stopped or paused box reported nothing, but no converge was ever asked of it,
+    // so it takes the pin alone: nothing rendered, nothing asked.
+    const down = (r: { status: string }) => r.status === "stopped" || r.status === "paused";
+    expect(rows.filter(down).length).toBeGreaterThan(0);
     for (const row of rows) {
+      expect(row.hermes_version).toBe("0.99.0");
       expect(events.some((e) => e.phase === `${row.name}:done`)).toBe(true);
+      if (!down(row)) continue;
+      const was = seededRows.get(row.name)!;
+      expect(row.config_hash).toBe(was.config_hash);
+      expect(row.resources.config_key).toBe(was.resources.config_key);
+      expect(row.apply_request ?? null).toBeNull();
     }
     // The destroyed row is left exactly as it was — nothing to upgrade.
     const gone = (await backend.store.agents.get("cinder"))!;
-    expect(gone.hermes_version).not.toBe("0.16.0");
+    expect(gone.hermes_version).not.toBe("0.99.0");
     expect(events.some((e) => e.phase === `${gone.name}:done`)).toBe(false);
   });
 
   test("requires a version and a target", async () => {
     const { hermetic } = seeded();
     await expect(drain(hermetic.upgrade({ name: "atlas" }))).rejects.toThrow();
-    await expect(drain(hermetic.upgrade({ hermes: "0.16.0" }))).rejects.toThrow();
+    await expect(drain(hermetic.upgrade({ hermes: "0.99.0" }))).rejects.toThrow();
   });
 
   /**
@@ -2213,6 +2234,7 @@ describe("an op consumed to its end records no failure", () => {
   for (const { label, run } of stops) {
     test(`${label} consumed to its done event and then abandoned writes no failed event`, async () => {
       const { backend, hermetic } = seeded();
+      if (label === "recreate") onBuildHermes(backend);
       const name = { stop: "atlas", start: "juniper", destroy: "corvid", recreate: "fathom" }[
         label
       ] as string;
@@ -2954,19 +2976,20 @@ describe("apply", () => {
  */
 describe("upgrade is serial", () => {
   /**
-   * The per-agent work is the render and the upload, so that is where overlap
-   * would show: `putObject` counts how many upgrades are inside it at once.
+   * Without `--now` the per-agent work is the pin write, so that is where
+   * overlap would show: the row write counts how many upgrades are inside it at once.
    */
   function watchUploads(backend: MemoryBackend): () => number {
     let inFlight = 0;
     let peak = 0;
-    const real = backend.artifacts.putObject;
-    backend.artifacts.putObject = async (key: string, body: Uint8Array) => {
+    const update = backend.store.agents.update.bind(backend.store.agents);
+    backend.store.agents.update = async (name, version, patch, ...rest) => {
+      if (patch.hermes_version === undefined) return update(name, version, patch, ...rest);
       inFlight += 1;
       peak = Math.max(peak, inFlight);
       try {
         await new Promise((r) => setTimeout(r, 1));
-        await real.call(backend.artifacts, key, body);
+        return await update(name, version, patch, ...rest);
       } finally {
         inFlight -= 1;
       }
@@ -2979,18 +3002,25 @@ describe("upgrade is serial", () => {
     const peak = watchUploads(backend);
 
     const rows = (await hermetic.agents.list()).filter((r) => r.status !== "destroyed");
-    const events = await drain(hermetic.upgrade({ all: true, hermes: "0.16.0" }));
+    const events = await drain(hermetic.upgrade({ all: true, hermes: "0.99.0" }));
 
     expect(peak()).toBe(1);
+    // Stopped and paused rows never asked to converge take the pin alone, like every other row.
+    const down = rows.filter((r) => r.status === "stopped" || r.status === "paused");
+    expect(down.length).toBeGreaterThan(0);
     for (const row of rows) {
       expect(events.some((e) => e.phase === `${row.name}:done`)).toBe(true);
     }
+    expect(events.some((e) => e.phase.endsWith(":refused"))).toBe(false);
     expect(events.at(-1)).toMatchObject({ phase: "done", progress: 1 });
-    expect(
-      (await hermetic.agents.list())
-        .filter((r) => r.status !== "destroyed")
-        .every((r) => r.hermes_version === "0.16.0"),
-    ).toBe(true);
+    const after = await hermetic.agents.list();
+    const pinned = after.filter((r) => r.hermes_version === "0.99.0");
+    expect(pinned.map((r) => r.name).sort()).toEqual(rows.map((r) => r.name).sort());
+    for (const row of down) {
+      const now = after.find((r) => r.name === row.name)!;
+      expect(now.config_hash).toBe(row.config_hash);
+      expect(now.apply_request ?? null).toBeNull();
+    }
   });
 
   test("events arrive grouped by agent, never interleaved", async () => {
@@ -2998,7 +3028,7 @@ describe("upgrade is serial", () => {
     // Under the old pool an agent's `:render` could land between another's
     // `:render` and `:done`.
     const { hermetic } = seeded();
-    const events = await drain(hermetic.upgrade({ all: true, hermes: "0.16.0" }));
+    const events = await drain(hermetic.upgrade({ all: true, hermes: "0.99.0" }));
 
     const seen = new Set<string>();
     let current: string | null = null;
@@ -3013,11 +3043,13 @@ describe("upgrade is serial", () => {
 
   test("a failure stops the run and surfaces rather than being swallowed", async () => {
     const { backend, hermetic } = seeded();
-    backend.artifacts.putObject = async () => {
-      throw new HermeticError("CONFLICT", "the bucket refused");
+    const update = backend.store.agents.update.bind(backend.store.agents);
+    backend.store.agents.update = (name, version, patch, ...rest) => {
+      if (patch.hermes_version !== undefined) throw new HermeticError("CONFLICT", "the row moved");
+      return update(name, version, patch, ...rest);
     };
 
-    await expect(drain(hermetic.upgrade({ all: true, hermes: "0.16.0" }))).rejects.toThrow(
+    await expect(drain(hermetic.upgrade({ all: true, hermes: "0.99.0" }))).rejects.toThrow(
       HermeticError,
     );
   });
@@ -3027,31 +3059,28 @@ describe("upgrade is serial", () => {
     const rows = await hermetic.agents.list();
     expect(rows.length).toBeGreaterThan(2);
 
-    // Fail on the third agent's upload, whichever that turns out to be.
-    let uploads = 0;
-    const real = backend.artifacts.putObject;
-    backend.artifacts.putObject = async (key: string, body: Uint8Array) => {
-      uploads += 1;
-      if (uploads === 3) throw new HermeticError("CONFLICT", "the bucket refused");
-      await real.call(backend.artifacts, key, body);
+    // Fail on the third agent's pin event, after its pin write, whichever agent that is.
+    let pins = 0;
+    const append = backend.store.events.append.bind(backend.store.events);
+    backend.store.events.append = (event, ...rest) => {
+      if (event.action === "upgrade" && ++pins === 3)
+        throw new HermeticError("CONFLICT", "the log refused");
+      return append(event, ...rest);
     };
 
-    await expect(drain(hermetic.upgrade({ all: true, hermes: "0.16.0" }))).rejects.toThrow(
+    await expect(drain(hermetic.upgrade({ all: true, hermes: "0.99.0" }))).rejects.toThrow(
       HermeticError,
     );
 
     /**
      * Serial means the damage is a *prefix*: the agents before the failure took
      * the new pin, every agent after it is untouched, and nothing is left
-     * locked. Three rows carry the pin rather than two because `upgradeOne`
-     * writes it before it uploads — so the agent the upload failed on is pinned
-     * to a version whose config never reached the bucket. Re-running the same
-     * upgrade re-renders and re-uploads it, which is the point of leaving the
-     * row honest about what it is pinned to.
+     * locked. The agent the run failed on had its pin written first, and gets
+     * it back: a failure before the box is asked undoes what the run wrote (I5).
      */
     const after = await hermetic.agents.list();
-    const pinned = after.filter((r) => r.hermes_version === "0.16.0");
-    expect(pinned.length).toBe(3);
+    const pinned = after.filter((r) => r.hermes_version === "0.99.0");
+    expect(pinned.length).toBe(2);
     expect(after.length).toBeGreaterThan(pinned.length);
     for (const row of after) {
       expect((await backend.store.agents.get(row.name))!.lock).toBeNull();

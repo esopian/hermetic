@@ -191,6 +191,44 @@ export const HERMES_INSTALL_DIR = "/usr/local/lib/hermes-agent";
  */
 export const HERMES_BIN = "/usr/local/bin/hermes";
 /**
+ * The environment every `hermes` hermeticd runs gets. From v0.23 a launch with
+ * no install stamp adopts the checkout and syncs an environment of its own
+ * (`hermes_bootstrap.py`, `hermes_cli/venv_sync.py`), and as root that leaves
+ * root-owned state in the agent's home. Upstream skips it under this flag; the
+ * stamp is the first guard, this the second. Older Hermes reads the same flag.
+ */
+export const HERMES_CLI_ENV = { HERMES_DISABLE_LAZY_INSTALLS: "1" } as const;
+
+/**
+ * The version a SemVer release tag (`v0.23.1`) names, or `null` for any other
+ * ref. Upstream tags `vX.Y.Z` since v0.21.6, and such a tag can only be that
+ * version; the date tags before it (`v2026.9.24` is 0.21.5), told apart by
+ * their four-digit year, name no version.
+ * From 0.22 the checkout reports whatever version its install stamp says, and
+ * hermeticd writes the stamp from the manifest, so `hermes --version` can no
+ * longer catch a ref and a version that do not belong together: this can.
+ */
+export function hermesTagVersion(ref: string): string | null {
+  return /^v((?:0|[1-9]\d{0,2})\.\d+\.\d+)$/.exec(ref)?.[1] ?? null;
+}
+
+/**
+ * The upstream git ref a Hermes version is checked out from, or `null` when
+ * hermetic does not know one. The inverse of `hermesTagVersion` for SemVer tags
+ * (`0.23.1` is `v0.23.1`, every release from 0.21.6), plus the one date tag a
+ * fleet still runs: `v2026.9.24`, which is 0.21.5. Earlier date-tagged
+ * versions have no ref here, so a row pinned to one cannot be rendered.
+ *
+ * This is what lets an agent row, which stores only `hermes_version`, render
+ * its own ref instead of the build's (`renderAgentRow`).
+ */
+export function hermesRefFor(version: string): string | null {
+  if (version === "0.21.5") return "v2026.9.24";
+  if (hermesTagVersion(`v${version}`) !== version) return null;
+  const [major = 0, minor = 0, patch = 0] = version.split(".").map(Number);
+  return major > 0 || minor > 21 || (minor === 21 && patch >= 6) ? `v${version}` : null;
+}
+/**
  * Where Vite actually writes the dashboard SPA.
  *
  * Not `web/dist`, which is what a reader of `web/` would assume and what
@@ -272,7 +310,16 @@ export function hermesConfigSetArgv(key: string, value: string): string[] {
 
 /** `hermes`, run as the agent's account against the agent's own `$HERMES_HOME`. */
 function hermesArgv(): string[] {
-  return ["runuser", "-u", HERMES_ACCOUNT, "--", "env", `HERMES_HOME=${HERMES_HOME}`, HERMES_BIN];
+  return [
+    "runuser",
+    "-u",
+    HERMES_ACCOUNT,
+    "--",
+    "env",
+    `HERMES_HOME=${HERMES_HOME}`,
+    "HERMES_DISABLE_LAZY_INSTALLS=" + HERMES_CLI_ENV.HERMES_DISABLE_LAZY_INSTALLS,
+    HERMES_BIN,
+  ];
 }
 
 /**

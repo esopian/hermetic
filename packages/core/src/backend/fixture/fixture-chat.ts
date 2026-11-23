@@ -539,6 +539,15 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
       return Promise.resolve(flying.some((session) => session !== null && sessions.includes(session)));
     },
 
+    /** Any turn of this client's own in flight on the box, whichever bot. */
+    boxBusy(box: BoxAddress) {
+      if (!reachable(box.instance)) return Promise.resolve(null);
+      const prefix = flightKey(box.instance, "");
+      return Promise.resolve(
+        [...inflight].some(([key, flying]) => key.startsWith(prefix) && flying.length > 0),
+      );
+    },
+
     /** The fixture box's slash-command catalog (`fixture-chat-command.ts`), the same for every bot. */
     commands(box: BoxAddress) {
       if (!reachable(box.instance)) return Promise.reject(unanswered(box.instance));

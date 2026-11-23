@@ -16,7 +16,7 @@ import {
   MemoryBackend,
   seedFixtureFoundation,
 } from "../src/backend/memory.ts";
-import { createAgentRuntime } from "../src/agents/agent-runtime.ts";
+import { createAgentRuntime, renderAgentRow } from "../src/agents/agent-runtime.ts";
 import { MemoryNotificationStore } from "../src/chat/notifications.ts";
 import type { CoreContext } from "../src/context.ts";
 
@@ -277,4 +277,29 @@ export function installTestStages(names: readonly string[] = ["00-preflight.sh",
       rmSync(dir, { recursive: true, force: true });
     },
   };
+}
+
+/**
+ * Every live row moved onto this build's Hermes pin and re-rendered, its box
+ * reporting the new hash wherever it reported the old one, and running the new
+ * pin wherever it reported a Hermes at all. The fixture seeds rows on older
+ * Hermes versions, which `plan rollout` defers as held (§6.5); a test about
+ * the converge itself starts from rows it may converge.
+ */
+export function onBuildHermes(backend: MemoryBackend): void {
+  const { region, tailnet } = backend.fleetItem!;
+  for (const row of [...backend.agents.values()]) {
+    if (row.status === "destroyed" || row.hermes_version === BUILD_VERSIONS.hermes) continue;
+    const as = { ...row, hermes_version: BUILD_VERSIONS.hermes };
+    const { config_hash, key, tarball } = renderAgentRow(as, region, tailnet);
+    backend.objects.set(key, tarball);
+    backend.agents.set(row.name, {
+      ...as,
+      config_hash,
+      applied_config_hash:
+        row.applied_config_hash === row.config_hash ? config_hash : row.applied_config_hash,
+      resources: { ...row.resources, config_key: key },
+      ...(row.running_hermes_version ? { running_hermes_version: BUILD_VERSIONS.hermes } : {}),
+    });
+  }
 }

@@ -5,6 +5,7 @@
  * listener serialises them as NDJSON (§6.4).
  */
 import type { OpEvent } from "@hermetic/core/schema";
+import { redactValue } from "./redact.ts";
 
 export type Emit = (event: OpEvent) => void;
 
@@ -28,4 +29,30 @@ export function opEvent(
 export function collector(): { emit: Emit; events: OpEvent[] } {
   const events: OpEvent[] = [];
   return { emit: (e) => void events.push(e), events };
+}
+
+/**
+ * The phase of a Hermes swap's milestones (hold, backup, gate, seal, rollback):
+ * the converge loop also writes these to the event log, so `agent history`
+ * carries the timeline and the backup path, not just the outcome.
+ */
+export const HERMES_UPGRADE_PHASE = "hermes-upgrade";
+
+/**
+ * `emit`, plus every `HERMES_UPGRADE_PHASE` event recorded as an `upgrade`
+ * history event, redacted, in emit order, never failing the apply.
+ */
+export function withUpgradeHistory(
+  emit: Emit,
+  record: (action: string, detail: string) => Promise<void>,
+): Emit & { readonly flush: () => Promise<void> } {
+  let queue = Promise.resolve();
+  const wrapped = (event: OpEvent): void => {
+    emit(event);
+    if (event.phase !== HERMES_UPGRADE_PHASE) return;
+    const detail = redactValue(event.message);
+    queue = queue.then(() => record("upgrade", detail)).catch(() => undefined);
+  };
+  // A process about to exit (a stage's `hermeticd apply`) waits for what it queued.
+  return Object.assign(wrapped, { flush: () => queue });
 }

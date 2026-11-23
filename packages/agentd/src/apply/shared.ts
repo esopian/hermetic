@@ -44,6 +44,11 @@ export interface ApplyOptions {
   /** Plan only: probe reality, report what would change, mutate nothing. */
   readonly dryRun?: boolean;
   /**
+   * The re-apply a rollback starts the old Hermes with (`rollBack`): the swap
+   * record stays until that Hermes is up, so this apply neither settles nor rolls it back.
+   */
+  readonly rollingBack?: boolean;
+  /**
    * Resolved bws access token. Present only when `secrets_mode: bitwarden`;
    * `undefined` means the box has no Bitwarden integration at all (§8.1).
    */

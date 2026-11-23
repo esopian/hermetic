@@ -1,8 +1,9 @@
 /**
  * What the memory-service steps share (`memory-service.ts`, `memory-honcho.ts`):
  * how a command runs as the `hermes` account, the network retry budget, the
- * markers that record a finished step, and the pinned git checkout both the
- * Hindsight plugin and the honcho server come from.
+ * markers that record a finished step, the pinned git checkout both the
+ * Hindsight plugin and the honcho server come from, and the managed Python
+ * every server's venv is built on.
  *
  * Split out so the two modules depend on this and not on each other.
  */
@@ -12,6 +13,7 @@ import type { Emit } from "../events.ts";
 import { opEvent } from "../events.ts";
 import type { Host } from "../host.ts";
 import { must } from "../host.ts";
+import { UV_ENV } from "./hermes.ts";
 import { retry } from "./shared.ts";
 
 /** In the service dir: the pin whose packages the venv last received. */
@@ -106,5 +108,33 @@ export async function ensureCheckout(
   );
   if (subdir !== null) await must(host, asHermes(["rm", "-rf", clone]), ACCOUNT_EXEC);
   await writeAsHermes(host, marker, `${sha}\n`);
+  return true;
+}
+
+/**
+ * `uv python install <version>` as root, under `UV_ENV` like Hermes's own
+ * interpreter, after asking uv whether a managed one is already there
+ * (`--managed-python`, so a system interpreter of the same minor never
+ * satisfies it: the venv is built on the managed one). The account cannot
+ * install one itself: `UV_PYTHON_INSTALL_DIR` is root's. The probe is a read,
+ * so a dry run asks it too.
+ */
+export async function ensureManagedPython(
+  host: Host,
+  version: string,
+  provider: string,
+  emit: Emit,
+  dry: boolean,
+): Promise<boolean> {
+  const env = { env: { ...UV_ENV } };
+  const found = await host.exec(["uv", "python", "find", "--managed-python", version], env);
+  if (found.code === 0) return false;
+  emit(
+    opEvent("packages", 0.358, `installing Python ${version} for the ${provider} server`, host.now()),
+  );
+  if (dry) return true;
+  await retry(host, NET_ATTEMPTS, NET_RETRY_MS, () =>
+    must(host, ["uv", "python", "install", version], env),
+  );
   return true;
 }

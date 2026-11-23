@@ -44,7 +44,27 @@ import {
 } from "../packages/core/src/schema/fleet.ts";
 import { FILES_LIMITS } from "../packages/core/src/shared/files.ts";
 import { HERMES_REPO_URL } from "../packages/core/src/release/hermes-mirror.ts";
-import { Agent, PROVIDERS, PROVIDERS_LIST } from "../packages/core/src/schema/agent.ts";
+import {
+  Agent,
+  ApplyFailure,
+  HERMES_OLD_VERSION_RUNNING,
+  HERMES_RESTORE_FAILED,
+  HERMES_ROLLBACK_FAILED,
+  PROVIDERS,
+  PROVIDERS_LIST,
+} from "../packages/core/src/schema/agent.ts";
+import type { ApplyRequest } from "../packages/core/src/schema/agent.ts";
+import { UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { makeAws } from "../packages/agentd/src/aws.ts";
+import { AgentdError } from "../packages/agentd/src/errors.ts";
+import { makeRequestGate } from "../packages/agentd/src/request-gate.ts";
+import { runConvergeLoop } from "../packages/agentd/src/main.ts";
+import { BoxHost } from "../packages/agentd/test/fake-box.ts";
+import {
+  RecordingSink,
+  TEST_AGENTS_TABLE,
+  TEST_EVENTS_TABLE,
+} from "../packages/agentd/test/fixtures.ts";
 import {
   HONCHO_DB_NAME,
   HONCHO_DB_SOCKET_DIR,
@@ -100,6 +120,8 @@ import {
   HERMES_USER_ENV,
 } from "../packages/core/src/schema/hermes.ts";
 import { renderAgentConfig } from "../packages/core/src/render/render.ts";
+import { renderAgentRow } from "../packages/core/src/agents/agent-runtime.ts";
+import { hermesTagVersion } from "../packages/core/src/shared/hermes.ts";
 import type { RenderInput } from "../packages/core/src/render/render.ts";
 import {
   NOVNC_WEB_ROOT,
@@ -596,6 +618,73 @@ describe("seam: the agent config core renders is the one hermeticd applies", () 
     expect(unimplemented).toEqual([]);
     // …and the document actually carries them, rather than deriving them twice.
     expect([...(rendered.manifest.requires ?? [])].sort()).toEqual([...asked].sort());
+  });
+
+  /**
+   * B10: a row pinned to Hermes 0.22 or later asks for the install path that
+   * stops, backs up and swaps safely, and this checkout's hermeticd claims it;
+   * a row still on 0.21 asks nothing new, so an older box keeps applying it.
+   */
+  test("a 0.22+ pin asks for hermes-0.22-install, and hermeticd advertises it", () => {
+    expect(requiredCapabilities(rendered.manifest)).not.toContain("hermes-0.22-install");
+    for (const hermes_version of ["0.22.0", "0.23.1"]) {
+      const next = renderAgentConfig({
+        name: "atlas",
+        size: "small",
+        provider: "anthropic",
+        secrets_mode: "none",
+        hermes_version,
+        hermes_ref: "v2026.8.31",
+        chrome_ref: CHROME_REF,
+        region: "us-east-1",
+        tailnet: "tail0.ts.net",
+        hermes: { model: "claude-sonnet-5" },
+      } as unknown as RenderInput);
+      expect([...(next.manifest.requires ?? [])]).toContain("hermes-0.22-install");
+      expect(parseManifest(overTheWire(next.manifest)).requires).toContain("hermes-0.22-install");
+    }
+    expect(HERMETICD_CAPABILITIES.has("hermes-0.22-install")).toBe(true);
+  });
+
+  /**
+   * I7, the laptop half: a row still on 0.21.5, rendered by this build, names
+   * 0.21.5's own date tag rather than this build's ref, asks nothing of the
+   * 0.22 install path, and crosses the wire to a box that reads it as such —
+   * the tag names no SemVer version, so the box's ref/version cross-check has
+   * nothing to refuse. Its units are byte for byte what a direct render of the
+   * same pin and ref produces.
+   */
+  test("a 0.21.5 row renders its own ref, and the box reads it as 0.21.5", () => {
+    const row = {
+      name: "atlas",
+      status: "ready",
+      size: "small",
+      provider: "anthropic",
+      secrets_mode: "none",
+      hermes_version: "0.21.5",
+      hermes: { model: "claude-sonnet-5" },
+      resources: { ssm_paths: [] },
+    } as unknown as Agent;
+    const old = renderAgentRow(row, "us-east-1", "tail0.ts.net");
+    expect([old.manifest.hermes_version, old.manifest.hermes_ref]).toEqual(["0.21.5", "v2026.9.24"]);
+    expect(old.manifest.requires ?? []).not.toContain("hermes-0.22-install");
+    const parsed = parseManifest(overTheWire(old.manifest));
+    expect([parsed.hermes_version, parsed.hermes_ref]).toEqual(["0.21.5", "v2026.9.24"]);
+    expect(hermesTagVersion(parsed.hermes_ref)).toBeNull();
+    const direct = renderAgentConfig({
+      name: "atlas",
+      size: "small",
+      provider: "anthropic",
+      secrets_mode: "none",
+      hermes_version: "0.21.5",
+      hermes_ref: "v2026.9.24",
+      chrome_ref: CHROME_REF,
+      region: "us-east-1",
+      tailnet: "tail0.ts.net",
+      hermes: { model: "claude-sonnet-5" },
+    } as unknown as RenderInput);
+    const units = (m: typeof old.manifest) => m.files.filter((f) => f.path.startsWith("/etc/systemd/"));
+    expect(units(old.manifest)).toEqual(units(direct.manifest));
   });
 
   /**
@@ -1786,5 +1875,97 @@ describe("the power halt route", () => {
     expect(PowerHaltResult.parse(result)).toEqual({
       halted: [HERMES_GATEWAY_UNIT, HERMES_DASHBOARD_UNIT],
     });
+  });
+});
+
+/**
+ * §6.5's failure report: hermeticd writes `apply_failure` on its own row when a
+ * converge fails, and `upgrade --now` reads it to decide whether to put the
+ * previous Hermes pin back. The box names the attribute and the code; core
+ * names the shape and which codes mean "the checkout was never touched".
+ */
+describe("seam: the converge failure the box reports is the one upgrade reads", () => {
+  const request: ApplyRequest = {
+    id: "cafef00d-abc",
+    config_hash: "cafef00d",
+    issued_at: "2026-11-15T00:00:00.000Z",
+    issued_by: "operator",
+  };
+
+  async function reported(error: Error): Promise<UpdateCommand> {
+    const ddb = new RecordingSink();
+    const aws = makeAws({
+      ddb,
+      ssm: new RecordingSink(),
+      s3: new RecordingSink(),
+      agentsTable: TEST_AGENTS_TABLE,
+      eventsTable: TEST_EVENTS_TABLE,
+      now: () => new Date("2026-11-15T00:01:00.000Z"),
+    });
+    const gate = makeRequestGate<ApplyRequest>();
+    gate.onRequest(request);
+    const control = new AbortController();
+    // The wiring `convergeLoop` (daemon.ts) gives the loop.
+    const running = runConvergeLoop({
+      host: new BoxHost(),
+      gate,
+      signal: control.signal,
+      run: () => Promise.reject(error),
+      record: async () => {},
+      reportFailure: async (failed, code) => {
+        await aws.reportApplyFailure("atlas", {
+          request_id: failed.id,
+          config_hash: failed.config_hash,
+          code,
+        });
+      },
+      log: () => {},
+    });
+    await Promise.resolve();
+    control.abort();
+    await running;
+    const [write] = ddb.commandCalls(UpdateCommand);
+    if (write === undefined) throw new Error("the box wrote no failure report");
+    return write;
+  }
+
+  test("the attribute is a field of the row, and its value parses as ApplyFailure", async () => {
+    const write = await reported(new AgentdError("HERMES_BACKUP_FAILED", "copy did not validate"));
+    const names = write.input.ExpressionAttributeNames ?? {};
+    const attribute = names["#af"];
+    expect(attribute).toBe("apply_failure");
+    expect(Object.keys(Agent.shape)).toContain(attribute ?? "");
+    const value = ApplyFailure.parse(write.input.ExpressionAttributeValues?.[":af"]);
+    expect(value).toEqual({
+      request_id: request.id,
+      config_hash: request.config_hash,
+      code: "HERMES_BACKUP_FAILED",
+      at: "2026-11-15T00:01:00.000Z",
+    });
+    expect(HERMES_OLD_VERSION_RUNNING).toContain(value.code);
+  });
+
+  test("a swap aborted before its checkout moved reads as the old version still running", async () => {
+    const write = await reported(new AgentdError("HERMES_SWAP_ABORTED", "pre-fetch failed"));
+    const value = ApplyFailure.parse(write.input.ExpressionAttributeValues?.[":af"]);
+    expect(value.code).toBe("HERMES_SWAP_ABORTED");
+    expect(HERMES_OLD_VERSION_RUNNING).toContain(value.code);
+  });
+
+  test("an error that is not hermeticd's reads as INTERNAL, which keeps the new pin", async () => {
+    const write = await reported(new Error("socket hang up"));
+    const value = ApplyFailure.parse(write.input.ExpressionAttributeValues?.[":af"]);
+    expect(value.code).toBe("INTERNAL");
+    expect(HERMES_OLD_VERSION_RUNNING).not.toContain(value.code);
+  });
+
+  test("every Hermes failure code upgrade reads is one hermeticd can raise", () => {
+    const errors = readFileSync(join(import.meta.dir, "../packages/agentd/src/errors.ts"), "utf8");
+    const missing = [
+      ...HERMES_OLD_VERSION_RUNNING,
+      HERMES_ROLLBACK_FAILED,
+      HERMES_RESTORE_FAILED,
+    ].filter((code) => !errors.includes(`| "${code}"`));
+    expect(missing).toEqual([]);
   });
 });

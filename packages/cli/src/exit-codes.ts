@@ -135,6 +135,12 @@ export const EXIT_CODES: Readonly<Record<ErrorCode, number>> = {
    * update` is the fix.
    */
   BROWSER_NEEDS_FOUNDATION_UPDATE: 7,
+  /**
+   * The agent is held on another Hermes than this build's pin (§6.5): a
+   * conflict with the row's state — nothing was written, and `hermetic upgrade
+   * --hermes <pin> <name> --now` is the fix.
+   */
+  HERMES_UPGRADE_REQUIRED: 7,
   /** The CDN served something other than the pinned build: a precondition of the environment. */
   BROWSER_MIRROR_MISMATCH: 9,
   /**
@@ -181,6 +187,8 @@ export const EXIT_CODES: Readonly<Record<ErrorCode, number>> = {
   /** The re-network's change set failed the same way, and is the same kind of failure (§5). */
   NETWORK_UPDATE_FAILED: EXIT_FAILURE,
   SNAPSHOTS_UPDATE_FAILED: EXIT_FAILURE,
+  HERMES_UPGRADE_FAILED: EXIT_FAILURE,
+  HERMES_UPGRADE_ROLLED_BACK: EXIT_FAILURE,
   ABORTED: EXIT_ABORTED,
   INTERNAL: EXIT_FAILURE,
 } as const;

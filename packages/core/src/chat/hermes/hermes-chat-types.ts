@@ -299,6 +299,12 @@ export interface HermesChatClient {
     opts?: HermesChatOptions,
   ): Promise<boolean | null>;
   /**
+   * `busy` across every session live on the box, whichever client started it:
+   * what `upgrade --now` waits on before Hermes is stopped. Optional: without
+   * it the box can never be shown idle, so the wait runs out unless forced.
+   */
+  boxBusy?(box: BoxAddress, opts?: HermesChatOptions): Promise<boolean | null>;
+  /**
    * The slash commands the gateway offers this bot (`hermes-chat-commands.ts`),
    * read against `session` while that conversation is live there. Optional: a
    * client without it has no catalog to give, and `chat.commands` says so.
@@ -498,6 +504,24 @@ export const CHAT_ERROR_CODES = {
   NO_SLOT: "CHAT_NO_SLOT",
   /** The turn itself failed on the box — the model refused, or the agent errored. */
   TURN_FAILED: "CHAT_TURN_FAILED",
+  /**
+   * The gateway owns this chat and is running a turn in it, and refused the send
+   * (`4090` `SESSION_OWNER_BUSY`): nothing was sent, so sending again once that
+   * turn ends is safe. A frame code only, never an `ErrorCode`.
+   */
+  SESSION_BUSY: "CHAT_SESSION_BUSY",
+  /**
+   * The chat belongs to another gateway session and refused the send (`4090`
+   * `SESSION_NOT_OWNED`): nothing was sent, and waiting will not help. The bare
+   * upstream string, because the recovery tables key on it. A frame code only.
+   */
+  SESSION_NOT_OWNED: "SESSION_NOT_OWNED",
+  /**
+   * The gateway did not confirm a send it forwarded to the chat's owner (`4090`
+   * `SESSION_OWNER_UNCONFIRMED`): it may already be queued there, so a resend
+   * could run twice. Check the transcript first. A frame code only.
+   */
+  SEND_UNCERTAIN: "CHAT_SEND_UNCERTAIN",
 } as const;
 
 export const chatError = (code: ErrorCode, message: string, details?: Record<string, unknown>) =>

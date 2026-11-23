@@ -42,7 +42,7 @@ async function openInjected(): Promise<HTMLElement> {
   await harness.ctx.chatOwner.sync();
   gotoHash(`#chat/${FIXTURE.sseAgent}/default?session=sx-kestrel-injected`);
   mountPortal();
-  await waitFor(() => expect(row(52)?.querySelector(".ch-failure")).toBeTruthy(), {
+  await waitFor(() => expect(row(54)?.querySelector(".ch-failure")).toBeTruthy(), {
     timeout: 4_000,
   });
   return document.querySelector<HTMLElement>(".ch-log")!;
@@ -157,6 +157,14 @@ test("a failed turn is the failure card, not the bot speaking", async () => {
   const failed = row(52)!;
   expect(failed.querySelector(".ch-failure")).not.toBeNull();
   expect(failed.querySelector(".ch-plain-text, .ch-md")).toBeNull();
-  const buttons = [...failed.querySelectorAll(".ch-failure button")].map((b) => b.textContent);
+  // Retry belongs to the newest failed turn only.
+  const buttons = [...row(54)!.querySelectorAll(".ch-failure button")].map((b) => b.textContent);
   expect(buttons).toEqual(expect.arrayContaining(["Retry", "Copy details"]));
+});
+
+test("Hermes v0.23.1's reworded network-cut nudge and delivery-interrupted copy keep their shapes", async () => {
+  await openInjected();
+  expect(row(53)!.closest(".ch-ev")).not.toBeNull();
+  expect(row(53)!.textContent).toContain("network cut");
+  expect(row(54)!.querySelector(".ch-failure")).not.toBeNull();
 });

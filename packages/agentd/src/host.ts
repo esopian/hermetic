@@ -46,6 +46,12 @@ export interface FileStat {
   readonly isDirectory: boolean;
   /** Only ever true from `lstat`; `stat` follows the link and reports its target. */
   readonly isSymlink: boolean;
+  /** A regular file: not a directory, symlink, socket, FIFO or device. */
+  readonly isFile: boolean;
+  readonly uid: number;
+  readonly gid: number;
+  /** Last modification, ms since the epoch; absent where a fake host keeps none. */
+  readonly mtimeMs?: number;
 }
 
 /**
@@ -71,6 +77,11 @@ export interface Host {
   readBytes(path: string): Promise<Uint8Array | null>;
   writeFile(path: string, content: string, mode?: string): Promise<void>;
   writeBytes(path: string, content: Uint8Array, mode?: string): Promise<void>;
+  /**
+   * `writeBytes` without holding the whole file: staged and renamed the same
+   * way, so `chunks` throwing leaves nothing at `path`.
+   */
+  writeChunks(path: string, chunks: AsyncIterable<Uint8Array>, mode?: string): Promise<void>;
   stat(path: string): Promise<FileStat | null>;
   /**
    * `stat` that does not follow a symlink. The difference matters exactly where
@@ -79,6 +90,16 @@ export interface Host {
    */
   lstat(path: string): Promise<FileStat | null>;
   chmod(path: string, mode: string): Promise<void>;
+  /** `lchown`: a symlink at `path` is re-owned itself, never followed. */
+  chown(path: string, uid: number, gid: number): Promise<void>;
+  /**
+   * Copy a regular file, streamed, to a new file at mode 0600 owned by us, and
+   * sync it. Never follows a symlink at either end, refuses anything but a
+   * regular file at `from`, and fails if anything is already at `to`.
+   */
+  copyFile(from: string, to: string): Promise<void>;
+  /** Up to `length` leading bytes of a regular file; `null` when absent. Never follows a symlink. */
+  readPrefix(path: string, length: number): Promise<Uint8Array | null>;
   mkdir(path: string, mode?: string): Promise<void>;
   rename(path: string, to: string): Promise<void>;
   /**
@@ -470,7 +491,7 @@ class EventQueue implements AsyncIterable<ExecEvent> {
  */
 async function writeAtomically(
   path: string,
-  content: string | Uint8Array,
+  content: string | Uint8Array | AsyncIterable<Uint8Array>,
   mode?: string,
 ): Promise<void> {
   const fs = await import("node:fs/promises");
@@ -501,7 +522,15 @@ async function writeAtomically(
      */
     const handle = await fs.open(staged, "wx", modeBits ?? 0o600);
     try {
-      await handle.writeFile(content);
+      if (typeof content === "string" || content instanceof Uint8Array) {
+        await handle.writeFile(content);
+      } else {
+        for await (const chunk of content) {
+          for (let at = 0; at < chunk.byteLength; ) {
+            at += (await handle.write(chunk, at)).bytesWritten;
+          }
+        }
+      }
       // Ordered before the rename: a rename that lands ahead of the data is a
       // file that exists, is the right size, and is full of zeroes after a
       // power cut — the exact failure staging exists to prevent.
@@ -772,6 +801,10 @@ export function realHost(): Host {
       await writeAtomically(path, content, mode);
     },
 
+    async writeChunks(path, chunks, mode) {
+      await writeAtomically(path, chunks, mode);
+    },
+
     async appendFile(path, content, mode) {
       const { appendFile } = await import("node:fs/promises");
       await appendFile(path, content, mode ? { mode: Number.parseInt(mode, 8) } : undefined);
@@ -791,7 +824,16 @@ export function realHost(): Host {
       const { stat } = await import("node:fs/promises");
       try {
         const s = await stat(path);
-        return { mode: octal(s.mode), size: s.size, isDirectory: s.isDirectory(), isSymlink: false };
+        return {
+          mode: octal(s.mode),
+          size: s.size,
+          isDirectory: s.isDirectory(),
+          isSymlink: false,
+          isFile: s.isFile(),
+          uid: s.uid,
+          gid: s.gid,
+          mtimeMs: s.mtimeMs,
+        };
       } catch {
         return null;
       }
@@ -806,6 +848,10 @@ export function realHost(): Host {
           size: s.size,
           isDirectory: s.isDirectory(),
           isSymlink: s.isSymbolicLink(),
+          isFile: s.isFile(),
+          uid: s.uid,
+          gid: s.gid,
+          mtimeMs: s.mtimeMs,
         };
       } catch {
         return null;
@@ -815,6 +861,63 @@ export function realHost(): Host {
     async chmod(path, mode) {
       const { chmod } = await import("node:fs/promises");
       await chmod(path, Number.parseInt(mode, 8));
+    },
+
+    async chown(path, uid, gid) {
+      const { lchown } = await import("node:fs/promises");
+      await lchown(path, uid, gid);
+    },
+
+    // `O_NOFOLLOW` on both ends and `O_EXCL` on the target: root copying out of
+    // a tree an account owns must not be redirected by a symlink planted there.
+    // `O_NONBLOCK` so a FIFO at `from` fails the regular-file check instead of
+    // hanging the open.
+    async copyFile(from, to) {
+      const { open } = await import("node:fs/promises");
+      const { constants: c } = await import("node:fs");
+      const src = await open(from, c.O_RDONLY | c.O_NOFOLLOW | c.O_NONBLOCK);
+      try {
+        if (!(await src.stat()).isFile()) {
+          throw new AgentdError("INTERNAL", `refusing to copy ${from}: not a regular file`, {
+            path: from,
+          });
+        }
+        const dst = await open(to, c.O_WRONLY | c.O_CREAT | c.O_EXCL | c.O_NOFOLLOW, 0o600);
+        try {
+          const buf = Buffer.allocUnsafe(1 << 20);
+          for (;;) {
+            const { bytesRead } = await src.read(buf, 0, buf.length, null);
+            if (bytesRead === 0) break;
+            for (let off = 0; off < bytesRead; ) {
+              off += (await dst.write(buf, off, bytesRead - off)).bytesWritten;
+            }
+          }
+          await dst.sync();
+        } finally {
+          await dst.close();
+        }
+      } finally {
+        await src.close();
+      }
+    },
+
+    async readPrefix(path, length) {
+      const { open } = await import("node:fs/promises");
+      const { constants: c } = await import("node:fs");
+      let handle: Awaited<ReturnType<typeof open>>;
+      try {
+        handle = await open(path, c.O_RDONLY | c.O_NOFOLLOW | c.O_NONBLOCK);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw error;
+      }
+      try {
+        const buf = Buffer.alloc(length);
+        const { bytesRead } = await handle.read(buf, 0, length, 0);
+        return new Uint8Array(buf.buffer, buf.byteOffset, bytesRead);
+      } finally {
+        await handle.close();
+      }
     },
 
     async mkdir(path, mode) {

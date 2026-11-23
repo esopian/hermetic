@@ -154,6 +154,31 @@ describe("one installer at a time, across processes (§6.5)", () => {
     expect(await readInstallLock(host)).toMatchObject({ holder: "bootstrap", pid: 4242 });
   });
 
+  test("two takes in one process at once: one holds, the other is refused cleanly, and the release frees it", async () => {
+    const host = box();
+    // The first take stalls between staging its record and linking it, and a second runs whole meanwhile.
+    const link = host.link.bind(host);
+    let stalled: (() => void) | null = null;
+    host.link = async (path, to) => {
+      if (stalled === null) await new Promise<void>((resume) => (stalled = resume));
+      return link(path, to);
+    };
+    const first = takeInstallLock(host, "apply", { pid: 77 });
+    for (let i = 0; i < 100 && stalled === null; i++) await Promise.resolve();
+    expect(stalled).not.toBeNull();
+    host.advance(1_000);
+
+    const second = await takeInstallLock(host, "update", { pid: 77 });
+    (stalled as (() => void) | null)?.();
+
+    expect(second).not.toBeNull();
+    expect(await first).toBeNull();
+    expect(await readInstallLock(host)).toEqual(second?.record ?? null);
+    await second?.release();
+    expect(await readInstallLock(host)).toBeNull();
+    expect([...host.files.keys()].filter((k) => k.startsWith(`${INSTALL_LOCK_PATH}.`))).toEqual([]);
+  });
+
   test("the waiter takes the lock as soon as it is free", async () => {
     const host = box();
     seedLock(host, { holder: "update", pid: 4242 });

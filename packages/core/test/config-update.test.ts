@@ -41,7 +41,12 @@ function fleet(git: () => GitBuildInfo | null = () => null) {
    */
   for (const row of [...backend.agents.values()]) {
     if (row.status === "destroyed") continue;
-    const current = { ...row, hermes_version: BUILD_VERSIONS.hermes, pending: null } as Agent;
+    const current = {
+      ...row,
+      hermes_version: BUILD_VERSIONS.hermes,
+      ...(row.running_hermes_version ? { running_hermes_version: BUILD_VERSIONS.hermes } : {}),
+      pending: null,
+    } as Agent;
     const hash = render(current).config_hash;
     backend.agents.set(row.name, { ...current, config_hash: hash, applied_config_hash: hash });
   }
@@ -284,5 +289,188 @@ describe("foundation update ends with the config phase", () => {
     expect(events.at(-1)!.phase).toBe("done");
     expect(backend.fleetItem!.lock ?? null).toBeNull();
     expect(backend.fleetItem!.published_by?.hermetic_version).toBe(HERMETIC_VERSION);
+  });
+});
+
+/**
+ * Canary qa23-up, 2026-11-17: a box created by a build pinning 0.21.5 (date tag
+ * `v2026.9.24`) was upgraded to this build's Hermes with `--now`, the laptop
+ * stopped waiting, and the box rolled back. The next `artifacts push` put the
+ * pin back and then re-rendered it: this build's ref with the old version, so
+ * the box swapped to the new Hermes labelled as the old one. Every path that
+ * settles that rollback must leave the row exactly as it was before the
+ * upgrade — pin, config and key, so the old ref — and render nothing for it.
+ */
+describe("a rollback the laptop did not wait for", () => {
+  const OLD_VERSION = "0.21.5";
+  const OLD_HASH = "884309be9c2d8083";
+
+  /**
+   * `boxReports`: the hash the box reports once it rolled back (the old one by
+   * default). `noPrevious`: the row named no config before the upgrade.
+   */
+  async function rolledBackUnwatched(opts: { boxReports?: string; noPrevious?: boolean } = {}) {
+    const f = fleet();
+    const { backend, hermetic, render } = f;
+    const name = ready(backend)[0]!;
+    const row = backend.agents.get(name)!;
+    // What the older build uploaded: its own pin and its own ref. `requires` as
+    // this build's, so the push does not defer the box for capability reasons.
+    const old: AgentConfig = {
+      ...render(row).manifest,
+      hermes_version: OLD_VERSION,
+      hermes_ref: "v2026.9.24",
+    };
+    const key = `config/${name}/${OLD_HASH}.tgz`;
+    backend.objects.set(
+      key,
+      tarGz([{ path: "manifest.json", mode: "0644", content: JSON.stringify(old) }]),
+    );
+    const { config_key: _, ...resources } = row.resources;
+    backend.agents.set(
+      name,
+      opts.noPrevious === true
+        ? {
+            ...row,
+            hermes_version: OLD_VERSION,
+            running_hermes_version: OLD_VERSION,
+            config_hash: null,
+            applied_config_hash: null,
+            resources,
+          }
+        : {
+            ...row,
+            hermes_version: OLD_VERSION,
+            running_hermes_version: OLD_VERSION,
+            config_hash: OLD_HASH,
+            applied_config_hash: OLD_HASH,
+            resources: { ...row.resources, config_key: key },
+          },
+    );
+
+    // The laptop stops waiting before the box answers.
+    backend.simulateConverge = false;
+    const up = await drain(
+      hermetic.upgrade({ name, hermes: BUILD_VERSIONS.hermes, now: true, force: true }),
+    );
+    expect(up.some((e) => e.phase === `${name}:unconverged`)).toBe(true);
+    const pinned = backend.agents.get(name)!;
+    expect(pinned.hermes_version).toBe(BUILD_VERSIONS.hermes);
+    const req = pinned.apply_request!;
+    backend.agents.set(name, {
+      ...pinned,
+      // The box rolled back, so its dashboard reports the old Hermes again.
+      running_hermes_version: OLD_VERSION,
+      ...(opts.boxReports === undefined ? {} : { applied_config_hash: opts.boxReports }),
+      apply_failure: {
+        request_id: req.id,
+        config_hash: req.config_hash,
+        code: "HERMES_UPGRADE_ROLLED_BACK",
+        at: "2026-11-17T06:09:55.000Z",
+      },
+    });
+    // Eleven minutes later, as on the canary: a request id carries the clock.
+    backend.advance(11 * 60_000);
+    backend.simulateConverge = true;
+    const uploaded = new Set([...backend.objects.keys()].filter((k) => k.startsWith("config/")));
+    return { ...f, name, key, uploaded };
+  }
+
+  function expectPutBack(f: Awaited<ReturnType<typeof rolledBackUnwatched>>, events: OpEvent[]) {
+    const row = f.backend.agents.get(f.name)!;
+    expect(row.hermes_version).toBe(OLD_VERSION);
+    expect(row.config_hash).toBe(OLD_HASH);
+    expect(row.resources.config_key).toBe(f.key);
+    // The box is asked for the config it ran before, and nothing else.
+    expect(row.apply_request?.config_hash).toBe(OLD_HASH);
+    expect(row.applied_config_hash).toBe(OLD_HASH);
+    const fresh = [...f.backend.objects.keys()].filter(
+      (k) => k.startsWith("config/") && !f.uploaded.has(k),
+    );
+    expect(fresh).toEqual([]);
+    const asks = events.filter((e) => e.message.includes(`${f.name} asked to apply`));
+    expect(asks.filter((e) => !e.message.endsWith(OLD_HASH))).toEqual([]);
+  }
+
+  test("artifacts push puts the old pin back and asks for no swap", async () => {
+    const f = await rolledBackUnwatched();
+    const events = await drain(f.hermetic.artifacts.push({}));
+    expectPutBack(f, events);
+    expect(config(events).some((e) => e.message.includes(`pin back to hermes ${OLD_VERSION}`))).toBe(
+      true,
+    );
+  });
+
+  test("plan rollout puts the old pin back and asks for no swap", async () => {
+    const f = await rolledBackUnwatched();
+    const plan = await f.hermetic.plan.rollout({ agents: [f.name] });
+    const events = await drain(f.hermetic.apply({ plan, yes: true }));
+    expectPutBack(f, events);
+  });
+
+  test("a box reporting another config is asked once for the old one, and waited on", async () => {
+    const f = await rolledBackUnwatched({ boxReports: "0bad0bad0bad0bad" });
+    const events = await drain(f.hermetic.artifacts.push({}));
+    expectPutBack(f, events);
+    const asks = events.filter((e) => e.message.includes(`${f.name} asked to apply`));
+    expect(asks.map((e) => e.message)).toEqual([`${f.name} asked to apply ${OLD_HASH}`]);
+    expect(events.some((e) => e.message === `${f.name} is running ${OLD_HASH}`)).toBe(true);
+    expect(config(events).some((e) => e.message.includes("1 converged"))).toBe(true);
+  });
+
+  test("a second rollout of the restored row renders it on its own Hermes ref", async () => {
+    const f = await rolledBackUnwatched();
+    await drain(f.hermetic.artifacts.push({}));
+    const restored = f.backend.agents.get(f.name)!;
+
+    const plan = await f.hermetic.plan.rollout({ agents: [f.name] });
+    expect(plan.steps[0]!.description).not.toContain("held on Hermes");
+    await drain(f.hermetic.apply({ plan, yes: true }));
+
+    const row = f.backend.agents.get(f.name)!;
+    expect(row.hermes_version).toBe(OLD_VERSION);
+    expect(row.config_hash).not.toBe(restored.config_hash);
+    const next = f.render(row).manifest;
+    expect([next.hermes_version, next.hermes_ref]).toEqual([OLD_VERSION, "v2026.9.24"]);
+    expect(next.requires ?? []).not.toContain("hermes-0.22-install");
+    // A config change on the Hermes it runs: no swap, so no pin to put back.
+    expect(row.apply_request?.config_hash).toBe(row.config_hash!);
+    expect(row.apply_request?.upgrade_from).toBeUndefined();
+  });
+
+  test("a row that named no config before the upgrade is not called current", async () => {
+    const f = await rolledBackUnwatched({ noPrevious: true });
+    const plan = await f.hermetic.plan.rollout({ agents: [f.name] });
+    const events = await drain(f.hermetic.apply({ plan, yes: true }));
+
+    const row = f.backend.agents.get(f.name)!;
+    expect(row.hermes_version).toBe(OLD_VERSION);
+    expect(row.config_hash ?? null).toBeNull();
+    const skipped = events.find((e) => e.phase === `${f.name}:skipped`);
+    expect(skipped?.level).toBe("warn");
+    expect(skipped?.message).toContain(`hermetic upgrade --hermes ${BUILD_VERSIONS.hermes} ${f.name}`);
+    expect(events.some((e) => e.phase === `${f.name}:current`)).toBe(false);
+    expect(
+      [...f.backend.objects.keys()].filter((k) => k.startsWith("config/") && !f.uploaded.has(k)),
+    ).toEqual([]);
+  });
+
+  test("upgrade again starts from the old pin and renders the new one whole", async () => {
+    const f = await rolledBackUnwatched();
+    await drain(
+      f.hermetic.upgrade({ name: f.name, hermes: BUILD_VERSIONS.hermes, now: true, force: true }),
+    );
+    const row = f.backend.agents.get(f.name)!;
+    expect(row.apply_request?.upgrade_from).toEqual({
+      hermes_version: OLD_VERSION,
+      config_hash: OLD_HASH,
+      config_key: f.key,
+    });
+    const next = f.render(row).manifest;
+    expect(row.config_hash).toBe(f.render(row).config_hash);
+    expect([next.hermes_version, next.hermes_ref]).toEqual([
+      BUILD_VERSIONS.hermes,
+      BUILD_VERSIONS.hermes_ref,
+    ]);
   });
 });

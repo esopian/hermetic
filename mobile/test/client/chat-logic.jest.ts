@@ -108,6 +108,8 @@ describe("failures", () => {
   test("copy per code, with the code verbatim for an unknown one", () => {
     expect(failureCopy("RATE_LIMITED").tone).toBe("warn");
     expect(failureCopy("CHAT_UNREACHABLE").head).toBe("disconnected");
+    expect(failureCopy("SESSION_NOT_OWNED")).toMatchObject({ tone: "warn", head: "owned elsewhere" });
+    expect(failureCopy("CHAT_SESSION_BUSY").head).toBe("busy");
     expect(failureCopy("ZZZ", "the box said so")).toMatchObject({
       right: "ZZZ",
       detail: "the box said so",
@@ -123,6 +125,11 @@ describe("failures", () => {
 
   test("recovery plans", () => {
     expect(recoveryPlan({ code: "RATE_LIMITED", message: "" }).retry).toBe(true);
+    // A send the gateway may already have queued is never offered as a Retry.
+    expect(recoveryPlan({ code: "CHAT_SEND_UNCERTAIN", message: "" })).toMatchObject({
+      retry: false,
+      editMessage: true,
+    });
     const overflow = recoveryPlan({
       code: "X",
       message: "",

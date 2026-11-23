@@ -12,8 +12,10 @@ import {
   HERMES_NOFILE_LIMIT,
   HERMES_SEED_CONFIG,
   HERMES_USER_CONFIG,
+  MEMORY_PROVIDERS,
   PROVIDERS,
   browserIdentities,
+  compareVersions,
   hermesMemoryProviderName,
   hermesConfigGetArgv,
   hermesConfigLeaves,
@@ -312,7 +314,36 @@ export function hermesManagedConfig(input: RenderInput): string {
    * agent's own `plugins.enabled` — Hermes does not merge the two — so a plugin
    * the agent enabled for itself is off while this list is managed.
    */
-  lines.push("plugins:", "  enabled:", "    - " + yamlString(HERMES_FILES_PLUGIN));
+  lines.push(
+    "plugins:",
+    "  enabled:",
+    "    - " + yamlString(HERMES_FILES_PLUGIN),
+    // From 0.22 the gateway polls the plugin catalog daily; 0 turns it off
+    // (`plugins_cadence.py:101-112`). Inert before 0.22.
+    "  auto_update_check_hours: 0",
+  );
+  // The catalog holographic plugin (0.26.5) stopped copying built-in memory adds into its fact store by
+  // default; this keeps what the bundled provider on a 0.21 box did. Keyed on the row's pin.
+  const holographicMin = MEMORY_PROVIDERS.holographic.plugin?.hermes_min;
+  if (
+    input.memory?.provider === "holographic" &&
+    holographicMin &&
+    compareVersions(input.hermes_version, holographicMin) >= 0
+  ) {
+    lines.push("  hermes-memory-store:", "    mirror_memory_writes: true");
+  }
+
+  /**
+   * Never delete chat history. 0.21 prunes ended sessions after 90 days by
+   * default, canonical and archived chats included (`hermes_state_maintenance.py`);
+   * 0.22 defaults to off but asks once when the disk runs low, and a managed
+   * value stops that question. On every pin, because 0.21 is the one deleting.
+   */
+  lines.push("sessions:", "  auto_prune: false");
+
+  // From 0.22 the Webapp's default port is 9120, the box's nginx port
+  // (`render-system.ts`); pinned off so enabling it cannot collide. Inert before 0.22.
+  lines.push("webapp:", "  enabled: false");
 
   /**
    * Outbound media (`gateway/media_policy.py`). `strict` narrows which files a

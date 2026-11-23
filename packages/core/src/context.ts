@@ -92,6 +92,7 @@ export interface CoreContext {
 
   /* the render every config bundle goes through (§6.4) */
   renderFor: AgentRuntime["renderFor"];
+  assertRenderableHermes: AgentRuntime["assertRenderableHermes"];
   ensureConfig: AgentRuntime["ensureConfig"];
   assertCanApply: AgentRuntime["assertCanApply"];
   assertReleaseCanApply: AgentRuntime["assertReleaseCanApply"];

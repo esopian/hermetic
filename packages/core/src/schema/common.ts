@@ -68,3 +68,10 @@ export type ProfileId = z.infer<typeof ProfileId>;
 export const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,30}$/;
 export const SecretSlug = z.string().regex(SLUG_RE);
 export type SecretSlug = z.infer<typeof SecretSlug>;
+
+/**
+ * A conversation's id as a chat request names it, in every input that takes
+ * one. Never blank: an empty id read as "the canonical conversation" in some
+ * places, and a whitespace one reached the box as a thread nobody has.
+ */
+export const SessionRef = z.string().regex(/\S/, "a session id cannot be blank");

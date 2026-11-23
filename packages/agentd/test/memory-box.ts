@@ -2,7 +2,13 @@
  * `MemoryBox`: the stateful box the memory-provider suites run apply against
  * (`memory-provider.test.ts`, `memory-honcho.test.ts`).
  */
-import { MEMORY_SERVICES, hermesPluginDir, memoryServiceDir } from "@hermetic/core/shared";
+import {
+  MEMORY_PROVIDER_IDS,
+  MEMORY_PROVIDERS,
+  hermesMemoryProviderName,
+  hermesPluginDir,
+  memoryServiceDir,
+} from "@hermetic/core/shared";
 import { importNameOf } from "../src/apply/index.ts";
 import { HERMES_VENV_DIR } from "../src/apply/hermes.ts";
 import type { ExecOptions, ExecResult, FileStat } from "../src/host.ts";
@@ -10,7 +16,15 @@ import { BoxHost } from "./fake-box.ts";
 import { fail, ok } from "./fake-host.ts";
 
 const HERMES_PYTHON = `${HERMES_VENV_DIR}/bin/python`;
-const PLUGIN = MEMORY_SERVICES.hindsight.plugin!;
+/** Each catalog plugin's clone dir (`ensureCheckout`'s sibling dot-dir), by path. */
+const pluginClones = new Map(
+  MEMORY_PROVIDER_IDS.flatMap((id) => {
+    const plugin = MEMORY_PROVIDERS[id].plugin;
+    const name = hermesMemoryProviderName(id);
+    const clone = `${hermesPluginDir("")}.${name}.clone`;
+    return plugin ? [[clone, { clone, name, subdir: plugin.subdir }] as const] : [];
+  }),
+);
 const PRISM_PYTHON = `${memoryServiceDir("prism")}/venv/bin/python`;
 
 /** A downloaded file this fake stands in for: its claimed digest and size, not its bytes. */
@@ -40,6 +54,13 @@ export class MemoryBox extends BoxHost {
   readonly dirOwners = new Map<string, string>();
   /** prism's warm-up fails every attempt (a download that keeps failing), leaving partial caches. */
   warmFails = false;
+
+  /** Upstream's `v<version>` now reports `version`; returns the manifest fields that pin it. */
+  hermes(version: string): { hermes_version: string; hermes_ref: string } {
+    const ref = `v${version}`;
+    this.hermesVersionByRef.set(ref, version);
+    return { hermes_version: version, hermes_ref: ref };
+  }
 
   override async stat(path: string): Promise<FileStat | null> {
     const stat = await super.stat(path);
@@ -167,17 +188,19 @@ export class MemoryBox extends BoxHost {
       );
       return ok();
     }
-    // The plugin's sparse clone; Hermes's own checkout stays BoxHost's.
-    const clone = `${hermesPluginDir("")}.hindsight.clone`;
-    if (bin === "git" && args[0] === "clone" && args.at(-1) === clone) {
-      this.dirs.add(clone);
-      this.dirs.add(`${clone}/.git`);
+    // A memory plugin's clone; Hermes's own checkout stays BoxHost's.
+    const plugin = pluginClones.get(
+      bin === "git" ? ((args[0] === "-C" ? args[1] : args.at(-1)) ?? "") : "",
+    );
+    if (plugin && args[0] === "clone") {
+      this.dirs.add(plugin.clone);
+      this.dirs.add(`${plugin.clone}/.git`);
       return ok();
     }
-    if (bin === "git" && args[0] === "-C" && args[1] === clone) {
+    if (plugin && args[0] === "-C") {
       if (args[2] === "checkout") {
-        const sub = `${clone}/${PLUGIN.subdir}`;
-        this.seed(`${sub}/plugin.yaml`, `name: hindsight\n# at ${args.at(-1)}\n`);
+        const sub = plugin.subdir === null ? plugin.clone : `${plugin.clone}/${plugin.subdir}`;
+        this.seed(`${sub}/plugin.yaml`, `name: ${plugin.name}\n# at ${args.at(-1)}\n`);
         this.seed(`${sub}/__init__.py`, "\n");
         this.dirs.add(sub);
       }

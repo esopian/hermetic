@@ -17,14 +17,16 @@
  * worse than refused. The cost is that the commit sha is ours, so the real one
  * is recorded as `upstream_sha` in the fleet manifest.
  *
- * Upstream's `pyproject.toml` declares a *static* `version = "0.21.1"` with
- * `setuptools.build_meta` — no setuptools-scm, no hatch-vcs — so the
- * synthesized commit cannot change the version an editable install reports, and
- * the box's `MANIFEST_REFUSED` cross-check is unaffected. (Verified against
- * Hermes Agent 0.21.1.) The tag is still synthesized so `git describe` answers.
+ * Through 0.21 upstream's `pyproject.toml` declared a *static* version, so the
+ * synthesized commit could not change the version an install reports. From
+ * 0.22 `pyproject.toml` says `0.0.0` and the version comes from an install
+ * stamp, else the highest `vX.Y.Z` tag merged into HEAD
+ * (`hermes_cli/version_info.py`). The synthesized tag satisfies that on a
+ * fresh clone, but `git fetch <bundle> <ref>` into an existing checkout stores
+ * no tag, which is why hermeticd writes the stamp rather than relying on it.
  *
- * **`hermes_ref` is a tag, by contract.** `BUILD_VERSIONS.hermes_ref` is
- * `v2026.8.31` and every ref this module has ever been asked for is an upstream
+ * **`hermes_ref` is a tag, by contract.** `BUILD_VERSIONS.hermes_ref` is a
+ * `vX.Y.Z` release tag and every ref this module has ever been asked for is an upstream
  * release tag. That is not decoration: idempotence here is "the manifest names
  * this ref *and* its object is still in the bucket", with no comparison against
  * upstream, so a ref that *moves* would be mirrored once and then pinned

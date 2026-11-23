@@ -730,6 +730,23 @@ describe("against the fixture, whose boxes are canned", () => {
     return { code, stdout, stderr };
   }
 
+  /** `run` with stdin a pipe nobody closes, as under an agent's shell; killed after `ms`. */
+  async function runOpenStdin(
+    ms: number,
+    ...args: string[]
+  ): Promise<{ code: number | null; stderr: string }> {
+    const proc = Bun.spawn([await cliBinary(), ...args], {
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, HERMETIC_FIXTURE: "1", HERMETIC_NO_TTY: "1", HERMETIC_HOME: HOME },
+    });
+    const timer = setTimeout(() => proc.kill(), ms);
+    const [stderr, code] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+    clearTimeout(timer);
+    return { code: proc.signalCode === null ? code : null, stderr };
+  }
+
   beforeAll(async () => {
     expect((await run("chat", "listen", "atlas")).code).toBe(0);
     expect((await run("chat", "listen", "heron")).code).toBe(0);
@@ -824,6 +841,36 @@ describe("against the fixture, whose boxes are canned", () => {
     const { code, stderr } = await runPiped("x".repeat(200_001), "chat", "atlas", "--attach", notes);
     expect(code).not.toBe(0);
     expect(stderr).not.toContain("staged");
+  });
+
+  test("a blank --session is refused before the message is read from an open stdin", async () => {
+    for (const session of ["", " "]) {
+      const { code, stderr } = await runOpenStdin(
+        8_000,
+        "chat",
+        "atlas",
+        "--session",
+        session,
+        "--json",
+      );
+      expect(code).toBe(2);
+      expect(stderr).toContain("session");
+    }
+  }, 20_000);
+
+  test("reading the message from stdin says so on stderr", async () => {
+    const { code, stdout, stderr } = await runPiped("hello", "chat", "atlas", "--json");
+    expect(code).toBe(0);
+    expect(stderr).toContain("reading the message from stdin");
+    expect(stdout).not.toContain("reading the message");
+  });
+
+  test("chat log takes its own --session, so a blank one is refused", async () => {
+    for (const session of ["", " "]) {
+      const { code, stderr } = await run("chat", "log", "atlas", "--session", session, "--json");
+      expect(code).toBe(2);
+      expect(stderr).toContain("session");
+    }
   });
 
   test("a turn that cannot happen exits non-zero after printing the frame", async () => {

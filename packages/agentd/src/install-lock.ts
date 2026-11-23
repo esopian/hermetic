@@ -37,6 +37,14 @@ import type { Host } from "./host.ts";
 export const INSTALL_LOCK_PATH = `${STATE_DIR}/install.lock`;
 
 /**
+ * The same kind of lock around `apply`, taken by the daemon's converge and by a
+ * stage's `hermeticd apply`: two applies would race over one Hermes swap. The
+ * self-update holds it too, through its restart, so none starts under one
+ * (`maybeUpdate`).
+ */
+export const APPLY_LOCK_PATH = `${STATE_DIR}/apply.lock`;
+
+/**
  * The kernel's own id for this boot. It changes on reboot and cannot be reused
  * within one, which makes it the other half of the "is that process still
  * there" question: a pid alone is recycled, so a lock from a previous boot
@@ -52,7 +60,7 @@ export const LOCK_WAIT_MS = 5 * 60_000;
 export const LOCK_POLL_MS = 5_000;
 
 /** Which of the two installers a lock belongs to. Reported, never compared. */
-export type InstallLockHolder = "bootstrap" | "update";
+export type InstallLockHolder = "bootstrap" | "update" | "apply";
 
 export interface InstallLockRecord {
   readonly holder: InstallLockHolder;
@@ -80,6 +88,8 @@ const NO_HARDLINK_CODES = new Set(["EPERM", "ENOSYS", "EOPNOTSUPP", "EXDEV", "EM
 export interface TakeLockOptions {
   /** This process's id. Injected so a test can be a second process. */
   readonly pid?: number;
+  /** Which lock: `INSTALL_LOCK_PATH` unless named. */
+  readonly path?: string;
 }
 
 export interface WaitLockOptions extends TakeLockOptions {
@@ -96,7 +106,7 @@ export async function readBootId(host: Host): Promise<string | null> {
 }
 
 function isHolder(value: unknown): value is InstallLockHolder {
-  return value === "bootstrap" || value === "update";
+  return value === "bootstrap" || value === "update" || value === "apply";
 }
 
 /** `null` for anything that is not a lock record this build wrote. */
@@ -119,8 +129,11 @@ export function parseInstallLock(text: string): InstallLockRecord | null {
   };
 }
 
-export async function readInstallLock(host: Host): Promise<InstallLockRecord | null> {
-  const text = await host.readFile(INSTALL_LOCK_PATH);
+export async function readInstallLock(
+  host: Host,
+  path = INSTALL_LOCK_PATH,
+): Promise<InstallLockRecord | null> {
+  const text = await host.readFile(path);
   return text === null ? null : parseInstallLock(text);
 }
 
@@ -149,19 +162,21 @@ export async function installLockIsLive(
   return (await host.stat(`/proc/${record.pid}`)) !== null;
 }
 
-function heldLock(host: Host, record: InstallLockRecord): HeldInstallLock {
+function heldLock(host: Host, record: InstallLockRecord, path: string): HeldInstallLock {
   return {
     record,
     async release(): Promise<void> {
       // Only ever our own: a lock judged stale and taken over by somebody else
       // must not be removed by the process whose death made it stale.
-      const current = await readInstallLock(host);
+      const current = await readInstallLock(host, path);
       if (current === null) return;
       if (current.pid !== record.pid || current.taken_at !== record.taken_at) return;
-      await host.remove(INSTALL_LOCK_PATH);
+      await host.remove(path);
     },
   };
 }
+
+let stagedSeq = 0;
 
 /**
  * Take the lock, or report who has it. `null` means "somebody live holds it" —
@@ -173,6 +188,7 @@ export async function takeInstallLock(
   opts: TakeLockOptions = {},
 ): Promise<HeldInstallLock | null> {
   const self = opts.pid ?? process.pid;
+  const path = opts.path ?? INSTALL_LOCK_PATH;
   const record: InstallLockRecord = {
     holder,
     pid: self,
@@ -180,7 +196,9 @@ export async function takeInstallLock(
     taken_at: host.now().toISOString(),
   };
   await host.mkdir(STATE_DIR, "0755");
-  const staged = `${INSTALL_LOCK_PATH}.${self}`;
+  // Per take, not per pid: two takes in one process (the converge loop and the
+  // self-update) must never link each other's record.
+  const staged = `${path}.${self}.${++stagedSeq}`;
   await host.writeFile(staged, JSON.stringify(record) + "\n", "0644");
   try {
     // Two passes at most: one to find a lock there, one to take it after the
@@ -188,8 +206,8 @@ export async function takeInstallLock(
     // installer, and there is no third installer on this box.
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        await host.link(staged, INSTALL_LOCK_PATH);
-        return heldLock(host, record);
+        await host.link(staged, path);
+        return heldLock(host, record, path);
       } catch (e) {
         const code = (e as { code?: string }).code ?? "";
         if (NO_HARDLINK_CODES.has(code)) {
@@ -200,18 +218,18 @@ export async function takeInstallLock(
            * which (the bootstrap runner) waits rather than races — and the
            * alternative is a filesystem on which no install is ever allowed.
            */
-          const held = await readInstallLock(host);
+          const held = await readInstallLock(host, path);
           if (held !== null && (await installLockIsLive(host, held, self))) return null;
-          await host.writeFile(INSTALL_LOCK_PATH, JSON.stringify(record) + "\n", "0644");
-          return heldLock(host, record);
+          await host.writeFile(path, JSON.stringify(record) + "\n", "0644");
+          return heldLock(host, record, path);
         }
         if (code !== "EEXIST") throw e;
       }
-      const existing = await readInstallLock(host);
+      const existing = await readInstallLock(host, path);
       // Unreadable is not held: a truncated lock names nobody, and leaving it
       // there would wedge every install on this box until somebody logged in.
       if (existing !== null && (await installLockIsLive(host, existing, self))) return null;
-      await host.remove(INSTALL_LOCK_PATH);
+      await host.remove(path);
     }
     return null;
   } finally {
@@ -239,7 +257,7 @@ export async function waitForInstallLock(
   for (;;) {
     const lock = await takeInstallLock(host, holder, opts);
     if (lock !== null) return lock;
-    const other = await readInstallLock(host);
+    const other = await readInstallLock(host, opts.path);
     if (!announced) {
       announced = true;
       say(`waiting for the ${other?.holder ?? "other"} installer to finish before running stages`);
@@ -248,7 +266,7 @@ export async function waitForInstallLock(
       throw new AgentdError(
         "CONFLICT",
         `another installer (${other?.holder ?? "unknown"}, pid ${other?.pid ?? "?"}) has held ` +
-          `${INSTALL_LOCK_PATH} for longer than this boot is willing to wait`,
+          `${opts.path ?? INSTALL_LOCK_PATH} for longer than this boot is willing to wait`,
         { holder: other?.holder ?? null, pid: other?.pid ?? null },
       );
     }

@@ -321,3 +321,21 @@ describe("SAFE_TO_CLOSE", () => {
     expect(SAFE_TO_CLOSE).toContain("engine");
   });
 });
+
+describe("failureHints for a Hermes upgrade", () => {
+  test("each upgrade code says what happened on the box and where to read more", () => {
+    const required = failureHints("HERMES_UPGRADE_REQUIRED", "set", "atlas").join(" ");
+    expect(required).toContain("hermetic upgrade atlas --hermes <version> --now");
+    const rolledBack = failureHints("HERMES_UPGRADE_ROLLED_BACK", "upgrade now → 0.23.1", "atlas").join(
+      " ",
+    );
+    expect(rolledBack).toContain("still runs its previous Hermes");
+    expect(rolledBack).toContain("hermetic agent history atlas");
+  });
+
+  test("a failed upgrade that left Hermes down sends the operator to the history, not a retry", () => {
+    const hints = failureHints("HERMES_UPGRADE_FAILED", "upgrade now → 0.23.1", "atlas", "degraded");
+    expect(hints.join(" ")).toContain("hermetic agent history atlas");
+    expect(hints.join(" ")).not.toContain("runs the same operation again");
+  });
+});

@@ -82,6 +82,22 @@ export function createBusyProbe(
   ): Promise<boolean | null> {
     // A conversation with no session yet has no turn to be running.
     if (sessions.length === 0) return Promise.resolve(false);
+    return raced(box, sessions, opts);
+  }
+
+  /**
+   * The same answer for every session live on the box, whoever started it:
+   * what `upgrade --now` waits on before it stops Hermes. Never throws.
+   */
+  function boxBusy(box: BoxAddress, opts: HermesChatOptions = {}): Promise<boolean | null> {
+    return raced(box, null, opts);
+  }
+
+  function raced(
+    box: BoxAddress,
+    sessions: readonly string[] | null,
+    opts: HermesChatOptions,
+  ): Promise<boolean | null> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const expired = new Promise<null>((resolve) => {
       timer = setTimeout(() => resolve(null), budgetMs);
@@ -90,9 +106,10 @@ export function createBusyProbe(
     return Promise.race([read, expired]).finally(() => clearTimeout(timer));
   }
 
+  /** `sessions` null: every listed row counts. */
   async function lookup(
     box: BoxAddress,
-    sessions: readonly string[],
+    sessions: readonly string[] | null,
     opts: HermesChatOptions,
   ): Promise<boolean | null> {
     const listed = rec(
@@ -101,15 +118,15 @@ export function createBusyProbe(
     // A reply without the list is a gateway that does not speak this method's
     // shape, which is "could not tell", not "nothing running".
     if (listed === null || !Array.isArray(listed.sessions)) return null;
-    const wanted = new Set(sessions);
+    const wanted = sessions === null ? null : new Set(sessions);
     const statuses = records(listed.sessions).flatMap((row) => {
       const key = str(row.session_key);
       const status = str(row.status);
-      return key !== null && wanted.has(key) && status !== null ? [status] : [];
+      return status !== null && (wanted === null || (key !== null && wanted.has(key))) ? [status] : [];
     });
     if (statuses.some((status) => BUSY_STATUSES.has(status))) return true;
     return statuses.includes("starting") ? null : false;
   }
 
-  return { busy };
+  return { busy, boxBusy };
 }

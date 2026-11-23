@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  approvalsCancelled,
   createConnectionGate,
   hermesActivity,
   hermesRequest,
@@ -217,6 +218,45 @@ describe("a closed request carries why", () => {
       reason,
       detail,
     });
+  });
+});
+
+describe("approval.cancelled (Hermes v0.23.1) closes each dropped approval", () => {
+  test("one close per id, through the card id, an interrupt reading as one", () => {
+    const cards = new Map([["apr-1", "srq-1"]]);
+    const closes = approvalsCancelled(
+      { session_id: "rt", reason: "interrupt", request_ids: ["apr-1", "apr-2", "", 7] },
+      (id) => cards.get(id) ?? id,
+    );
+    expect(closes.map((block) => ChatBlock.parse(block))).toEqual([
+      expect.objectContaining({
+        key: "request:srq-1",
+        request_id: "srq-1",
+        state: "done",
+        reason: "interrupted",
+      }),
+      expect.objectContaining({
+        key: "request:apr-2",
+        request_id: "apr-2",
+        state: "done",
+        reason: "interrupted",
+      }),
+    ]);
+  });
+
+  test.each(["ws_orphan_reap", "idle_timeout", "lru_evict", "tui_close"])(
+    "a %s teardown reads as the session closing",
+    (reason) => {
+      expect(approvalsCancelled({ reason, request_ids: ["apr-1"] })[0]).toMatchObject({
+        reason: "session_closed",
+        detail: "Withdrawn: the session closed",
+      });
+    },
+  );
+
+  test("no ids closes nothing", () => {
+    expect(approvalsCancelled({ reason: "interrupt" })).toEqual([]);
+    expect(approvalsCancelled({ reason: "interrupt", request_ids: "apr-1" })).toEqual([]);
   });
 });
 

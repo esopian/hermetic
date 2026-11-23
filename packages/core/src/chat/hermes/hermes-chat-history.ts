@@ -52,6 +52,7 @@ import {
   rec,
   str,
   stripToken,
+  timedRead,
 } from "./hermes-chat-wire.ts";
 import type { createCanonicalSessions } from "../../render/hermes-canonical.ts";
 import {
@@ -64,6 +65,9 @@ import {
   type SubagentStatus,
 } from "../../schema/index.ts";
 
+/** Pages one session's read takes before it refuses: 100,000 rows at the default page, past any real session. */
+const HISTORY_PAGES = 200;
+
 /** What `createChatHistory` needs, and nothing more. */
 export interface ChatHistoryDeps {
   connection: ChatConnection;
@@ -74,6 +78,8 @@ export interface ChatHistoryDeps {
    * describe it (`hermes-chat-media.ts`). Absent, chips stay undescribed.
    */
   listOutbox?: ListOutbox | undefined;
+  /** The moved-aside Bot Chats read ahead of `session` (`hermes-canonical.ts`). */
+  previousRoots?: ReturnType<typeof createCanonicalSessions>["previousRoots"];
 }
 
 export function createChatHistory(deps: ChatHistoryDeps) {
@@ -129,6 +135,38 @@ export function createChatHistory(deps: ChatHistoryDeps) {
     let session = opts.session;
     if (!session) session = (await deps.conversation(box, bot, opts))?.session;
     if (!session) return [];
+    // A Bot Chat upstream moved aside reads ahead of the current one, as one
+    // conversation (`render/hermes-canonical.ts`); a bounded read takes its
+    // newest rows only when the current one leaves room in the window.
+    const current = await rowsOf(box, bot, session, opts);
+    let messages = mapHistory(box, session, current.rows);
+    let room = (opts.limit ?? Number.POSITIVE_INFINITY) - current.rows.length;
+    // One read per session: a root naming the current one, or resolving to a
+    // session already read, would only repeat its turns.
+    const done = new Set([session, current.session]);
+    for (const root of [...(deps.previousRoots?.(box, bot, session) ?? [])].reverse()) {
+      if (room <= 0) break;
+      if (done.has(root)) continue;
+      done.add(root);
+      const read = await rowsOf(box, bot, root, {
+        ...opts,
+        ...(opts.limit !== undefined ? { limit: room } : {}),
+      });
+      if (read.session !== root && done.has(read.session)) continue;
+      done.add(read.session);
+      messages = [...mapHistory(box, read.session, read.rows), ...messages];
+      room -= read.rows.length;
+    }
+    return describeHistory(box, messages, opts.signal);
+  }
+
+  /** One session's durable rows, and the id the box resolved it to. */
+  async function rowsOf(
+    box: BoxAddress,
+    bot: string,
+    session: string,
+    opts: HistoryOptions,
+  ): Promise<{ session: string; rows: unknown[] }> {
     // session.list names durable database IDs. session.history instead requires
     // a live runtime ID and rejects limit. The dashboard's REST read accepts
     // durable IDs, pages them without building a backend, and scopes the DB by
@@ -137,13 +175,20 @@ export function createChatHistory(deps: ChatHistoryDeps) {
     const pageSize = opts.limit ?? 500;
     let offset = 0;
     const seenPages = new Set<string>();
-    for (;;) {
+    for (let page = 0; ; page++) {
+      // The repeat guard cannot see a page whose rows carry no id and change
+      // between reads (a turn writing), so the walk is also capped outright.
+      if (page === HISTORY_PAGES)
+        throw chatError(
+          CHAT_ERROR_CODES.PROTOCOL,
+          `${box.instance}: history ran past ${HISTORY_PAGES} pages of ${pageSize}`,
+        );
       const url = new URL(`api/sessions/${encodeURIComponent(session)}/messages`, box.baseUrl);
       url.searchParams.set("profile", bot);
       url.searchParams.set("limit", String(pageSize));
       url.searchParams.set("offset", String(offset));
       url.searchParams.set("order", opts.limit === undefined ? "oldest" : "latest");
-      const raw = await readJson(box, url, opts.signal);
+      const raw = await timedRead(box.instance, opts.signal, (signal) => readJson(box, url, signal));
       const rows = rec(raw)?.messages;
       if (!Array.isArray(rows))
         throw chatError(CHAT_ERROR_CODES.PROTOCOL, `${box.instance}: history named no messages`);
@@ -151,7 +196,7 @@ export function createChatHistory(deps: ChatHistoryDeps) {
       // A bounded read (an observation's window) is one page, and so is a short
       // page: neither can be followed by a repeat, so neither is fingerprinted.
       if (opts.limit !== undefined || rows.length < pageSize)
-        return describeHistory(box, mapHistory(box, session, transcript), opts.signal);
+        return { session: str(rec(raw)?.session_id) ?? session, rows: transcript };
       const key = pageKey(rows);
       if (seenPages.has(key))
         throw chatError(CHAT_ERROR_CODES.PROTOCOL, `${box.instance}: history repeated a page`);
@@ -231,9 +276,17 @@ export function mapHistory(box: BoxAddress, session: string, raw: unknown): Chat
     const steer = role === "user" ? steerOf(original) : null;
     // A hidden row only gets this far as a compaction summary, whatever its role.
     let card = kind === "hidden" || (role === "user" && !steer) ? leadingNoticeOf(original) : null;
-    // A batch of kanban notices is one row (`session_notifications.py:454`):
+    // A batch of kanban notices is one row (`session_notifications.py:454`), and
+    // so is a folded wake of background results (`process-notice.ts` `unfold`):
     // every card but the last gets a `<id>:notice[:n]` row of its own.
-    for (let n = 0; card?.block.event === "kanban" && typeof card.rest === "string"; n++) {
+    let unread: string | null = null;
+    for (
+      let n = 0;
+      card !== null &&
+      (card.block.event === "kanban" || card.folded === true) &&
+      typeof card.rest === "string";
+      n++
+    ) {
       out.push({
         id: n === 0 ? `${id}:notice` : `${id}:notice:${n}`,
         session,
@@ -245,7 +298,24 @@ export function mapHistory(box: BoxAddress, session: string, raw: unknown): Chat
         error: null,
         incomplete: null,
       });
+      unread = card.rest;
       card = parseLeadingNotice(card.rest);
+    }
+    // The rest of a batch this build cannot read is still the gateway's, never
+    // the operator's: it stays a system row, and nothing carded above repeats.
+    if (card === null && unread !== null) {
+      out.push({
+        id,
+        session,
+        role: "system",
+        author: authorRef(box, original.author ?? original.from),
+        at,
+        blocks: textBlocks(unread),
+        usage: null,
+        error: null,
+        incomplete: null,
+      });
+      continue;
     }
     const lead = card;
     // A notice that opens a row the operator also wrote in (a gateway recovery
@@ -457,7 +527,7 @@ function canonical(value: unknown): string {
  */
 function leadingNoticeOf(
   row: Record<string, unknown>,
-): { block: ProcessEventBlock; rest: unknown } | null {
+): { block: ProcessEventBlock; rest: unknown; folded?: true } | null {
   const kind = str(row.display_kind);
   const physical = joinedText(row.content ?? row.text);
   const carrier: LeadingNotice | null = physical === null ? null : parseLeadingNotice(physical, kind);
@@ -756,10 +826,34 @@ export function settledDelegation(
       }
     }
     const top = str(outcome.delegation_id);
+    // Since Hermes v0.23.1 a task its route refused gets no child: it is listed
+    // under `refused` and `subagent_ids` covers the running children only, in
+    // task order (`tools/delegate_tool_dispatch.py:389-405`).
+    const refused = new Map<number, Record<string, unknown>>();
+    for (const value of arr(outcome.refused)) {
+      const entry = rec(value);
+      const n = nonNegativeIndex(entry?.task_index);
+      if (entry && n !== null) refused.set(n, entry);
+    }
+    let running = 0;
     return Array.from({ length: count }, (_, index): SubagentBlock => {
       const delegation = unitOf.get(index) ?? top;
+      const refusal = refused.get(index);
+      const synthetic = `hist:${toolId ?? "delegate_task"}:${index}`;
+      if (refusal) {
+        const error = str(refusal.error);
+        return {
+          ...base(index, count),
+          subagent_id: synthetic,
+          goal: goals[index] ?? goalOf(index),
+          status: "error",
+          verdict: subagentVerdict("error"),
+          ...(error ? { result: { error } } : {}),
+        };
+      }
       return {
         ...base(index, count),
+        subagent_id: str(ids[running++]) ?? synthetic,
         goal: goals[index] ?? goalOf(index),
         status: "dispatched",
         verdict: subagentVerdict("dispatched"),
@@ -785,6 +879,31 @@ function settledChoices(value: unknown): string[] {
 }
 
 /**
+ * A call as the tool it ran. Hermes v0.23.1 defers cold tools (`todo_list`,
+ * `cronjob_manage`, `process_manage`, …) behind its `tool_call` bridge, and the
+ * transcript keeps the wrapper: `{name, arguments}` or `{calls: [{name, arguments}]}`
+ * (`tools/tool_search_validation.py:139-180`). A batch of several stays the bridge.
+ */
+export function unwrapToolCall(
+  name: string | null,
+  args: unknown,
+): { name: string | null; args: unknown } {
+  if (name !== "tool_call") return { name, args };
+  const bridge = rec(args);
+  const calls = bridge?.calls === undefined ? undefined : storedJson(bridge.calls);
+  const entry =
+    calls === undefined
+      ? bridge
+      : Array.isArray(calls)
+        ? calls.length === 1
+          ? rec(calls[0])
+          : null
+        : rec(calls);
+  const inner = str(entry?.name)?.trim();
+  return inner ? { name: inner, args: storedJson(entry?.arguments) ?? {} } : { name, args };
+}
+
+/**
  * One durable row's blocks. `atTail` is true when no visible row other than a
  * tool result follows this one in the rows `mapHistory` was given.
  */
@@ -800,8 +919,10 @@ function durableHistoryBlocks(
     const fn = rec(call?.function);
     const result = storedJson(row.display_content ?? row.content);
     const metadata = rec(result);
-    const name = str(row.tool_name) ?? str(fn?.name) ?? "tool";
-    const args = storedJson(fn?.arguments) ?? null;
+    const called = unwrapToolCall(str(fn?.name), storedJson(fn?.arguments) ?? null);
+    const stored = str(row.tool_name);
+    const name = (stored === "tool_call" ? null : stored) ?? called.name ?? "tool";
+    const args = called.args;
     const tool = toolBlock(
       {
         tool_id: id,
@@ -814,7 +935,7 @@ function durableHistoryBlocks(
       },
       null,
       // Only a result paired with the assistant's own todo call carries a list.
-      TODO_TOOL_NAMES.has(str(fn?.name)?.toLowerCase() ?? ""),
+      TODO_TOOL_NAMES.has(called.name?.toLowerCase() ?? ""),
     );
     const lower = name.toLowerCase();
     if (lower === "delegate_task") return [tool, ...settledDelegation(id, args, result)];
@@ -826,7 +947,8 @@ function durableHistoryBlocks(
     const call = rec(value);
     const callId = str(call?.id) ?? str(call?.call_id);
     const fn = rec(call?.function);
-    if (callId && fn && str(fn.name)) {
+    const called = unwrapToolCall(str(fn?.name), storedJson(fn?.arguments) ?? null);
+    if (callId && fn && called.name) {
       // The result row owns the completed card. Pairing by ID, across the whole
       // requested transcript, keeps parallel same-name tools and page edges safe.
       //
@@ -847,8 +969,8 @@ function durableHistoryBlocks(
           toolBlock(
             {
               tool_id: callId,
-              name: fn.name,
-              args: storedJson(fn.arguments) ?? null,
+              name: called.name,
+              args: called.args,
               result: null,
               status: atTail ? "running" : "warn",
             },

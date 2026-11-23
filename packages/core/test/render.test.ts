@@ -793,7 +793,7 @@ describe("the approvals mode", () => {
     const command = out.manifest.commands.find((c) => c.includes("approvals.mode"))!;
     expect(command).toBe(
       'test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "smart" || { ' +
-        "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes " +
+        "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes HERMES_DISABLE_LAZY_INSTALLS=1 /usr/local/bin/hermes " +
         "config set approvals.mode 'smart' >/dev/null && " +
         "systemctl try-restart hermes-dashboard.service hermes-gateway.service && " +
         "install -d -m 0755 /etc/hermetic/asserted && " +
@@ -858,7 +858,7 @@ describe("held and seeded settings", () => {
     expect(fileAt(out, "/etc/hermes/config.yaml")).not.toContain("max_turns");
     expect(markerFor(out, "max_turns")).toBe(
       'test "$(cat /etc/hermetic/asserted/max_turns 2>/dev/null)" = "600" || { ' +
-        "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes " +
+        "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes HERMES_DISABLE_LAZY_INSTALLS=1 /usr/local/bin/hermes " +
         "config set agent.max_turns '600' >/dev/null && " +
         "systemctl try-restart hermes-dashboard.service hermes-gateway.service && " +
         "install -d -m 0755 /etc/hermetic/asserted && " +
@@ -943,7 +943,7 @@ describe("held and seeded settings", () => {
     const quoted = `'us.anthropic.claude:0'\\''; rm -rf / #'`;
     expect(markerFor(out, "model")).toBe(
       `test "$(cat /etc/hermetic/asserted/model 2>/dev/null)" = ${quoted} || { ` +
-        "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes " +
+        "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes HERMES_DISABLE_LAZY_INSTALLS=1 /usr/local/bin/hermes " +
         `config set model.default ${quoted} >/dev/null && ` +
         "systemctl try-restart hermes-dashboard.service hermes-gateway.service && " +
         "install -d -m 0755 /etc/hermetic/asserted && " +
@@ -1052,6 +1052,90 @@ describe("the packages Hermes actually needs", () => {
       expect(file).toContain("Environment=NPM_CONFIG_PREFIX=/data/hermes/.local");
     }
   });
+});
+
+/**
+ * The units follow the row's `hermes_version`, not this build's pin. A row
+ * still on 0.21 must render the bytes it always did, so a newer laptop or
+ * hermeticd restarts nothing on a box that has not been upgraded yet.
+ */
+describe("the Hermes units follow the row's pin", () => {
+  const UNITS = [
+    "/etc/systemd/system/hermes-dashboard.service",
+    "/etc/systemd/system/hermes-gateway.service.d/hermetic.conf",
+  ];
+  const at = (hermes_version: string) =>
+    renderAgentConfig({
+      name: "atlas",
+      size: "medium",
+      provider: "bedrock",
+      secrets_mode: "none",
+      tailnet: "hermetic.ts.net",
+      hermes_version,
+      hermes_ref: "v0.23.1",
+      chrome_ref: CHROME_REF,
+      region: "us-west-2",
+    });
+
+  // Snapshotted before the 0.23 render changes landed: an old-pin box must not see a byte move.
+  test("a 0.21 row renders its units byte-for-byte as before", () => {
+    const out = at("0.21.5");
+    for (const path of UNITS) expect(fileAt(out, path)).toMatchSnapshot(path);
+  });
+
+  /**
+   * From 0.22 the lazy-install target and agent-browser's Chrome path are read
+   * nowhere, and the TUI must be told where Node is, since the disable flag
+   * (kept on) refuses upstream's own Node.
+   */
+  for (const version of ["0.22.0", "0.23.1"]) {
+    test(`a ${version} row drops the dead lines and names Node for the TUI`, () => {
+      const out = at(version);
+      for (const path of UNITS) {
+        const file = fileAt(out, path);
+        expect(file, path).toContain("Environment=HERMES_DISABLE_LAZY_INSTALLS=1");
+        expect(file, path).not.toContain("HERMES_LAZY_INSTALL_TARGET");
+        expect(file, path).not.toContain("AGENT_BROWSER_EXECUTABLE_PATH");
+        expect(file, path).toContain("Environment=DISPLAY=:99");
+      }
+      expect(fileAt(out, UNITS[0]!)).toContain("Environment=HERMES_NODE=/usr/local/bin/node");
+      // The gateway serves no TUI.
+      expect(fileAt(out, UNITS[1]!)).not.toContain("HERMES_NODE");
+    });
+  }
+
+  test("a 0.23 row renders exactly this unit text", () => {
+    const out = at("0.23.1");
+    for (const path of UNITS) expect(fileAt(out, path)).toMatchSnapshot(path);
+  });
+
+  test("a 0.21 row names no Node and keeps the lazy target", () => {
+    const out = at("0.21.5");
+    expect(fileAt(out, UNITS[0]!)).not.toContain("HERMES_NODE");
+    expect(fileAt(out, UNITS[0]!)).toContain("HERMES_LAZY_INSTALL_TARGET");
+  });
+
+  /**
+   * On every pin: 0.21 prunes chat history by default, and the other two keys
+   * are inert there (nothing in 0.21 reads them; the managed overlay is a
+   * plain deep merge).
+   */
+  for (const version of ["0.21.5", "0.23.1"]) {
+    test(`a ${version} row manages session pruning, the Webapp and plugin update checks off`, () => {
+      const out = at(version);
+      const managed = fileAt(out, "/etc/hermes/config.yaml");
+      expect(managed).toContain("sessions:\n  auto_prune: false");
+      expect(managed).toContain("webapp:\n  enabled: false");
+      expect(managed).toContain(
+        'plugins:\n  enabled:\n    - "hermetic-files"\n  auto_update_check_hours: 0\n',
+      );
+      expect(out.manifest.hermes_owned).toMatchObject({
+        "sessions.auto_prune": "false",
+        "webapp.enabled": "false",
+        "plugins.auto_update_check_hours": "0",
+      });
+    });
+  }
 });
 
 /**
@@ -1341,7 +1425,7 @@ describe("provider configuration", () => {
     const command = out.manifest.commands.find((c) => c.includes("config set model.default"))!;
     expect(command).not.toContain("grep -qE '^model:'");
     expect(command).toContain(
-      "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes " +
+      "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes HERMES_DISABLE_LAZY_INSTALLS=1 " +
         "/usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 ||",
     );
     // The same argv the boot assertion runs (`hermesConfigGetArgv`), so the two
@@ -1381,9 +1465,9 @@ describe("provider configuration", () => {
     const out = render({ size: "small", provider: "bedrock", secrets_mode: "none" });
     const command = out.manifest.commands.find((c) => c.includes("config set model.default"))!;
     expect(command).toBe(
-      "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes " +
+      "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes HERMES_DISABLE_LAZY_INSTALLS=1 /usr/local/bin/hermes " +
         "config get model.default --json >/dev/null 2>&1 || { " +
-        "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes " +
+        "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes HERMES_DISABLE_LAZY_INSTALLS=1 /usr/local/bin/hermes " +
         "config set model.default 'zai.glm-4.7-flash' >/dev/null && " +
         "systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
     );

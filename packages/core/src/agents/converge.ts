@@ -38,9 +38,16 @@
  * pins — exactly the limit `recreate` has, and for the same reason. When the
  * row gains a ref of its own, both inherit the fix through the render.
  */
+import { randomUUID } from "node:crypto";
 import { abortableSleep } from "../abort.ts";
 import type { CoreContext } from "../context.ts";
-import type { Agent, AgentStatus } from "../schema/index.ts";
+import {
+  HERMES_OLD_VERSION_RUNNING,
+  HERMES_RESTORE_FAILED,
+  HERMES_ROLLBACK_FAILED,
+} from "../schema/index.ts";
+import type { Agent, AgentStatus, ApplyRequest } from "../schema/index.ts";
+import { hermesRefFor } from "../shared/hermes.ts";
 import { memoryProviderIsService } from "../shared/memory-providers.ts";
 
 /** How long one box gets to pick up a configuration-only request and report the new hash. */
@@ -63,6 +70,18 @@ export const CONVERGE_POLL_MS = 10_000;
  * operator for ever — and a timeout here is a warning, not a failure.
  */
 export const HERMES_CONVERGE_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * How long `upgrade --now` waits when it changes the Hermes version, which can
+ * take the whole swap and then its undo: install ~15 min (uv sync of the extras
+ * plus the pnpm web and TUI builds on a small instance with a cold cache; each
+ * pnpm step alone may run to `NPM_TIMEOUT_S`, 15 min, `apply/node-web.ts`), the
+ * runtime gate's 5 min (`HERMES_GATE_TIMEOUT_MS`, `apply/hermes-upgrade.ts`),
+ * a rollback reinstall of the old checkout ~10 min, and a minute of heartbeat
+ * ticks either side: 31, rounded to 32. A box that answers later still
+ * reconciles (`reconcileRolledBack`).
+ */
+export const HERMES_SWAP_CONVERGE_TIMEOUT_MS = 32 * 60_000;
 
 /**
  * How long a rollout waits for one agent: `HERMES_CONVERGE_TIMEOUT_MS` when
@@ -102,6 +121,85 @@ export function convergeDeferral(agent: Pick<Agent, "status">): string | null {
   return CONVERGEABLE.includes(agent.status) ? null : `${agent.status}`;
 }
 
+/**
+ * The pin `reconcileRolledBack` would put back on this row, or `null`: the
+ * row's latest request moved the pin (`upgrade_from`), the box answered it
+ * with a code saying it still runs the old Hermes, and the row still names
+ * that request's config. Pure, so a plan can tell such a row from a held one.
+ */
+export function rolledBackFrom(agent: Agent): NonNullable<ApplyRequest["upgrade_from"]> | null {
+  const req = agent.apply_request;
+  const from = req?.upgrade_from;
+  const code = agent.apply_failure?.code;
+  if (
+    req === null ||
+    req === undefined ||
+    from === undefined ||
+    code === undefined ||
+    agent.apply_failure?.request_id !== req.id ||
+    !HERMES_OLD_VERSION_RUNNING.includes(code) ||
+    agent.config_hash !== req.config_hash ||
+    // The box took that config since (a recreate renders the same hash), so nothing is rolled back.
+    agent.applied_config_hash === req.config_hash
+  ) {
+    return null;
+  }
+  return from;
+}
+
+/**
+ * Why converging this row could move its Hermes, or `null` (§6.5). Only an
+ * explicit `upgrade --hermes V --now` changes the Hermes a box runs: it waits
+ * for an idle box and names the pin to put back. Shared by `plan rollout` and
+ * the config phase of a push, so the two never disagree about a row.
+ *
+ * - A version with no known ref (`hermesRefFor`) is held: its render would
+ *   carry this build's ref, a Hermes nobody asked for.
+ * - `automatic` (a push's or `foundation update`'s config phase) converges
+ *   only rows on this build's Hermes, so publishing a release never touches an
+ *   agent kept on an older one.
+ * - A pin the box does not report running is a swap waiting to happen, and a
+ *   box that has not reported is treated the same way: fail closed. Callers
+ *   that can read the bucket first fill an unreported version from the applied
+ *   bundle (`withAppliedHermes`).
+ */
+export function hermesDeferral(
+  agent: Pick<Agent, "name" | "hermes_version" | "running_hermes_version" | "applied_config_hash">,
+  hermesVersion: string,
+  automatic: boolean,
+): string | null {
+  const pin = agent.hermes_version;
+  if (hermesRefFor(pin) === null || (automatic && pin !== hermesVersion)) {
+    return `held on Hermes ${pin}, and this build renders ${hermesVersion}; \`hermetic upgrade --hermes ${hermesVersion} ${agent.name} --now\` moves it`;
+  }
+  const running = agent.running_hermes_version ?? null;
+  if (running === pin) return null;
+  const now = `\`hermetic upgrade --hermes ${pin} ${agent.name} --now\` installs it`;
+  // `--now` refuses a box that never applied a config, so it is not the exit here.
+  if (running === null && (agent.applied_config_hash ?? null) === null) {
+    return `pinned to Hermes ${pin}, and its box has never applied a config or reported which Hermes it runs; ${neverApplied(agent.name)}`;
+  }
+  return running === null
+    ? `pinned to Hermes ${pin}, and its box has not reported which Hermes it runs yet; ${now}`
+    : `pinned to Hermes ${pin}, and its box runs ${running}; ${now}`;
+}
+
+/**
+ * The exits for a box that never applied a config (a boot that failed before
+ * its first apply): `plan rollout` and `upgrade --now` each defer it to the other.
+ */
+export function neverApplied(name: string): string {
+  return `\`hermetic agent rerun ${name}\` retries its boot (an agent in error), or \`hermetic plan recreate ${name}\` replaces its box`;
+}
+
+/**
+ * hermeticd's codes for a failed Hermes swap that left Hermes down and held on
+ * the box: the run that asked stops rather than take the next box down too.
+ */
+export function hermesHeldDown(code: string): boolean {
+  return code === HERMES_ROLLBACK_FAILED || code === HERMES_RESTORE_FAILED;
+}
+
 export interface ConvergeDeps {
   readonly ctx: CoreContext;
   /** How many milliseconds of polling a box gets before it is reported unconverged. */
@@ -124,13 +222,22 @@ export function createConverge(deps: ConvergeDeps) {
    * does not run `hash` (`applied_config_hash`), and must release the lock
    * before calling `waitForConverge`.
    */
-  async function request(agent: Agent, hash: string, issuedBy: string, kind: string): Promise<Agent> {
+  async function request(
+    agent: Agent,
+    hash: string,
+    issuedBy: string,
+    kind: string,
+    upgradeFrom?: ApplyRequest["upgrade_from"],
+  ): Promise<Agent> {
     const next = await agents.update(agent.name, agent.version, {
       apply_request: {
-        id: `${hash}-${ctx.backend.clock.now().getTime().toString(36)}`,
+        // Unique even on a frozen clock: a request for a hash asked before must
+        // not carry that request's id, or the box's answer to it reads as this one's.
+        id: `${hash}-${ctx.backend.clock.now().getTime().toString(36)}-${randomUUID().slice(0, 8)}`,
         config_hash: hash,
         issued_at: ctx.nowIso(),
         issued_by: issuedBy,
+        ...(upgradeFrom === undefined ? {} : { upgrade_from: upgradeFrom }),
       },
     });
     await ctx.appendEvent(next.name, kind, `converge requested: config ${hash}`);
@@ -148,12 +255,16 @@ export function createConverge(deps: ConvergeDeps) {
    * An abort ends the wait early and reads as `"timeout"`; the caller decides
    * whether that is an unconverged report or an `ABORTED` throw, by asking
    * `checkAbort` next.
+   *
+   * Given `requestId`, the box's own report that it failed that request
+   * (`apply_failure`) ends the wait as `"failed"`; the row says why.
    */
   async function waitForConverge(
     name: string,
     hash: string,
     signal?: AbortSignal,
-  ): Promise<"converged" | "timeout"> {
+    requestId?: string,
+  ): Promise<"converged" | "timeout" | "failed"> {
     /**
      * Counted looks rather than a wall-clock deadline, and deliberately so: the
      * clock this module is given is the backend's, which fixture mode freezes so
@@ -162,15 +273,20 @@ export function createConverge(deps: ConvergeDeps) {
      * timeout — the loop must be bounded by the thing it actually does.
      */
     const looks = Math.max(1, Math.ceil(timeoutMs / pollMs));
-    for (let i = 0; i < looks; i += 1) {
+    const look = async (): Promise<"converged" | "failed" | null> => {
       const row = await agents.get(name).catch(() => null);
       if (row?.applied_config_hash === hash) return "converged";
+      if (requestId !== undefined && row?.apply_failure?.request_id === requestId) return "failed";
+      return null;
+    };
+    for (let i = 0; i < looks; i += 1) {
+      const seen = await look();
+      if (seen !== null) return seen;
       if (signal?.aborted === true) return "timeout";
       await abortableSleep(pollMs, signal);
     }
     // One last look: the final sleep may be exactly what the box needed.
-    const row = await agents.get(name).catch(() => null);
-    return row?.applied_config_hash === hash ? "converged" : "timeout";
+    return (await look()) ?? "timeout";
   }
 
   /**
@@ -188,5 +304,41 @@ export function createConverge(deps: ConvergeDeps) {
     );
   }
 
-  return { request, waitForConverge, unconvergedMessage, timeoutMs, pollMs };
+  /**
+   * Put back the pin an upgrade moved the row off when the box has said it
+   * still runs the old Hermes (`HERMES_OLD_VERSION_RUNNING`) for the row's
+   * latest request — however long after the laptop stopped waiting. Only while
+   * the row still names that request's config: a pin someone set since is
+   * theirs. The caller holds the lock; both writers of a converge request call
+   * this first, so a rolled-back upgrade is never re-requested unprompted.
+   * After a rollback it also asks the box, without waiting, to apply the
+   * restored config: a box with no previous config to return to runs the old
+   * Hermes on files rendered for the new pin until a converge re-renders them.
+   * The box refuses only the rolled-back hash, so this one is taken.
+   * Returns the row, and the code when it restored.
+   */
+  async function reconcileRolledBack(
+    agent: Agent,
+    issuedBy: string,
+  ): Promise<{ agent: Agent; code: string | null }> {
+    const from = rolledBackFrom(agent);
+    const code = agent.apply_failure?.code;
+    if (from === null || code === undefined) return { agent, code: null };
+    let restored = await agents.update(agent.name, agent.version, {
+      hermes_version: from.hermes_version,
+      config_hash: from.config_hash,
+      resources: { ...agent.resources, config_key: from.config_key },
+    });
+    await ctx.appendEvent(
+      agent.name,
+      "upgrade",
+      `hermes ${agent.hermes_version} not applied by the box (${code}); pin back to ${from.hermes_version}`,
+    );
+    if (code === "HERMES_UPGRADE_ROLLED_BACK" && from.config_hash !== null) {
+      restored = await request(restored, from.config_hash, issuedBy, "upgrade");
+    }
+    return { agent: restored, code };
+  }
+
+  return { request, waitForConverge, unconvergedMessage, reconcileRolledBack, timeoutMs, pollMs };
 }

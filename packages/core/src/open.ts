@@ -207,10 +207,9 @@ export interface OpenOptions {
  * interesting state to develop against is the one with something to say — so
  * the fixture upstream is always one release ahead of what this build pins.
  *
- * A *tag*, not a version: Hermes Agent's releases are tagged by date
- * (`v2026.8.31`) while its `pyproject` carries a semver, and the check compares
- * tag to tag (`schema/foundation.ts`). A fixture that answered `v0.22.0` would
- * be answering in a vocabulary upstream does not use.
+ * A *tag*, not a version, because the check compares tag to tag
+ * (`schema/foundation.ts`). Since v0.21.6 upstream tags `vX.Y.Z`, so the next
+ * patch is the next release.
  *
  * Derived from the pin rather than written down beside it: a literal here is
  * only "ahead" until the next `hermes_ref` bump moves the pin past it, and the
@@ -218,10 +217,9 @@ export interface OpenOptions {
  * one state this canned answer exists to show.
  */
 function fixtureLatestHermesTag(pinned: string): string {
-  const [y, m, d] = pinned.replace(/^v/, "").split(".").map(Number);
-  if (!y || !m || !d) return pinned;
-  const next = new Date(Date.UTC(y, m - 1, d + 1));
-  return `v${next.getUTCFullYear()}.${next.getUTCMonth() + 1}.${next.getUTCDate()}`;
+  const [major, minor, patch] = pinned.replace(/^v/, "").split(".").map(Number);
+  if (patch === undefined || ![major, minor, patch].every(Number.isInteger)) return pinned;
+  return `v${major}.${minor}.${patch + 1}`;
 }
 
 const FIXTURE_HERMES_FETCH: NonNullable<

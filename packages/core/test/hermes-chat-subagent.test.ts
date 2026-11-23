@@ -178,6 +178,8 @@ describe("subagent helpers", () => {
     expect(subagentVerdict("dispatched")).toBe("running");
     expect(subagentVerdict("unobserved")).toBe("unknown");
     expect(subagentVerdict("something")).toBe("unknown");
+    // A task its route refused (v0.23.1 `refused[]`, `delegate_tool_routes.py:49-52`) is an error.
+    expect(subagentVerdict("error")).toBe("failed");
   });
 
   test("upstream's missed-steer note is recognised in a summary", () => {

@@ -38,6 +38,9 @@ import {
 import { HERMETICD_VERSION } from "./version.ts";
 import { bootContext, context, log, stderrEmit, type Context, type RunDeps } from "./context.ts";
 import { serve } from "./daemon.ts";
+import { recordRolledBack, refuseRecorded } from "./converge.ts";
+import { APPLY_LOCK_PATH, waitForInstallLock } from "./install-lock.ts";
+import { withUpgradeHistory } from "./events.ts";
 
 /** The SSM slots an agent has. A stage may ask for these and nothing else. */
 export const SECRET_SLOTS = ["ts-key", "bws-token", "provider-key"] as const;
@@ -291,14 +294,55 @@ export async function run(
           log(`durable file secrets skipped: ${e instanceof AgentdError ? e.code : "no AWS context"}`);
         }
       }
-      const result = await apply(manifest, {
-        host,
-        emit: stderrEmit,
-        ...(dryRun ? { dryRun: true } : {}),
-        ...(bwsToken ? { bwsToken } : {}),
-        ...(providerKey ? { providerKey } : {}),
-        ...(ctx && !dryRun ? { fileSecrets: { aws: ctx.aws, paramPrefix: ctx.paramPrefix, log } } : {}),
-      });
+      // The daemon's converge may be mid-swap; a dry run writes nothing, so it does not wait.
+      const lock = dryRun
+        ? null
+        : await waitForInstallLock(host, "apply", { path: APPLY_LOCK_PATH, log });
+      const rowRequest = async () =>
+        ctx ? (await ctx.aws.getOwnRow(ctx.userData.name))?.apply_request : undefined;
+      // A boot re-arms this stage whenever the row names a config the box does
+      // not hold, so a rolled-back one (or a box held for an operator) would
+      // swap again on every boot and every `Restart=on-failure`: the converge's
+      // rule, keyed on the row's request. Outside the `catch`, which would
+      // rewrite the record with this refusal.
+      let result: Awaited<ReturnType<typeof apply>>;
+      // The swap's milestones (a first start's backup included) reach `agent
+      // history` from a stage as they do from a converge (`withUpgradeHistory`).
+      const events = dryRun ? null : ctx;
+      const history =
+        events !== null
+          ? withUpgradeHistory(stderrEmit, async (action, detail) => {
+              await events.aws.appendEvent({
+                name: events.userData.name,
+                action,
+                from_status: null,
+                to_status: null,
+                detail,
+              });
+            })
+          : null;
+      try {
+        if (!dryRun) await refuseRecorded(host, manifest.config_hash, rowRequest);
+        result = await apply(manifest, {
+          host,
+          emit: history ?? stderrEmit,
+          ...(dryRun ? { dryRun: true } : {}),
+          ...(bwsToken ? { bwsToken } : {}),
+          ...(providerKey ? { providerKey } : {}),
+          ...(ctx && !dryRun
+            ? { fileSecrets: { aws: ctx.aws, paramPrefix: ctx.paramPrefix, log } }
+            : {}),
+        }).catch(async (error: unknown) => {
+          // A stage's rollback, recorded as a converge's is: the row's request,
+          // re-delivered by the next heartbeat, must not swap again by itself.
+          const id = (await rowRequest().catch(() => undefined))?.id;
+          await recordRolledBack(host, error, manifest.config_hash, [id], stderrEmit);
+          throw error;
+        });
+      } finally {
+        await lock?.release();
+        await history?.flush();
+      }
       process.stdout.write(JSON.stringify(result, null, 2) + "\n");
       return EXIT_OK;
     }

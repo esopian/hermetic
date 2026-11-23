@@ -17,6 +17,7 @@ import {
   HONCHO_PLUGIN_CONFIG_LINK,
   MEMORY_DB_UNIT,
   MEMORY_LLM_ENV_PATH,
+  MEMORY_PROVIDERS,
   MEMORY_SERVICES,
   MEMORY_SERVICE_ROOT,
   MEMORY_SERVICE_UNIT,
@@ -26,6 +27,7 @@ import {
   honchoPgDataDir,
   honchoSrcDir,
   honchoTiktokenDir,
+  hermesPluginDir,
   memoryServiceDir,
 } from "@hermetic/core/shared";
 import { MEMORY_PIN_MARKER, PLUGIN_REF_MARKER, apply } from "../src/apply/index.ts";
@@ -61,9 +63,13 @@ function unit(path: string, body: string): RenderedFile {
   return { path, mode: "0644", content: `[Service]\nUser=hermes\n${body}\n` };
 }
 
-/** A honcho manifest: the fixture's, plus the three units, `honcho.env` and `honcho.json`. */
-function honchoManifest(): AgentConfig {
+/**
+ * A honcho manifest: the fixture's, plus the three units, `honcho.env` and
+ * `honcho.json`; on the fixture's Hermes unless `hermes` (`MemoryBox.hermes`) names another.
+ */
+function honchoManifest(hermes?: { hermes_version: string; hermes_ref: string }): AgentConfig {
   const base = makeManifest({
+    ...hermes,
     provider: "openai",
     memory: {
       provider: "honcho",
@@ -286,6 +292,65 @@ describe("honcho: a fresh box", () => {
     expect((refused as AgentdError).code).toBe("COMMAND_FAILED");
     expect(host.files.has(PG_VERSION)).toBe(false);
     expect(host.files.has(`${DIR}/${MEMORY_PIN_MARKER}`)).toBe(false);
+  });
+});
+
+describe("honcho: the Hermes plugin", () => {
+  const PLUGIN = MEMORY_PROVIDERS.honcho.plugin!;
+  const PLUGIN_DIR = hermesPluginDir("honcho");
+  const PLUGIN_CLONE = `${hermesPluginDir("")}.honcho.clone`;
+
+  test("Hermes 0.23 gets the plugin's directory at the catalog pin, beside the server's checkout", async () => {
+    const host = new HonchoBox();
+    const manifest = honchoManifest(host.hermes("0.23.1"));
+    const result = await apply(manifest, { host, providerKey: PROVIDER_KEY });
+
+    expectRan(host, `^runuser -u hermes -- git clone .* ${esc(PLUGIN.repo)} ${esc(PLUGIN_CLONE)}$`, 1);
+    expectRan(
+      host,
+      `^runuser -u hermes -- git -C ${esc(PLUGIN_CLONE)} sparse-checkout set --no-cone ${PLUGIN.subdir}$`,
+      1,
+    );
+    expectRan(
+      host,
+      `^runuser -u hermes -- git -C ${esc(PLUGIN_CLONE)} checkout --quiet ${PLUGIN.sha}$`,
+      1,
+    );
+    expect(host.files.has(`${PLUGIN_DIR}/__init__.py`)).toBe(true);
+    expect(host.files.get(`${PLUGIN_DIR}/${PLUGIN_REF_MARKER}`)?.content).toBe(`${PLUGIN.sha}\n`);
+    expect(result.installed).toContain(`plugin:honcho@${PLUGIN.sha}`);
+    // The server's own checkout is another commit of the same repo, elsewhere.
+    expect(host.files.get(`${honchoSrcDir}/${PLUGIN_REF_MARKER}`)?.content).toBe(`${SOURCE.sha}\n`);
+    // The plugin reads its loopback URL from the linked `honcho.json`, no API key.
+    expect(host.linkTargets.get(HONCHO_PLUGIN_CONFIG_LINK)).toBe(honchoClientConfPath);
+
+    host.commands.length = 0;
+    const second = await apply(manifest, { host, providerKey: PROVIDER_KEY });
+    expect(host.commands.filter((c) => INSTALL_WORK.test(c))).toEqual([]);
+    expect(second.restarted).toEqual([]);
+  });
+
+  test("Hermes 0.21.5 bundles it: no plugin checkout", async () => {
+    const host = new HonchoBox();
+    await apply(honchoManifest(host.hermes("0.21.5")), { host, providerKey: PROVIDER_KEY });
+    expectNotRan(host, PLUGIN_CLONE);
+    expect(host.files.has(`${PLUGIN_DIR}/${PLUGIN_REF_MARKER}`)).toBe(false);
+  });
+
+  test("a rollback to 0.21.5 removes the checkout made for 0.23", async () => {
+    const host = new HonchoBox();
+    // Up from 0.21.5 first: a downgrade restores the backup that move took, and refuses without one.
+    await apply(honchoManifest(host.hermes("0.21.5")), { host, providerKey: PROVIDER_KEY });
+    await apply(honchoManifest(host.hermes("0.23.1")), { host, providerKey: PROVIDER_KEY });
+    const result = await apply(honchoManifest(host.hermes("0.21.5")), {
+      host,
+      providerKey: PROVIDER_KEY,
+    });
+    expect(host.files.has(`${PLUGIN_DIR}/__init__.py`)).toBe(false);
+    expect(result.changed).toContain(PLUGIN_DIR);
+    // The server's checkout and the config link are not the plugin's.
+    expect(host.files.has(`${honchoSrcDir}/${PLUGIN_REF_MARKER}`)).toBe(true);
+    expect(host.linkTargets.get(HONCHO_PLUGIN_CONFIG_LINK)).toBe(honchoClientConfPath);
   });
 });
 

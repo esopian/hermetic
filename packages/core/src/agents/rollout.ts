@@ -62,7 +62,7 @@ import type {
   Plan,
   PlanRolloutInput,
 } from "../schema/index.ts";
-import { diffAppliedConfig } from "./config-diff.ts";
+import { diffAppliedConfig, withAppliedHermes } from "./config-diff.ts";
 import { configVerdict } from "../fleet/skew.ts";
 import {
   CONVERGE_POLL_MS,
@@ -70,6 +70,9 @@ import {
   HERMES_CONVERGE_TIMEOUT_MS,
   convergeDeferral,
   createConverge,
+  hermesDeferral,
+  hermesHeldDown,
+  rolledBackFrom,
   rolloutConvergeTimeoutMs,
 } from "./converge.ts";
 
@@ -159,26 +162,28 @@ export function createRollout(deps: RolloutDeps) {
     }
     const chosen = all.filter((a) => (wanted ? wanted.has(a.name) : true));
 
-    return chosen.map((agent) => {
-      /**
-       * §8.3: the hash a *staged* row converges to is the one its pending
-       * binding renders, not the one its current binding does — `apply`
-       * rewrites the binding first and renders afterwards. A plan that named
-       * today's hash would promise one thing and the apply would record
-       * another, which is the plan being wrong about the only number it exists
-       * to state.
-       */
-      const { config_hash: to, manifest } = renderOf(pendingApplied(agent), fleet);
-      const from = agent.applied_config_hash ?? null;
-      return {
-        name: agent.name,
-        from,
-        to,
-        deferred: deferralFor(agent, to),
-        pending: describePending(agent),
-        manifest,
-      };
-    });
+    return Promise.all(
+      chosen.map(async (agent) => {
+        /**
+         * §8.3: the hash a *staged* row converges to is the one its pending
+         * binding renders, not the one its current binding does — `apply`
+         * rewrites the binding first and renders afterwards. A plan that named
+         * today's hash would promise one thing and the apply would record
+         * another, which is the plan being wrong about the only number it exists
+         * to state.
+         */
+        const { config_hash: to, manifest } = renderOf(pendingApplied(agent), fleet);
+        const from = agent.applied_config_hash ?? null;
+        return {
+          name: agent.name,
+          from,
+          to,
+          deferred: deferralFor(await withAppliedHermes(ctx.backend.artifacts, agent), to),
+          pending: describePending(agent),
+          manifest,
+        };
+      }),
+    );
   }
 
   /**
@@ -193,6 +198,11 @@ export function createRollout(deps: RolloutDeps) {
     if (agent.lock && Date.parse(agent.lock.expires) > ctx.backend.clock.now().getTime()) {
       return "locked by another operator";
     }
+    // Before a staged change: applying one re-renders, and a held row must not be.
+    // A row awaiting a rollback's reconcile is not held: `run` puts its pin back and renders nothing.
+    const held =
+      rolledBackFrom(agent) === null ? hermesDeferral(agent, ctx.hermesVersion, false) : null;
+    if (held !== null) return held;
     /**
      * A staged provider change is work even when the hashes already agree: the
      * credential has not been copied, the binding has not moved, and the
@@ -331,7 +341,10 @@ export function createRollout(deps: RolloutDeps) {
       // Re-derived here rather than trusted from the plan: a row can move
       // between reading a plan and applying it, and a converge onto a stale
       // decision is exactly what the re-read prevents.
-      const early = deferralFor(fresh, fresh.config_hash ?? "");
+      const early = deferralFor(
+        await withAppliedHermes(ctx.backend.artifacts, fresh),
+        fresh.config_hash ?? "",
+      );
       if (early !== null && early !== "already current") {
         yield evt(`${fresh.name}:skipped`, progress, `${fresh.name} skipped — ${early}`, at(), "warn");
         deferred += 1;
@@ -360,55 +373,107 @@ export function createRollout(deps: RolloutDeps) {
       let wanted_hash: string;
       try {
         /**
-         * §8.3, and **before** the render: a staged provider change is what the
-         * next document says, so rendering first would upload the old one and
-         * then have to do it again. `applyPending` copies the credential into
-         * the slot the new binding names, rewrites the row and clears
-         * `pending`; a row with nothing staged comes back untouched.
+         * Before anything renders: an upgrade the box rolled back after its
+         * `upgrade --now` stopped waiting gets its old pin back, so this does
+         * not ask the box for the version it just refused.
          *
-         * A failure here leaves the previous binding exactly as it was — the
-         * credential write is idempotent, the bundle is uploaded before
-         * anything commits, and the row write that moves the binding is the
-         * same one that states the hash it renders — so the agent goes on
-         * running what it was running and the change stays staged for the next
-         * apply. The `ensureConfig` below therefore finds the object already
-         * there and the row already agreeing, for a row that had something
-         * staged; it is what renders the first time for a row that did not.
+         * A row put back is not re-rendered: the converge is exactly the
+         * config the box ran before the upgrade, which the row names again
+         * (and `reconcileRolledBack` has already asked for after a rollback).
+         * A later rollout re-renders it on its own Hermes ref.
          */
-        const staged = describePending(agent);
-        /**
-         * Before the commit, not after it: the document the new binding renders
-         * may need a hermeticd capability this fleet has not published, and
-         * `ensureConfig` below would find that out only once the credential had
-         * been copied, the binding rewritten and `pending` cleared — leaving a
-         * row bound to a slot no box reads and nothing staged to retry. Asking
-         * first costs one pure render and refuses with the change still staged.
-         */
-        if (staged !== null) await ctx.assertCanApply(pendingApplied(agent), fleet);
-        agent = await deps.applyPending(agent);
-        if (staged !== null) {
-          await ctx.appendEvent(agent.name, "rollout", `applied staged change: ${staged}`);
-          yield evt(`${agent.name}:bound`, progress, `${agent.name}: ${staged}`, at());
-        }
-        const rendered = await ctx.ensureConfig(agent, fleet);
-        wanted_hash = rendered.config_hash;
-        if (agent.config_hash !== rendered.config_hash) {
-          agent = await agents.update(agent.name, agent.version, {
-            config_hash: rendered.config_hash,
-            resources: { ...agent.resources, config_key: rendered.key },
-          });
-        }
-        if (agent.applied_config_hash === wanted_hash) {
+        const reconciled = await convergeOf(agent).reconcileRolledBack(agent, owner);
+        agent = reconciled.agent;
+        if (reconciled.code !== null) {
+          const restored = agent.config_hash ?? null;
           yield evt(
-            `${agent.name}:current`,
+            `${agent.name}:restored`,
             progress,
-            `${agent.name} already runs config ${wanted_hash}`,
+            `${agent.name}: pin back to hermes ${agent.hermes_version} — its box did not take the upgrade ` +
+              `(${reconciled.code}); converging on the config it ran before, ${restored ?? "(none)"} ` +
+              "(a staged change waits for the next upgrade or rollout)",
             at(),
+            "warn",
           );
-          deferred += 1;
-          continue;
+          if (restored === null) {
+            // Nothing to return to: this run renders nothing for a row it just put back.
+            yield evt(
+              `${agent.name}:skipped`,
+              progress,
+              `${agent.name} names no config from before the upgrade; \`hermetic upgrade --hermes ` +
+                `${ctx.hermesVersion} ${agent.name}\` renders one`,
+              at(),
+              "warn",
+            );
+            deferred += 1;
+            continue;
+          }
+          if (agent.applied_config_hash === restored) {
+            yield evt(
+              `${agent.name}:current`,
+              progress,
+              `${agent.name} already runs config ${restored}`,
+              at(),
+            );
+            deferred += 1;
+            continue;
+          }
+          wanted_hash = restored;
+          if (agent.apply_request?.config_hash !== restored) {
+            agent = await convergeOf(agent).request(agent, restored, owner, "rollout");
+          }
+        } else {
+          /**
+           * §8.3, and **before** the render: a staged provider change is what the
+           * next document says, so rendering first would upload the old one and
+           * then have to do it again. `applyPending` copies the credential into
+           * the slot the new binding names, rewrites the row and clears
+           * `pending`; a row with nothing staged comes back untouched.
+           *
+           * A failure here leaves the previous binding exactly as it was — the
+           * credential write is idempotent, the bundle is uploaded before
+           * anything commits, and the row write that moves the binding is the
+           * same one that states the hash it renders — so the agent goes on
+           * running what it was running and the change stays staged for the next
+           * apply. The `ensureConfig` below therefore finds the object already
+           * there and the row already agreeing, for a row that had something
+           * staged; it is what renders the first time for a row that did not.
+           */
+          const staged = describePending(agent);
+          /**
+           * Before the commit, not after it: the document the new binding renders
+           * may need a hermeticd capability this fleet has not published, and
+           * `ensureConfig` below would find that out only once the credential had
+           * been copied, the binding rewritten and `pending` cleared — leaving a
+           * row bound to a slot no box reads and nothing staged to retry. Asking
+           * first costs one pure render and refuses with the change still staged.
+           */
+          if (staged !== null) await ctx.assertCanApply(pendingApplied(agent), fleet);
+          agent = await deps.applyPending(agent);
+          if (staged !== null) {
+            await ctx.appendEvent(agent.name, "rollout", `applied staged change: ${staged}`);
+            yield evt(`${agent.name}:bound`, progress, `${agent.name}: ${staged}`, at());
+          }
+          const rendered = await ctx.ensureConfig(agent, fleet);
+          wanted_hash = rendered.config_hash;
+          if (agent.config_hash !== rendered.config_hash) {
+            agent = await agents.update(agent.name, agent.version, {
+              config_hash: rendered.config_hash,
+              resources: { ...agent.resources, config_key: rendered.key },
+            });
+          }
+          if (agent.applied_config_hash === wanted_hash) {
+            yield evt(
+              `${agent.name}:current`,
+              progress,
+              `${agent.name} already runs config ${wanted_hash}`,
+              at(),
+            );
+            deferred += 1;
+            continue;
+          }
+          agent = await convergeOf(agent).request(agent, wanted_hash, owner, "rollout");
         }
-        agent = await convergeOf(agent).request(agent, wanted_hash, owner, "rollout");
       } finally {
         const latest = await agents.get(agent!.name);
         if (latest?.lock?.owner === owner) await ctx.releaseLock(latest);
@@ -428,10 +493,31 @@ export function createRollout(deps: RolloutDeps) {
        * box that is slow to answer.
        */
       const converge = convergeOf(agent);
-      const outcome = await converge.waitForConverge(agent.name, wanted_hash, opts.signal);
+      const outcome = await converge.waitForConverge(
+        agent.name,
+        wanted_hash,
+        opts.signal,
+        agent.apply_request?.id,
+      );
       if (outcome === "converged") {
         converged += 1;
         yield evt(`${agent.name}:done`, progress, `${agent.name} is running ${wanted_hash}`, at());
+      } else if (outcome === "failed") {
+        const code = (await agents.get(agent.name))?.apply_failure?.code ?? "INTERNAL";
+        const said = `\`hermetic agent history ${agent.name}\` has what it said`;
+        if (hermesHeldDown(code)) {
+          const why = `${agent.name} failed to apply config ${wanted_hash} (${code}): Hermes is down on the box; ${said}`;
+          yield evt(`${agent.name}:failed`, progress, why, at(), "error");
+          throw new HermeticError("HERMES_UPGRADE_FAILED", why, { name: agent.name, code });
+        }
+        unconverged += 1;
+        yield evt(
+          `${agent.name}:failed`,
+          progress,
+          `${agent.name} failed to apply config ${wanted_hash} (${code}); ${said}`,
+          at(),
+          "warn",
+        );
       } else {
         unconverged += 1;
         yield evt(

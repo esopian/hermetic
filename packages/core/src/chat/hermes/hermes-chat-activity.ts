@@ -222,6 +222,29 @@ function closeReason(value: unknown): RequestCloseReason {
 }
 
 /**
+ * `approval.cancelled {session_id, request_ids[], reason}` (Hermes v0.23.1,
+ * `tui_gateway/session_lifecycle.py:570-590`): the gateway dropped a session's
+ * pending approvals on interrupt or teardown and resolved them as deny. Its ids
+ * are the approval queue's `request_id`, not the `srq-…` server request id a
+ * card is keyed by, so `cardOf` maps one to the other. Each closes its card as
+ * a `request.cancel` would; an interrupt reads as one, a reap, idle timeout,
+ * eviction or close as the session closing.
+ */
+export function approvalsCancelled(
+  payload: Record<string, unknown>,
+  cardOf: (requestId: string) => string = (id) => id,
+): Activity[] {
+  const reason = payload.reason === "interrupt" ? "interrupted" : "session_closed";
+  const ids = Array.isArray(payload.request_ids) ? payload.request_ids : [];
+  return ids.flatMap((id) => {
+    const queued = text(id);
+    const closed =
+      queued && hermesActivity("request.cancel", { id: cardOf(queued), method: "approval", reason });
+    return closed ? [closed] : [];
+  });
+}
+
+/**
  * The close notice's `detail`, as copy. `other` keeps upstream's own words.
  * `resolved` is neutral on purpose: upstream sends it after *this* laptop's
  * own answer as well as another surface's (`tools/approval_gateway_wait.py`),

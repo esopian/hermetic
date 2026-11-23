@@ -19,6 +19,7 @@ import type { OpOptions } from "../../hermetic.ts";
 import type { LifecycleDeps } from "../lifecycle.ts";
 import type { ReleaseLookup } from "./release.ts";
 import { createRetireNodes } from "./retire-nodes.ts";
+import { CONVERGE_POLL_MS, CONVERGE_TIMEOUT_MS, createConverge } from "../converge.ts";
 
 export function createRecreateOp(deps: LifecycleDeps, shared: { release: ReleaseLookup }) {
   const { applyPending, tsKeyPath } = deps;
@@ -26,6 +27,7 @@ export function createRecreateOp(deps: LifecycleDeps, shared: { release: Release
     acquireLock,
     actor,
     assertCanApply,
+    assertRenderableHermes,
     assertSealed,
     attachDeps,
     backend,
@@ -101,9 +103,25 @@ export function createRecreateOp(deps: LifecycleDeps, shared: { release: Release
         { name: agent.name, status: agent.status },
       );
     }
+    // Before the old instance is terminated: the replacement boots on a fresh render.
+    assertRenderableHermes(agent);
 
     const owner = `${await actor()}#${randomUUID()}`;
     agent = await acquireLock(agent, owner);
+    // An upgrade the box refused and rolled back is settled first, so the
+    // replacement installs the Hermes the box kept, not the one it refused.
+    try {
+      agent = (
+        await createConverge({
+          ctx: deps.ctx,
+          timeoutMs: CONVERGE_TIMEOUT_MS,
+          pollMs: CONVERGE_POLL_MS,
+        }).reconcileRolledBack(agent, await actor())
+      ).agent;
+    } catch (e) {
+      await releaseLock(agent).catch(() => undefined);
+      throw e;
+    }
     /** The TTL lock, renewed on every poll of every wait below (§4.4). */
     const keepLock = lockKeeper(
       () => agent,
@@ -453,6 +471,11 @@ export function createRecreateOp(deps: LifecycleDeps, shared: { release: Release
           applied_config_hash: null,
           running_hermeticd_sha256: null,
           running_hermes_version: null,
+          // The reconcile above already read these. Kept, a request whose hash
+          // this deterministic render reproduces reads as rolled back on the
+          // fresh box (`rolledBackFrom`), and the box would be redelivered it.
+          apply_request: null,
+          apply_failure: null,
           resources: {
             ...agent.resources,
             instance_id: instance.instance_id,

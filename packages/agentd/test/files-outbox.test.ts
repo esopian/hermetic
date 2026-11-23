@@ -15,6 +15,7 @@ import {
   parseContentDigest,
   resolveFilesSettings,
 } from "@hermetic/core/shared";
+import { HERMES_BACKUP_ROOT } from "../src/apply/hermes-backup.ts";
 import { isCredentialPath } from "../src/files/share-policy.ts";
 import { PDF, PEM, PNG, filesBox, post, sha256 } from "./files-fixture.ts";
 
@@ -237,6 +238,12 @@ describe("share_file: the path policy", () => {
     ["a profile's .env", `${HERMES_HOME}/profiles/ops/.env`],
     ["the browser profiles", `${HERMES_ACCOUNT_HOME}/browser/default/Cookies`],
     ["a .netrc", `${HERMES_ACCOUNT_HOME}/.netrc`],
+    ["Bitwarden's root cache", `${HERMES_HOME}/bws_cache.json`],
+    [
+      "a saved-gateways token sidecar",
+      `${HERMES_HOME}/gateway-connection-tokens.json.corrupt-1731700000000`,
+    ],
+    ["a profile's saved-gateways store", `${HERMES_HOME}/profiles/ops/gateway-connections.json`],
   ])("a credential path (%s) is refused before anything is read", async (_why, path) => {
     await refused(({ host }) => host.seed(path, "FIXTURE"), path, "FORBIDDEN", "credential path");
   });
@@ -286,6 +293,22 @@ describe("share_file: the path policy", () => {
       path,
       "FILE_SECRET_FORBIDDEN",
       "secret files never leave the box",
+    );
+  });
+
+  test.each([
+    ["the backup itself", `${HERMES_BACKUP_ROOT}/hermes-0.21.5-20261115T000000Z/home/.env`],
+    ["a symlink into it", `${WORK}/old-env`],
+  ])("the pre-upgrade backup tree (%s) is refused", async (_why, path) => {
+    const inside = `${HERMES_BACKUP_ROOT}/hermes-0.21.5-20261115T000000Z/home/.env`;
+    await refused(
+      ({ host }) => {
+        host.seed(inside, "FIXTURE");
+        if (path !== inside) host.symlink(path, inside);
+      },
+      path,
+      "FORBIDDEN",
+      "the pre-upgrade backup never leaves the box",
     );
   });
 
@@ -429,6 +452,34 @@ describe("isCredentialPath", () => {
     [`${WORK}/x/mcp-tokens/srv.json`, true],
     [`${HERMES_HOME}/state.db-wal`, true],
     [`${HERMES_ACCOUNT_HOME}/.config/gh/hosts.yml`, true],
+    // v0.22+ root entries, at the home and at a profile's root.
+    ...[
+      "bws_cache.json",
+      "bws_cache.enc.json",
+      "op_cache.json",
+      "photon-sidecar.json",
+      "cache/op_cache.json",
+      "runtime/photon-sidecar.json",
+      "webapp/state.json",
+      "installs/gen-3/site.py",
+      "gateway-connections.json",
+      "gateway-connection-tokens.json",
+      "gateway-connections.json.lock",
+      "gateway-connections.json.corrupt-1731700000000",
+      "gateway-connection-tokens.json.corrupt-1731700000000",
+      "gateway.sock",
+      "gateway.sock.path",
+    ].flatMap(
+      (rel): Array<[string, boolean]> => [
+        [`${HERMES_HOME}/${rel}`, true],
+        [`${HERMES_HOME}/profiles/ops/${rel}`, true],
+      ],
+    ),
+    // Only at a root: the same names elsewhere are the agent's work.
+    [`${WORK}/webapp/index.html`, false],
+    [`${WORK}/gateway-connections.json`, false],
+    [`${HERMES_HOME}/skills/installs/readme.md`, false],
+    [`${HERMES_HOME}/gateway-connections.jsonl`, false],
   ])("%s → %p", (path, expected) => {
     expect(isCredentialPath(path)).toBe(expected);
   });

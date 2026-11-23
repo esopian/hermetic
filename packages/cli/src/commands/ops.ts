@@ -35,6 +35,10 @@ export function register(program: Command): void {
         "apply it to running boxes now: with --hermes, converge each box onto the pin in place; with --hermeticd, ask every box to take the release even if the fleet does not auto-update (§6.5)",
       )
       .option(
+        "--force",
+        "with --hermes --now: do not wait for each box to be idle; stop Hermes even mid-session",
+      )
+      .option(
         "--no-rollout",
         "with --hermeticd: move the pointer only; leave each box to its own update check",
       )
@@ -52,10 +56,12 @@ export function register(program: Command): void {
           "  hermetic upgrade --hermeticd 0.6.1 --now           rolled out now whatever the fleet's setting\n" +
           "\n--now writes the same converge request `hermetic plan rollout` does: hermeticd\n" +
           "reinstalls Hermes and restarts its units, and this waits up to ten minutes per\n" +
-          "box for it to report the new config. A box that is not up (stopped, still\n" +
-          "booting) is skipped and keeps the pin for its next boot; one that does not\n" +
-          "report in time is a warning, not a failure. The box installs this build's\n" +
-          "Hermes ref, exactly as a recreate from this checkout would.\n" +
+          "box for it to report the new config. Before it pins a running box it waits up\n" +
+          "to ten minutes for no session to be running there, and leaves the agent as it\n" +
+          "was if none clears; --force skips that wait. A box that is not up (stopped, still\n" +
+          "booting) only gets the pin, as without --now: start it and run --now again.\n" +
+          "A box that does not report in time is a warning, not a failure. The box\n" +
+          "installs this build's Hermes ref, exactly as a recreate from this checkout would.\n" +
           "\nWith --hermeticd, a fleet that auto-updates hermeticd (the default; see\n" +
           "`hermetic settings set --no-auto-update-hermeticd`) asks every running box to\n" +
           "take a changed release at once and watches it land; --no-rollout skips that\n" +
@@ -72,6 +78,7 @@ export function register(program: Command): void {
             hermeticd: opts["hermeticd"],
             all: opts["all"],
             now: opts["now"],
+            force: opts["force"],
             // Commander answers `true` for an absent `--no-rollout`, which the
             // schema would refuse beside `--hermes` alone; only the flag
             // itself is worth stating.

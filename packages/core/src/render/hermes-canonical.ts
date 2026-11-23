@@ -1,6 +1,7 @@
 /** Canonical Bot Chat identity and lifecycle. Wire contracts live at Hermes v2026.9.24. */
 import { HermeticError } from "../errors.ts";
 import { HERMETIC_SESSION_SOURCE, rec, records, str } from "../chat/hermes/hermes-chat-wire.ts";
+import type { MovedBotChats } from "../chat/hermes/hermes-chat-moved.ts";
 import type { BoxAddress, HermesChatOptions } from "../chat/hermes/hermes-chat.ts";
 import type { ChatConversation, ChatRespondInput } from "../schema/index.ts";
 
@@ -31,8 +32,14 @@ export interface CanonicalDeps {
     box: BoxAddress,
     session: string,
     body: Record<string, unknown>,
-    opts: HermesChatOptions,
+    opts: HermesChatOptions & { detail?: boolean },
   ): Promise<unknown>;
+  /**
+   * A session's mutation counters (`GET /api/sessions/{id}/mutation-snapshot?profile=…`,
+   * `hermes_cli/web_routers/sessions.py:586-598` at v0.23.1): `{runtime_revision, …}`.
+   * A box before v0.22.3 has no such route and answers 404.
+   */
+  snapshot(box: BoxAddress, session: string, bot: string, opts: HermesChatOptions): Promise<unknown>;
   /**
    * One stored session row as the dashboard returns it
    * (`GET /api/sessions/{id}?profile=…`, `hermes_cli/web_routers/sessions.py:500-513`
@@ -41,8 +48,22 @@ export interface CanonicalDeps {
    */
   read(box: BoxAddress, session: string, bot: string, opts: HermesChatOptions): Promise<unknown>;
   now(): string;
+  /** The Bot Chats the gateway moved aside, shared with the session list (`hermes-chat-moved.ts`). */
+  moved: MovedBotChats;
 }
 const failure = (message: string) => new HermeticError("CHAT_PROTOCOL", message);
+/** A request id for one fenced write. Not a secret; `crypto.randomUUID` is absent on some phone runtimes. */
+const mutationRequestId = (): string =>
+  (globalThis as { crypto?: { randomUUID?: () => string } }).crypto?.randomUUID?.() ??
+  `hermetic-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+/**
+ * A box without the snapshot route: 404 from the dashboard's `/api/*` catch-all, a 405,
+ * or the SPA's HTML page, which older catch-alls served for any unknown path.
+ */
+const noSnapshotRoute = (error: unknown) =>
+  error instanceof SyntaxError ||
+  (error instanceof HermeticError &&
+    (error.code === "NOT_FOUND" || /\(HTTP 405\)/.test(error.message)));
 /**
  * Above the gateway's own compute-host wait (630 s cap,
  * `_COMPUTE_HOST_COMPRESS_WAIT_CAP_SECS`), after which it answers `pending`
@@ -75,7 +96,18 @@ const identity = (
 
 export function createCanonicalSessions(deps: CanonicalDeps) {
   const flights = new Map<string, Promise<ChatConversation | null>>();
-  async function find(rpc: BotRpc, box: BoxAddress, bot: string): Promise<ChatConversation | null> {
+  /**
+   * Per box and bot, the moved-aside roots the last lookup found, under the tip
+   * they precede. Kept here because every head resolves the conversation first
+   * and then reads history by the tip alone (`chat.ts`, the phone's transport).
+   */
+  const earlier = new Map<string, { tip: string; roots: readonly string[] }>();
+  async function find(
+    rpc: BotRpc,
+    box: BoxAddress,
+    bot: string,
+    opts: HermesChatOptions = {},
+  ): Promise<ChatConversation | null> {
     const response = rec(
       await rpc.request("session.list", {
         profile: bot,
@@ -99,7 +131,35 @@ export function createCanonicalSessions(deps: CanonicalDeps) {
     if (found.length > 1)
       throw failure("Bot Chat registry has more than one owner; repair upstream before continuing");
     const row = found[0];
-    if (!row) return null;
+    const key = JSON.stringify([box.baseUrl, bot]);
+    // Upstream moves a Bot Chat aside only to mint its own, a `local-` session
+    // (`_create_bot_chat`, `gateway/session_bot.py:338-380`), so any other
+    // holder (hermetic's row, adopted or not) skips the extra lookup.
+    if (row && !(str(row.id) ?? "").startsWith("local-")) {
+      earlier.delete(key);
+      return located(box, bot, row);
+    }
+    // Earlier history is never worth the conversation: a walk the box cannot
+    // answer leaves the current row alone, and older turns merge on a later read.
+    const moved = await deps.moved
+      .moved((m, p) => rpc.request(m, p), box, bot, str(row?.id) ?? "", opts)
+      .catch((error: unknown) => {
+        if (opts.signal?.aborted) throw error;
+        return [];
+      });
+    let current = row ? located(box, bot, row) : null;
+    if (!current) {
+      // No Bot Chat now: the newest moved-aside one is still the conversation.
+      const last = moved.pop();
+      if (!last) return null;
+      current = identity(box, bot, last.root, last.tip);
+    }
+    if (moved.length) earlier.set(key, { tip: current.session, roots: moved.map((m) => m.root) });
+    else earlier.delete(key);
+    return current;
+  }
+
+  function located(box: BoxAddress, bot: string, row: Record<string, unknown>): ChatConversation {
     // `id` is what the title summary sends; `stored_session_id` is the same
     // durable identity under the name the fuller session shapes use, and
     // `mapSessions` reads both.
@@ -108,15 +168,34 @@ export function createCanonicalSessions(deps: CanonicalDeps) {
     return identity(box, bot, root, str(row.resolved_id) ?? root);
   }
 
+  /**
+   * The roots of the Bot Chats upstream moved aside before the one whose tip is
+   * `tip`, oldest first, as the last canonical lookup found them: history reads
+   * them ahead of the current row as one conversation. Empty for any other session.
+   */
+  function previousRoots(box: BoxAddress, bot: string, tip: string): readonly string[] {
+    const found = earlier.get(JSON.stringify([box.baseUrl, bot]));
+    return found?.tip === tip ? found.roots : [];
+  }
+
   /** A session the caller named: canonical when the registry says so, else a thread. */
   async function named(
     rpc: BotRpc,
     box: BoxAddress,
     bot: string,
     session: string,
+    opts: HermesChatOptions = {},
   ): Promise<ChatConversation> {
-    const canonical = await find(rpc, box, bot);
-    if (canonical && [canonical.root_session, canonical.session].includes(session)) return canonical;
+    const canonical = await find(rpc, box, bot, opts);
+    if (
+      canonical &&
+      [
+        canonical.root_session,
+        canonical.session,
+        ...previousRoots(box, bot, canonical.session),
+      ].includes(session)
+    )
+      return canonical;
     return identity(box, bot, session, session, false, "thread");
   }
 
@@ -152,10 +231,11 @@ export function createCanonicalSessions(deps: CanonicalDeps) {
     opts: ConversationOptions,
   ): Promise<ChatConversation | null> {
     const shared = pooled(box, opts);
-    if (shared) return opts.session ? named(shared, box, bot, opts.session) : find(shared, box, bot);
+    if (shared)
+      return opts.session ? named(shared, box, bot, opts.session, opts) : find(shared, box, bot, opts);
     const rpc = await deps.connect(box, opts.signal);
     try {
-      if (opts.session) return await named(rpc, box, bot, opts.session);
+      if (opts.session) return await named(rpc, box, bot, opts.session, opts);
       if (opts.new_session) {
         const created = rec(
           await rpc.request("session.create", { profile: bot, source: HERMETIC_SESSION_SOURCE }),
@@ -195,7 +275,7 @@ export function createCanonicalSessions(deps: CanonicalDeps) {
             throw failure("Bot Mode metadata could not be saved; reload before retrying");
         }
       }
-      const existing = await find(rpc, box, bot);
+      const existing = await find(rpc, box, bot, opts);
       if (existing || !opts.create) return existing;
       const roster = rec(await rpc.request("profiles.list", { include_sessions: true }));
       if (roster?.bot_mode_protocol !== true)
@@ -232,7 +312,7 @@ export function createCanonicalSessions(deps: CanonicalDeps) {
           !/already in use|title.*(?:conflict|unique)/i.test(error.message)
         )
           throw error;
-        const winner = await find(rpc, box, bot);
+        const winner = await find(rpc, box, bot, opts);
         if (!winner) throw await unlistedHolder(box, bot, error.message, opts);
         return winner;
       }
@@ -346,7 +426,7 @@ export function createCanonicalSessions(deps: CanonicalDeps) {
         ),
       );
       const status = str(result?.status) ?? (result?.compressed === false ? "blocked" : "unknown");
-      const refreshed = current.kind === "canonical" ? await find(rpc, box, bot) : current;
+      const refreshed = current.kind === "canonical" ? await find(rpc, box, bot, opts) : current;
       return {
         conversation: refreshed ?? current,
         status,
@@ -364,11 +444,43 @@ export function createCanonicalSessions(deps: CanonicalDeps) {
     // user rename of a hidden Bot Chat and applies `title` first, so it would 400 the whole
     // PATCH. The next Bot Chat's title write retires this archived hidden holder's name in
     // the same transaction (`hermes_state_titles.py`, v2026.9.24).
-    const result = rec(
-      await deps.patch(box, current.root_session, { profile: bot, archived: true, hidden: true }, opts),
-    );
-    if (result?.ok !== true || result.archived !== true)
-      throw failure("Gateway did not confirm session archival");
+    // v0.22.3+ refuses a PATCH without mutation identity (409 client_upgrade_required); an
+    // older box has no snapshot route and ignores the extra keys.
+    const send = async (root: string) => {
+      const counters = await deps.snapshot(box, root, bot, opts).then(rec, (error: unknown) => {
+        if (noSnapshotRoute(error)) return undefined;
+        throw error;
+      });
+      const revision = counters?.runtime_revision;
+      const fence =
+        typeof revision === "number" && Number.isInteger(revision)
+          ? { request_id: mutationRequestId(), expected_revision: revision }
+          : {};
+      const body = { profile: bot, archived: true, hidden: true, ...fence };
+      return deps.patch(box, root, body, { ...opts, detail: true });
+    };
+    // A Bot Chat upstream moved aside is this conversation's earlier history, so it is
+    // retired with it, first: otherwise the next lookup would resume it as the conversation.
+    const roots =
+      current.kind === "canonical"
+        ? [...previousRoots(box, bot, current.session), current.root_session]
+        : [current.root_session];
+    for (const root of roots) {
+      // A write landing between the snapshot and the PATCH moves the revision: read it again, once.
+      const result = rec(
+        await send(root).catch((error: unknown) => {
+          if (
+            error instanceof HermeticError &&
+            error.code === "CONFLICT" &&
+            /: revision_conflict$/.test(error.message)
+          )
+            return send(root);
+          throw error;
+        }),
+      );
+      if (result?.ok !== true || result.archived !== true)
+        throw failure("Gateway did not confirm session archival");
+    }
     return { instance: box.instance, bot, session: current.root_session, archived: true as const };
   }
 
@@ -501,5 +613,5 @@ export function createCanonicalSessions(deps: CanonicalDeps) {
       rpc.close();
     }
   }
-  return { conversation, compact, archive, respond };
+  return { conversation, compact, archive, respond, previousRoots };
 }
